@@ -233,7 +233,10 @@ impl HerdrWindow {
 pub(crate) fn team_cli_prefix(pane_id: &str, workspace_id: Option<&str>) -> String {
     let bin = std::env::current_exe()
         .ok()
-        .map(|p| p.display().to_string())
+        .map(|p| {
+            let s = p.display().to_string();
+            s.strip_suffix(" (deleted)").unwrap_or(&s).to_owned()
+        })
         .unwrap_or_else(|| "herdr-gpui".to_owned());
     match workspace_id.filter(|w| !w.trim().is_empty()) {
         Some(ws) => format!("HERDR_PANE_ID={pane_id} HERDR_WORKSPACE_ID={ws} {bin} team"),

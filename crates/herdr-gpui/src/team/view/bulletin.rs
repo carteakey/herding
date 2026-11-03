@@ -160,7 +160,8 @@ impl HerdrWindow {
                                     .text_size(px(12.))
                                     .child(post.author.clone()),
                             )
-                            .child(
+                            .child({
+                                let reply_post_id = post.id.clone();
                                 div()
                                     .id(SharedString::from(format!("bulletin-reply-{idx}")))
                                     .px_2()
@@ -172,13 +173,13 @@ impl HerdrWindow {
                                     .role(Role::Button)
                                     .child(fl!("team-action-reply"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        let post_id = post_id.clone();
+                                        let post_id = reply_post_id.clone();
                                         this.team_view.update(cx, |view, cx| {
                                             view.reply_to = Some(post_id);
                                             cx.notify();
                                         });
-                                    })),
-                            ),
+                                    }))
+                            }),
                     );
                 if let Some(parent) = post.reply_to_author.as_ref() {
                     card = card.child(
@@ -188,7 +189,59 @@ impl HerdrWindow {
                             .child(fl!("team-reply-to", author = parent.as_ref())),
                     );
                 }
-                card = card.child(div().text_size(px(13.)).child(post.body.clone()));
+                let is_long = post.body.lines().count() > 3 || post.body.chars().count() > 180;
+                let is_expanded = self
+                    .team_view
+                    .read(cx)
+                    .expanded_bulletin_ids
+                    .contains(&post_id);
+                if is_long && !is_expanded {
+                    let preview: String = post.body.lines().take(3).collect::<Vec<_>>().join("\n");
+                    let preview = if preview.chars().count() > 180 {
+                        format!("{}...", preview.chars().take(180).collect::<String>())
+                    } else {
+                        format!("{preview}...")
+                    };
+                    let toggle_id = post_id.clone();
+                    card = card.child(div().text_size(px(13.)).child(preview));
+                    card = card.child(
+                        div()
+                            .id(SharedString::from(format!("bulletin-expand-{idx}")))
+                            .text_size(px(11.))
+                            .text_color(rgb(theme.muted))
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child("Show more")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let id = toggle_id.clone();
+                                this.team_view.update(cx, |view, cx| {
+                                    view.expanded_bulletin_ids.insert(id);
+                                    cx.notify();
+                                });
+                            })),
+                    );
+                } else if is_long && is_expanded {
+                    let toggle_id = post_id.clone();
+                    card = card.child(div().text_size(px(13.)).child(post.body.clone()));
+                    card = card.child(
+                        div()
+                            .id(SharedString::from(format!("bulletin-collapse-{idx}")))
+                            .text_size(px(11.))
+                            .text_color(rgb(theme.muted))
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child("Show less")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let id = toggle_id.clone();
+                                this.team_view.update(cx, |view, cx| {
+                                    view.expanded_bulletin_ids.remove(&id);
+                                    cx.notify();
+                                });
+                            })),
+                    );
+                } else {
+                    card = card.child(div().text_size(px(13.)).child(post.body.clone()));
+                }
 
                 if !post.deliveries.is_empty() {
                     let mut pills = div().flex().flex_wrap().gap_1().pt_1();

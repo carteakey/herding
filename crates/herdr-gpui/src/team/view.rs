@@ -2,6 +2,7 @@ use super::model::{PaneCandidate, PaneIdentity, TeamLoadState, TeamSnapshot};
 use crate::{HerdrWindow, config::Theme, i18n::fl, search_input::SearchInput};
 use gpui::{prelude::*, *};
 use herdr_orchestrator::team_store::{Author, Confidence};
+use std::collections::HashSet;
 
 mod board;
 mod bulletin;
@@ -145,6 +146,11 @@ pub(crate) struct TeamView {
     pub(super) editing_task_id: Option<String>,
     pub(super) finding_form_open: bool,
     pub(super) confirming_delete_team: bool,
+    pub(super) completed_tasks_open: bool,
+    pub(super) expanded_task_ids: HashSet<String>,
+    pub(super) findings_collapsed: bool,
+    pub(super) expanded_finding_ids: HashSet<String>,
+    pub(super) expanded_bulletin_ids: HashSet<String>,
     action_warning: Option<SharedString>,
     font: crate::config::FontConfig,
     pub(super) theme: Theme,
@@ -261,6 +267,11 @@ impl TeamView {
             editing_task_id: None,
             finding_form_open: false,
             confirming_delete_team: false,
+            completed_tasks_open: false,
+            expanded_task_ids: HashSet::new(),
+            findings_collapsed: false,
+            expanded_finding_ids: HashSet::new(),
+            expanded_bulletin_ids: HashSet::new(),
             action_warning: None,
             font,
             theme,

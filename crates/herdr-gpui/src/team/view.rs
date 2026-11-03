@@ -8,6 +8,9 @@ mod board;
 mod bulletin;
 mod roster;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) const MAX_VISIBLE_MEMBERS: usize = 64;
 pub(super) const MAX_VISIBLE_CANDIDATES: usize = 64;
 const MAX_VISIBLE_TEAMS: usize = 64;

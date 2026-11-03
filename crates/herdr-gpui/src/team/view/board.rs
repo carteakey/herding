@@ -870,6 +870,7 @@ impl TeamView {
                     let fid = finding.id.clone();
                     let mut card = div()
                         .id(SharedString::from(format!("team-finding-{}", finding.id)))
+                        .debug_selector(|| "team-finding-card".into())
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -885,6 +886,7 @@ impl TeamView {
                             "team-finding-row-{}",
                             finding.id
                         )))
+                        .debug_selector(|| "team-finding-row".into())
                         .flex()
                         .items_center()
                         .justify_between()
@@ -908,19 +910,28 @@ impl TeamView {
                                 .min_w_0()
                                 .child(
                                     div()
+                                        .debug_selector(|| "team-finding-author".into())
+                                        .flex_none()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_size(px(12.))
                                         .child(finding.author.clone()),
                                 )
-                                .child(div().text_size(px(12.)).child(if expanded {
-                                    finding.description.clone()
-                                } else {
-                                    truncate_text(finding.description.as_ref(), 80).into()
-                                })),
+                                .when(!expanded, |summary| {
+                                    summary.child(
+                                        div()
+                                            .debug_selector(|| "team-finding-description".into())
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(12.))
+                                            .child(finding.description.clone()),
+                                    )
+                                }),
                         )
                         .child(
                             div()
                                 .flex()
+                                .flex_none()
                                 .items_center()
                                 .gap_2()
                                 .child(
@@ -942,6 +953,12 @@ impl TeamView {
                         );
                     card = card.child(row);
                     if expanded {
+                        card = card.child(
+                            div()
+                                .debug_selector(|| "team-finding-description".into())
+                                .text_size(px(12.))
+                                .child(finding.description.clone()),
+                        );
                         card = card.child(
                             div()
                                 .p_2()

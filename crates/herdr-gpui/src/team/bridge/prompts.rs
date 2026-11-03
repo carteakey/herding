@@ -158,11 +158,11 @@ impl HerdrWindow {
         summary: String,
         cx: &mut Context<Self>,
     ) {
+        let team_id = self.team_bridge.selected.clone().unwrap_or_default();
         if self.team_bridge.is_pane_paused(pane_id) {
             self.team_bridge
-                .queued_prompts
-                .push((pane_id.to_owned(), prompt, summary));
-            let held = self.team_bridge.queued_prompts.len();
+                .enqueue_prompt(team_id, pane_id.to_owned(), prompt, summary);
+            let held = self.team_bridge.queued_count();
             self.team_bridge.last_activity =
                 Some(format!("Held prompt for paused pane {pane_id} ({held} queued)").into());
             self.team_bridge.dirty = true;

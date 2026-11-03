@@ -107,3 +107,79 @@ fn add_worker_rejects_duplicate_pane_or_session() {
     assert!(bridge.warning.is_some());
     assert!(bridge.team.as_ref().unwrap().members.is_empty());
 }
+
+#[test]
+fn pause_queue_is_bounded_and_scoped_per_team() {
+    let mut bridge = Bridge::default();
+    for i in 0..100 {
+        bridge.enqueue_prompt(
+            "team1".into(),
+            format!("pane-{i}"),
+            format!("prompt-{i}"),
+            format!("summary-{i}"),
+        );
+    }
+    assert_eq!(bridge.queued_prompts.len(), PAUSE_QUEUE_CAPACITY);
+    assert_eq!(bridge.queued_prompts[0].pane_id, "pane-36");
+    assert_eq!(
+        bridge.queued_prompts[PAUSE_QUEUE_CAPACITY - 1].pane_id,
+        "pane-99"
+    );
+}
+
+#[test]
+fn drain_unpaused_prompts_retains_prompts_when_team_is_none() {
+    let mut bridge = Bridge::default();
+    bridge.enqueue_prompt(
+        "team1".into(),
+        "p1".into(),
+        "prompt1".into(),
+        "summary1".into(),
+    );
+    assert_eq!(bridge.team, None);
+    let drained = bridge.drain_unpaused_prompts();
+    assert!(drained.is_empty());
+    assert_eq!(bridge.queued_prompts.len(), 1);
+}
+
+#[test]
+fn select_team_does_not_flush_paused_prompts() {
+    let mut bridge = Bridge {
+        selected: Some("team1".into()),
+        team: Some(Team {
+            team_id: "team1".into(),
+            name: "team1".into(),
+            supervisor: Member {
+                member_id: "sup".into(),
+                display_name: "supervisor".into(),
+                target: SessionTarget {
+                    host: "local".into(),
+                    session: "sess-1".into(),
+                    workspace: Some("ws".into()),
+                    pane: Some("p1".into()),
+                },
+            },
+            members: Vec::new(),
+        }),
+        ..Bridge::default()
+    };
+    bridge.paused_members.insert("sup".into());
+    bridge.enqueue_prompt(
+        "team1".into(),
+        "p1".into(),
+        "prompt1".into(),
+        "summary1".into(),
+    );
+
+    bridge.act(
+        TeamAction::SelectTeam {
+            team_id: "team2".into(),
+        },
+        &[],
+    );
+    assert_eq!(bridge.team, None);
+
+    let drained = bridge.drain_unpaused_prompts();
+    assert!(drained.is_empty());
+    assert_eq!(bridge.queued_prompts.len(), 1);
+}

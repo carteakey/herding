@@ -65,11 +65,21 @@ pub(crate) struct Bridge {
     snapshot_in_flight: Option<u64>,
     candidates: Vec<PaneIdentity>,
     bulletin_closed: bool,
-    team_paused: bool,
+    paused_teams: HashSet<String>,
     paused_members: HashSet<String>,
-    queued_prompts: Vec<(String, String, String)>,
+    queued_prompts: Vec<QueuedPrompt>,
     last_activity: Option<SharedString>,
     dirty: bool,
+}
+
+pub(crate) const PAUSE_QUEUE_CAPACITY: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct QueuedPrompt {
+    pub(super) team_id: String,
+    pub(super) pane_id: String,
+    pub(super) prompt: String,
+    pub(super) summary: String,
 }
 
 impl Bridge {
@@ -81,8 +91,14 @@ impl Bridge {
         !self.bulletin_closed
     }
 
+    pub(super) fn is_team_paused(&self) -> bool {
+        self.selected
+            .as_ref()
+            .is_some_and(|id| self.paused_teams.contains(id))
+    }
+
     pub(super) fn is_pane_paused(&self, pane_id: &str) -> bool {
-        if self.team_paused {
+        if self.is_team_paused() {
             return true;
         }
         let Some(team) = self.team.as_ref() else {
@@ -93,25 +109,58 @@ impl Bridge {
         })
     }
 
+    pub(super) fn enqueue_prompt(
+        &mut self,
+        team_id: String,
+        pane_id: String,
+        prompt: String,
+        summary: String,
+    ) {
+        if self.queued_prompts.len() >= PAUSE_QUEUE_CAPACITY {
+            self.queued_prompts.remove(0);
+        }
+        self.queued_prompts.push(QueuedPrompt {
+            team_id,
+            pane_id,
+            prompt,
+            summary,
+        });
+    }
+
+    pub(super) fn queued_count(&self) -> usize {
+        match self.team.as_ref() {
+            Some(t) => self
+                .queued_prompts
+                .iter()
+                .filter(|p| p.team_id == t.team_id)
+                .count(),
+            None => self.queued_prompts.len(),
+        }
+    }
+
     pub(super) fn drain_unpaused_prompts(&mut self) -> Vec<(String, String, String)> {
-        if self.team_paused {
+        let Some(team) = self.team.as_ref() else {
+            return Vec::new();
+        };
+        if self.is_team_paused() {
             return Vec::new();
         }
-        let paused_panes: HashSet<String> = self
-            .team
-            .as_ref()
-            .into_iter()
-            .flat_map(roster)
+        let team_id = team.team_id.as_str();
+        let paused_panes: HashSet<String> = roster(team)
             .filter(|m| self.paused_members.contains(&m.member_id))
             .filter_map(|m| m.target.pane.clone())
             .collect();
         let mut ready = Vec::new();
         let mut held = Vec::new();
         for item in self.queued_prompts.drain(..) {
-            if paused_panes.contains(&item.0) {
-                held.push(item);
+            if item.team_id == team_id {
+                if paused_panes.contains(&item.pane_id) {
+                    held.push(item);
+                } else {
+                    ready.push((item.pane_id, item.prompt, item.summary));
+                }
             } else {
-                ready.push(item);
+                held.push(item);
             }
         }
         self.queued_prompts = held;
@@ -627,16 +676,24 @@ impl Bridge {
                 self.dirty = true;
             }
             TeamAction::TogglePauseTeam => {
-                self.team_paused = !self.team_paused;
-                self.last_activity = Some(
-                    if self.team_paused {
-                        "Paused team prompt delivery"
+                if let Some(team_id) = self.selected.as_ref().cloned() {
+                    let paused = if self.paused_teams.contains(&team_id) {
+                        self.paused_teams.remove(&team_id);
+                        false
                     } else {
-                        "Resumed team prompt delivery"
-                    }
-                    .into(),
-                );
-                self.dirty = true;
+                        self.paused_teams.insert(team_id);
+                        true
+                    };
+                    self.last_activity = Some(
+                        if paused {
+                            "Paused team prompt delivery"
+                        } else {
+                            "Resumed team prompt delivery"
+                        }
+                        .into(),
+                    );
+                    self.dirty = true;
+                }
             }
             TeamAction::TogglePauseMember { member_id } => {
                 let paused = if self.paused_members.remove(&member_id) {
@@ -729,7 +786,12 @@ impl Bridge {
         };
         let (members, posts, tasks, findings) = match &self.team {
             Some(team) => (
-                members(team, candidates, self.team_paused, &self.paused_members),
+                members(
+                    team,
+                    candidates,
+                    self.is_team_paused(),
+                    &self.paused_members,
+                ),
                 self.view_posts(team),
                 self.view_tasks(team),
                 self.view_findings(team),
@@ -753,8 +815,8 @@ impl Bridge {
                 .as_ref()
                 .map(|_| (human(), fl!("team-author-human").into())),
             bulletin_open: !self.bulletin_closed,
-            paused: self.team_paused,
-            queued_count: self.queued_prompts.len(),
+            paused: self.is_team_paused(),
+            queued_count: self.queued_count(),
             last_activity: self.last_activity.clone(),
         }
     }

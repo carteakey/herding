@@ -28,6 +28,23 @@ duplicated, or incomplete.
    `herdr-gpui team task complete TEAM_ID TASK_ID --result "..."`; include the
    outcome, checks actually run, and limitations. Use `herdr-gpui team finding
    add --help` when a durable finding needs evidence.
+4. Workspace Isolation (Shared Tree vs. Git Worktrees):
+   - Shared Working Tree (default): Preferred for documentation, reviews,
+     non-overlapping crate/file edits, and small targeted bugfixes to share the
+     Cargo build cache and avoid setup friction.
+   - Git Worktrees (opt-in): Use when parallel tasks touch the same files/crates
+     or require heavy iterative compiles/tests to prevent build directory lock
+     contention (`Blocking waiting for file lock on build directory`) and compiler
+     breakages from in-progress peer edits (see `docs/herding-worktrees.md`).
+5. Autonomous Goal Follow-Through & Idle Protocol:
+   - Pursue the Goal: The team autonomously drives toward the overarching goal
+     until verified complete. Do not exit or stop after completing a single task
+     if open tasks, verification needs, or follow-ups remain.
+   - Proactive Claiming: After completing a task or when idle, inspect `herdr-gpui
+     team task list TEAM_ID --json` for open tasks matching your capabilities, claim
+     one, or check the bulletin for supervisor dispatches rather than sitting idle.
+   - When to Stop: Rest idle only when all tasks are completed and verified by
+     QA/Reviewer, or when blocked waiting for user decisions, approvals, or secrets.
 
 Use your own session context. Do not guess or borrow another pane or workspace
 identity. If the CLI is unavailable, the app refuses the caller, or the team

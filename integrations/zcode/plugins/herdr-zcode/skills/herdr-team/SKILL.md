@@ -21,6 +21,18 @@ Post concise progress, evidence, and questions with `team bulletin post`.
 Use `herdr-gpui team finding add` when a durable finding needs evidence and a
 confidence level.
 
+Workspace Isolation:
+- Shared Working Tree (default): Preferred for docs, reviews, disjoint files, and
+  small fixes to leverage shared build caches.
+- Git Worktrees (opt-in): Use when parallel tasks touch the same files/crates or
+  run heavy test suites to avoid cargo build directory lock contention (see
+  `docs/herding-worktrees.md`).
+
+Autonomous Goal Follow-Through & Idle Protocol:
+- Pursue the Goal: Autonomously drive toward the overarching goal until verified complete.
+- Proactive Claiming: After finishing a task or when idle, check `team task list` for open tasks to claim or check the bulletin rather than sitting idle.
+- When to Stop: Rest idle only when all tasks are complete and verified by QA, or when blocked waiting for user decisions, approvals, or secrets.
+
 These commands take caller identity from the Herdr pane environment. Do not
 invent pane or workspace identifiers or pass flags to impersonate another
 session. If status says there is no team or the caller is unsupported, explain

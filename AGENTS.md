@@ -238,6 +238,8 @@ just format
 just ci
 ```
 
+- Builds share the checkout's `target/`; when disk fills, follow
+  `docs/build-cache.md` before deleting anyone else's artifacts.
 - For linking, startup, or packaging changes, also use `just test-build` to build the release executable and exercise its CLI without a desktop.
 - The `windows` CI job checks formatting, lints every target and feature, and
   runs workspace tests with default and all features, including headless UI and

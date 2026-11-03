@@ -82,7 +82,7 @@ fn add_worker_rejects_duplicate_pane_or_session() {
     );
 
     assert!(bridge.warning.is_some());
-    assert!(bridge.team.as_ref().unwrap().members.is_empty());
+    assert!(bridge.team.as_ref().is_some_and(|t| t.members.is_empty()));
 
     let dup_session = PaneCandidate {
         identity: PaneIdentity {
@@ -105,7 +105,7 @@ fn add_worker_rejects_duplicate_pane_or_session() {
         &candidates2,
     );
     assert!(bridge.warning.is_some());
-    assert!(bridge.team.as_ref().unwrap().members.is_empty());
+    assert!(bridge.team.as_ref().is_some_and(|t| t.members.is_empty()));
 }
 
 #[test]

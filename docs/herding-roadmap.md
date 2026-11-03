@@ -5,6 +5,25 @@ Status: 2026-11-03. This document captures the review of [`herding-spec.md`](her
 against the native Rust implementation on `codex/herding-bulletin`, and defines the implementation
 plan for completing the full feature.
 
+## Product direction: make the core dependable
+
+Teams, tasks, a bulletin, and supervisor delegation form a coherent starting
+point. Before adding more roles or automation, prioritize the reliability and
+clarity of those existing building blocks:
+
+- Let agents finish work already in progress when coordination is paused.
+  Make the pause state and the behavior of queued work visible and explicit.
+- Deliver messages and assignments to the intended team and member, preserving
+  pending work and reporting uncertain delivery honestly.
+- Let users switch teams while existing sessions continue in the background,
+  without releasing another team's held prompts or changing focus unexpectedly.
+- Keep supervision useful and bounded: continue clearly authorized work, and
+  become idle when nothing actionable remains or a human decision is needed.
+
+These are desired guarantees, not a claim that every path already meets them.
+The existing pause and delivery implementation needs further verification,
+including team switching, multiple windows, restart, and real-agent behavior.
+
 ## 1. Baseline Implementation Summary
 
 - **Durable SQLite Team Store (`crates/herdr-orchestrator/src/team_store.rs`)**:
@@ -81,7 +100,7 @@ plan for completing the full feature.
    - Quick-spawn bar (`+ Claude`, `+ Codex`, `+ Gemini`, `+ OpenCode`, `+ Split pane`) inside **Start a team** and **+ Add worker** so users can launch new ACP agent tabs or split terminal panes directly from the Team sidebar.
 4. **Pause / Resume with Queued Prompt Holding & Flushing**:
    - Team-level (`TogglePauseTeam`) and per-agent (`TogglePauseMember`) pause controls.
-   - Outgoing prompts targeting paused panes are held in `Bridge::queued_prompts` (`Paused (N queued)`) and flushed automatically on **Resume**.
+   - The UI bridge holds prompts it recognizes as targeting paused panes in `Bridge::queued_prompts` and drains eligible prompts on **Resume**. This is an in-memory, window-local mechanism; it is not yet a verified guarantee across all delivery paths, windows, or restarts.
 5. **Local SQLite Task Engine + GitHub Issue (`#123`) Import**:
    - `Operation::ImportGithubIssue` fetches issue metadata via `gh issue view` off the UI thread and creates a structured task or sets the Team Goal, keeping sub-millisecond atomic task claims local in SQLite.
 6. **Autonomous CLI-to-Pane Wakeups & Exact Binary/Pane Routing**:

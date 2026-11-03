@@ -230,40 +230,45 @@ fn prompts_for_team_action(
             vec![(
                 supervisor.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You are now the Supervisor of team \"{}\". Run `herdr team status` to inspect your team, `herdr team task list` to check tasks, and `herdr team inbox --unread` to read messages.",
+                    "[Herdr Team] You are now the Supervisor of team \"{}\". Run `herdr-gpui team status` to get your TEAM_ID, `herdr-gpui team task list <TEAM_ID>` to check tasks, and `herdr-gpui team bulletin list <TEAM_ID>` to read messages.",
                     name.trim()
                 ),
                 format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
             )]
         }
-        TeamAction::SetGoal { goal, .. } if !goal.trim().is_empty() => team
+        TeamAction::SetGoal { team_id, goal } if !goal.trim().is_empty() => team
             .and_then(supervisor_pane_id)
             .into_iter()
             .map(|pane_id| {
                 (
                     pane_id.clone(),
                     format!(
-                        "[Herdr Team] Team goal set: \"{}\". Run `herdr team status`, break down work with `herdr team task create`, and coordinate with teammates via `herdr team post`.",
+                        "[Herdr Team] Team goal set for {team_id}: \"{}\". Run `herdr-gpui team status {team_id}`, break down work with `herdr-gpui team task create {team_id} --title \"...\"`, and coordinate with teammates via `herdr-gpui team bulletin post {team_id} \"...\"`.",
                         goal.trim()
                     ),
                     format!("Sent updated goal to supervisor ({pane_id})"),
                 )
             })
             .collect(),
-        TeamAction::AddWorker { name, pane, .. } if !name.trim().is_empty() => {
+        TeamAction::AddWorker {
+            team_id,
+            name,
+            pane,
+        } if !name.trim().is_empty() => {
             vec![(
                 pane.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You joined the team as Worker \"{}\". Run `herdr team status` to view the team goal, `herdr team task list` to claim open tasks (`herdr team task claim <id>`), and `herdr team inbox --unread` to read messages.",
+                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Run `herdr-gpui team status {team_id}` to view the goal, `herdr-gpui team task list {team_id}` to claim open tasks (`herdr-gpui team task claim {team_id} <TASK_ID>`), and `herdr-gpui team bulletin list {team_id}` to read messages.",
                     name.trim()
                 ),
                 format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
             )]
         }
-        TeamAction::NudgeMember { member_id, .. } => {
+        TeamAction::NudgeMember { member_id } => {
             let Some(team) = team else {
                 return Vec::new();
             };
+            let team_id = &team.team_id;
             roster(team)
                 .find(|m| m.member_id == *member_id)
                 .and_then(|m| {
@@ -271,7 +276,7 @@ fn prompts_for_team_action(
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] Status check for {}: please run `herdr team status`, `herdr team task list`, and `herdr team inbox --unread` to check active tasks and messages.",
+                            "[Herdr Team] Status check for {} in team {team_id}: please run `herdr-gpui team status {team_id}`, `herdr-gpui team task list {team_id}`, and `herdr-gpui team bulletin list {team_id}` to check active tasks and messages.",
                             m.display_name
                         ),
                         format!("Nudged {} ({pane_id})", m.display_name),
@@ -281,10 +286,10 @@ fn prompts_for_team_action(
                 .collect()
         }
         TeamAction::CreateTask {
+            team_id,
             title,
             brief,
             assignee,
-            ..
         } if !title.trim().is_empty() => {
             let target_pane = team.and_then(|team| {
                 resolve_assignee_pane(team, assignee.as_deref())
@@ -301,7 +306,7 @@ fn prompts_for_team_action(
                     (
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] New task \"{}\"{}. Run `herdr team task list` to inspect it, `herdr team task claim <task-id>` to start working on it, and `herdr team task done <task-id> --result \"...\"` when finished.",
+                            "[Herdr Team] New task in team {team_id}: \"{}\"{}. Run `herdr-gpui team task list {team_id}` to inspect it, `herdr-gpui team task claim {team_id} <TASK_ID>` to start working on it, and `herdr-gpui team task complete {team_id} <TASK_ID> --result \"...\"` when finished.",
                             title.trim(),
                             brief_part
                         ),
@@ -310,10 +315,11 @@ fn prompts_for_team_action(
                 })
                 .collect()
         }
-        TeamAction::DispatchTask { task_id, .. } => {
+        TeamAction::DispatchTask { task_id } => {
             let Some(team) = team else {
                 return Vec::new();
             };
+            let team_id = &team.team_id;
             let Some(task) = tasks.iter().find(|t| t.task_id == *task_id) else {
                 return Vec::new();
             };
@@ -333,7 +339,7 @@ fn prompts_for_team_action(
                     (
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] Please work on task {} (\"{}\"){}. Claim it with `herdr team task claim {}` and complete it with `herdr team task done {} --result \"...\"`.",
+                            "[Herdr Team] Please work on task {} (\"{}\"){} in team {team_id}. Claim it with `herdr-gpui team task claim {team_id} {}` and complete it with `herdr-gpui team task complete {team_id} {} --result \"...\"`.",
                             task.task_id, task.title, brief_part, task.task_id, task.task_id
                         ),
                         format!("Sent task \"{}\" to {pane_id}", task.title),
@@ -341,7 +347,7 @@ fn prompts_for_team_action(
                 })
                 .collect()
         }
-        TeamAction::Post { body, .. } | TeamAction::Reply { body, .. }
+        TeamAction::Post { team_id, body, .. } | TeamAction::Reply { team_id, body, .. }
             if !body.trim().is_empty() =>
         {
             let Some(team) = team else {
@@ -353,7 +359,7 @@ fn prompts_for_team_action(
                     (
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] New bulletin message: \"{}\". Run `herdr team inbox --unread` to view and `herdr team post` to reply.",
+                            "[Herdr Team] New bulletin message in team {team_id}: \"{}\". Run `herdr-gpui team bulletin list {team_id}` to view and `herdr-gpui team bulletin post {team_id} \"...\"` to reply.",
                             body.trim()
                         ),
                         format!("Posted bulletin to team ({pane_id})"),

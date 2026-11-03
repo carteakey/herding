@@ -275,7 +275,7 @@ fn parse_task(args: &mut Args) -> Result<TeamCommand, CliError> {
                 reason,
             })
         }
-        Some("complete") => {
+        Some("complete" | "done") => {
             let result = bounded(
                 args.text_option("--result")?
                     .ok_or(CliError::MissingValue("--result"))?,

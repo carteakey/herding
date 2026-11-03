@@ -371,6 +371,36 @@ fn prompts_for_team_action(
                 })
                 .collect()
         }
+        TeamAction::UpdateTask {
+            team_id,
+            task_id,
+            title,
+            brief,
+            assignee,
+        } if !title.trim().is_empty() => {
+            let target_pane =
+                team.and_then(|team| resolve_assignee_pane(team, assignee.as_deref()));
+            let brief_part = if brief.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", brief.trim())
+            };
+            target_pane
+                .into_iter()
+                .map(|pane_id| {
+                    let cli = cli_for_member(team, &pane_id);
+                    (
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] Task {task_id} assigned to you in team {team_id}: \"{}\"{}. Claim it with `{cli} task claim {team_id} {task_id}` and complete it with `{cli} task complete {team_id} {task_id} --result \"...\"`.",
+                            title.trim(),
+                            brief_part
+                        ),
+                        format!("Assigned task \"{}\" to {pane_id}", title.trim()),
+                    )
+                })
+                .collect()
+        }
         TeamAction::DispatchTask { task_id } => {
             let Some(team) = team else {
                 return Vec::new();

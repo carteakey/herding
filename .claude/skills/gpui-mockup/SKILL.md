@@ -41,7 +41,9 @@ style details.
    - `mockup: ready pid=N`: the window is open. Record `N`; it is the only
      process you may stop later.
    - `mockup: captured <path>`: the PNG is written.
-   - `mockup: capture failed ...`: this platform cannot capture. Skip the
+   - `mockup: capture failed ...`: this platform cannot capture. On Linux,
+     screenshot the active window instead
+     ([Capturing the window](#capturing-the-window)); elsewhere, skip the
      self-check and say so.
    - A compiler error means the process has exited. The error names lines in
      `$dir/mockup.rs`; fix them and run the command again.
@@ -163,6 +165,105 @@ fn dense(look: &Look, _: &mut Window, _: &mut App) -> AnyElement {
 - **No work in render:** no I/O, process launches, sleeps, or unbounded
   allocation, the same rules as the app.
 
+## Mock an existing view with real data
+
+When the question is "what does this screen look like with these rows?" rather
+than "which of these new designs is better?", render the **real view** instead
+of a copy of its layout. A `Body::View` can build any `pub(crate)` view, and the
+view does not need the rest of the window or a daemon:
+
+```rust
+use super::{Body, Look, Mockup, Variant};
+use crate::team::TeamView;
+use crate::team::model::{TeamFinding, TeamLoadState, TeamSnapshot};
+use gpui::{prelude::*, *};
+use herdr_orchestrator::team_store::Confidence;
+
+fn snapshot() -> TeamSnapshot {
+    TeamSnapshot {
+        state: TeamLoadState::Ready,
+        team_id: Some("team-mockup".into()),
+        team_name: Some("herding".into()),
+        findings: vec![TeamFinding {
+            id: "finding-1".into(),
+            author: "argon".into(),
+            description: "A finding description long enough to reach the real edge of the \
+                          sidebar, where the real truncation has to hold."
+                .into(),
+            evidence: "A bounded probe exercised the CLI against a sandboxed daemon.".into(),
+            confidence: Confidence::High,
+            supersedes: None,
+        }],
+        ..TeamSnapshot::default()
+    }
+}
+
+fn view(_: &mut Window, cx: &mut App) -> AnyView {
+    let (font, theme) = {
+        let look = cx.global::<Look>();
+        (look.config.ui.clone(), look.theme.clone())
+    };
+    let team = cx.new(|cx| TeamView::new(font, theme, cx));
+    team.update(cx, |team, cx| team.set_snapshot(snapshot(), cx));
+    AnyView::from(team)
+}
+
+pub(super) fn mockup() -> Mockup {
+    Mockup {
+        title: "Team findings",
+        frame: size(px(400.), px(800.)),
+        variants: vec![Variant {
+            name: "Compact",
+            note: "The existing view, with a finding long enough to overflow.",
+            body: Body::View(view),
+        }],
+    }
+}
+```
+
+- **Use the view's own setters.** `set_snapshot` is the same entry point the
+  app uses. Find the setter or constructor the window already calls
+  (`crates/herdr-gpui/src/window/construct.rs` is a good index); do not widen
+  visibility just for the mockup. `pub(crate)` items are reachable from the
+  scratch module, `pub(super)` state is not.
+- **Fill it with the awkward case** that motivated the check: the longest
+  description, the narrowest width, the empty section above it. One variant of
+  the real view is enough; the point is fidelity, not options.
+- **Set `frame` to the real slot.** The team section is about 400 px wide in
+  the sidebar, so `size(px(400.), px(800.))` reproduces the wrapping instead
+  of testing a comfortable full-window width.
+- **Scroll containers lay out the whole column.** Rows below the fold still
+  get real bounds, but the screenshot only shows the visible frame. If the
+  part you need is off-screen, collapse the sections above it in the snapshot
+  or make the frame taller.
+- **State is built once.** A `Body::View` keeps the entity across theme and
+  width changes. To inspect another state (an expanded row, a menu), use
+  another variant that builds the view already in that state; do not add a
+  mockup-only public method to the view.
+
+## Capturing the window
+
+`just mockup ... shot.png` uses GPUI's renderer readback, which works on macOS.
+On Linux `--capture` prints `mockup: capture failed: render_to_image not
+implemented for this platform` and writes no PNG; the window is still real and
+already open. Screenshot it instead, while it is the active window:
+
+```sh
+# KDE Plasma, Wayland or X11: the active window, no timer or notification.
+spectacle -b -n -a -o "$dir/shot.png"
+
+# GNOME
+gnome-screenshot -w -f "$dir/shot.png"
+
+# wlroots (Sway, Hyprland)
+grim -g "$(slurp)" "$dir/shot.png"
+```
+
+The window is focused right after `mockup: ready pid=N`; capture then, read
+`$dir/shot.png` with the image viewer, and `kill N`. If the window has lost
+focus, find it by its title (`Mockup: <title>`) or activate it first; `-a`
+captures whatever is active, not necessarily the mockup.
+
 ## Promote the chosen variant
 
 Once the user settles on a direction:
@@ -181,6 +282,7 @@ Once the user settles on a direction:
 - The window needs a desktop session. Over SSH or without a display, describe
   the variants instead, or use the HTML `mockup` skill.
 - `--capture` uses GPUI's renderer readback, which works on macOS. Elsewhere it
-  reports `capture failed`.
+  reports `capture failed`; see [Capturing the window](#capturing-the-window)
+  for Linux and other desktops.
 - `just mockup` writes `target/debug/herdr-gpui` with the `mockup` feature
   enabled. `just run-debug` and tests rebuild their own binaries.

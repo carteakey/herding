@@ -41,6 +41,7 @@ team-status-unavailable = Session not attached
 team-author-human = You
 team-action-switch = Switch team
 team-warning-duplicate-name = An agent named { $name } is already in this team.
+team-warning-duplicate-target = An agent in that session or pane is already in this team.
 team-goal-title = Goal
 team-goal-empty = No goal set yet.
 team-field-goal-placeholder = Set team goal

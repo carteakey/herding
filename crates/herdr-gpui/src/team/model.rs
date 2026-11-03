@@ -45,6 +45,7 @@ pub(crate) struct TeamMember {
     pub(crate) role: SharedString,
     pub(crate) agent: SharedString,
     pub(crate) pane: Option<PaneIdentity>,
+    pub(crate) target_pane: Option<PaneIdentity>,
     pub(crate) status: SharedString,
     pub(crate) supervisor: bool,
     pub(crate) paused: bool,

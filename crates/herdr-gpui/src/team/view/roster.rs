@@ -363,12 +363,19 @@ impl TeamView {
             .border_color(rgb(theme.active));
         body = body.child(self.worker_name.clone());
         body = body.child(self.render_spawn_bar("team-worker", cx));
-        for candidate in self
-            .snapshot
-            .pane_candidates
-            .iter()
-            .take(MAX_VISIBLE_CANDIDATES)
-        {
+        let eligible = self.snapshot.pane_candidates.iter().filter(|c| {
+            !self.snapshot.members.iter().any(|m| {
+                m.target_pane.as_ref().is_some_and(|target| {
+                    target.pane_id == c.identity.pane_id
+                        || (target.session_id.is_some()
+                            && target.session_id == c.identity.session_id)
+                }) || m.pane.as_ref().is_some_and(|p| {
+                    p.pane_id == c.identity.pane_id
+                        || (p.session_id.is_some() && p.session_id == c.identity.session_id)
+                })
+            })
+        });
+        for candidate in eligible.take(MAX_VISIBLE_CANDIDATES) {
             if !name.trim().is_empty()
                 && candidate.identity.verified()
                 && let Some(team_id) = self.snapshot.team_id.as_ref()

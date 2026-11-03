@@ -448,6 +448,14 @@ impl Bridge {
                     self.dirty = true;
                     return;
                 }
+                if roster(&team).any(|m| {
+                    (target.pane.is_some() && m.target.pane == target.pane)
+                        || (!target.session.is_empty() && m.target.session == target.session)
+                }) {
+                    self.warning = Some(fl!("team-warning-duplicate-target").into());
+                    self.dirty = true;
+                    return;
+                }
                 self.warning = None;
                 team.members.push(member(name, target));
                 self.save(team);
@@ -901,6 +909,7 @@ fn members(
                 pane: matched
                     .map(|c| c.identity.clone())
                     .or_else(|| pane.filter(|_| live)),
+                target_pane: pane_of(member),
                 status: matched
                     .map(|c| c.status.clone())
                     .unwrap_or_else(|| fl!("team-status-unavailable").into()),

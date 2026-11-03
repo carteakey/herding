@@ -285,6 +285,26 @@ fn prompts_for_team_action(
                 .into_iter()
                 .collect()
         }
+        TeamAction::SelectSupervisor { team_id, member_id } => {
+            let Some(team) = team else {
+                return Vec::new();
+            };
+            roster(team)
+                .find(|m| m.member_id == *member_id)
+                .and_then(|m| {
+                    let pane_id = m.target.pane.clone()?;
+                    Some((
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Run `herdr-gpui team status {team_id}` and `herdr-gpui team task list {team_id}` to coordinate the team.",
+                            m.display_name, team.name
+                        ),
+                        format!("Promoted {} to supervisor ({pane_id})", m.display_name),
+                    ))
+                })
+                .into_iter()
+                .collect()
+        }
         TeamAction::CreateTask {
             team_id,
             title,

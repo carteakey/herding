@@ -114,19 +114,7 @@ impl HerdrWindow {
             self.split_team_pane(cx);
         }
         for (pane_id, prompt, summary) in prompts {
-            if self.team_bridge.is_pane_paused(&pane_id) {
-                self.team_bridge
-                    .queued_prompts
-                    .push((pane_id.clone(), prompt, summary));
-                let held = self.team_bridge.queued_prompts.len();
-                self.team_bridge.last_activity =
-                    Some(format!("Held prompt for paused pane {pane_id} ({held} queued)").into());
-                self.team_bridge.dirty = true;
-            } else {
-                self.dispatch_team_prompt(&pane_id, prompt, cx);
-                self.team_bridge.last_activity = Some(summary.into());
-                self.team_bridge.dirty = true;
-            }
+            self.enqueue_or_dispatch_team_prompt(&pane_id, prompt, summary, cx);
         }
         let identities: Vec<_> = candidates.iter().map(|c| c.identity.clone()).collect();
         let focus = focus.filter(|pane| {
@@ -160,6 +148,28 @@ impl HerdrWindow {
             {
                 self.terminal_focus_moved(&tab_id, false, cx);
             }
+        }
+    }
+
+    pub(crate) fn enqueue_or_dispatch_team_prompt(
+        &mut self,
+        pane_id: &str,
+        prompt: String,
+        summary: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.team_bridge.is_pane_paused(pane_id) {
+            self.team_bridge
+                .queued_prompts
+                .push((pane_id.to_owned(), prompt, summary));
+            let held = self.team_bridge.queued_prompts.len();
+            self.team_bridge.last_activity =
+                Some(format!("Held prompt for paused pane {pane_id} ({held} queued)").into());
+            self.team_bridge.dirty = true;
+        } else {
+            self.dispatch_team_prompt(pane_id, prompt, cx);
+            self.team_bridge.last_activity = Some(summary.into());
+            self.team_bridge.dirty = true;
         }
     }
 

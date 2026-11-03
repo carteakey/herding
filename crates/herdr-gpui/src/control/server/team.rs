@@ -295,7 +295,7 @@ pub(super) fn serve(
                 move |app_cx| match receiver.try_recv() {
                     Ok(Ok(reply)) => {
                         if is_mutation {
-                            notify_team_mutation(app_cx);
+                            notify_team_mutation(&reply, app_cx);
                         }
                         Some(reply_response(reply, &pane_agents))
                     }
@@ -326,12 +326,70 @@ pub(super) fn serve(
     }
 }
 
-fn notify_team_mutation(cx: &mut App) {
+fn notify_team_mutation(reply: &Reply, cx: &mut App) {
+    let dispatches = prompts_for_scoped_reply(reply);
     for handle in crate::control::main_windows(cx) {
         let _ = handle.update(cx, |view, _, cx| {
             view.team_bridge.mark_dirty();
+            if view.live.status.is_connected() {
+                for (pane_id, prompt, summary) in &dispatches {
+                    view.enqueue_or_dispatch_team_prompt(
+                        pane_id,
+                        prompt.clone(),
+                        summary.clone(),
+                        cx,
+                    );
+                }
+            }
             cx.notify();
         });
+    }
+}
+
+fn prompts_for_scoped_reply(reply: &Reply) -> Vec<(String, String, String)> {
+    match reply {
+        Reply::ScopedPosted { team, post } => {
+            let team_id = &team.team_id;
+            let (_, author_name) = author_parts(team, &post.author);
+            std::iter::once(&team.supervisor)
+                .chain(team.members.iter())
+                .filter(|m| post.mentions.contains(&m.member_id))
+                .filter_map(|m| {
+                    let pane_id = m.target.pane.clone()?;
+                    Some((
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] @{}: new bulletin from {author_name} in team {team_id} (msg {}): \"{}\". Run `herdr-gpui team bulletin ack {team_id} {}` to acknowledge and `herdr-gpui team bulletin post {team_id} --reply-to {} \"...\"` to reply.",
+                            m.display_name, post.post_id, post.body, post.post_id, post.post_id
+                        ),
+                        format!("{author_name} mentioned @{} ({pane_id})", m.display_name),
+                    ))
+                })
+                .collect()
+        }
+        Reply::ScopedTask { team, task } if task.status == TaskStatus::Open => {
+            let team_id = &team.team_id;
+            let Some(assignee_id) = task.assignee.as_deref() else {
+                return Vec::new();
+            };
+            std::iter::once(&team.supervisor)
+                .chain(team.members.iter())
+                .find(|m| m.member_id == assignee_id)
+                .and_then(|m| {
+                    let pane_id = m.target.pane.clone()?;
+                    Some((
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] Task assigned to {} in team {team_id}: {} (\"{}\"). Claim it with `herdr-gpui team task claim {team_id} {}` and complete it with `herdr-gpui team task complete {team_id} {} --result \"...\"`.",
+                            m.display_name, task.task_id, task.title, task.task_id, task.task_id
+                        ),
+                        format!("Assigned task \"{}\" to {} ({pane_id})", task.title, m.display_name),
+                    ))
+                })
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 

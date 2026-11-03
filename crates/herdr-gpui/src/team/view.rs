@@ -1,7 +1,9 @@
 use super::model::{PaneCandidate, PaneIdentity, TeamLoadState, TeamSnapshot};
 use crate::{HerdrWindow, config::Theme, i18n::fl, search_input::SearchInput};
 use gpui::{prelude::*, *};
-use herdr_orchestrator::team_store::Author;
+use herdr_orchestrator::team_store::{Author, Confidence};
+
+mod board;
 
 const MAX_VISIBLE_MEMBERS: usize = 64;
 const MAX_VISIBLE_CANDIDATES: usize = 64;
@@ -12,6 +14,7 @@ const MAX_VISIBLE_POSTS: usize = 200;
 /// and perform writes, focus changes, and refreshes outside rendering.
 #[derive(Clone, Debug)]
 pub(crate) enum TeamAction {
+    SwitchTeamView,
     SelectTeam {
         team_id: String,
     },
@@ -21,6 +24,10 @@ pub(crate) enum TeamAction {
     CreateTeam {
         name: String,
         supervisor: PaneIdentity,
+    },
+    SetGoal {
+        team_id: String,
+        goal: String,
     },
     SelectSupervisor {
         team_id: String,
@@ -42,6 +49,28 @@ pub(crate) enum TeamAction {
         reply_to: String,
         body: String,
     },
+    CreateTask {
+        team_id: String,
+        title: String,
+        brief: String,
+        assignee: Option<String>,
+    },
+    CompleteTask {
+        team_id: String,
+        task_id: String,
+        result: String,
+    },
+    CancelTask {
+        team_id: String,
+        task_id: String,
+    },
+    AddFinding {
+        team_id: String,
+        author: Author,
+        description: String,
+        evidence: String,
+        confidence: Confidence,
+    },
     FocusWorker {
         pane: PaneIdentity,
     },
@@ -50,8 +79,15 @@ pub(crate) enum TeamAction {
 pub(crate) struct TeamView {
     snapshot: TeamSnapshot,
     team_name: Entity<SearchInput>,
+    team_goal: Entity<SearchInput>,
     worker_name: Entity<SearchInput>,
     post_body: Entity<SearchInput>,
+    task_title: Entity<SearchInput>,
+    task_brief: Entity<SearchInput>,
+    task_assignee: Entity<SearchInput>,
+    finding_description: Entity<SearchInput>,
+    finding_evidence: Entity<SearchInput>,
+    finding_confidence: Confidence,
     reply_to: Option<String>,
     action_warning: Option<SharedString>,
     font: crate::config::FontConfig,
@@ -65,11 +101,22 @@ impl TeamView {
         cx: &mut Context<Self>,
     ) -> Self {
         let team_name = cx.new(SearchInput::new);
+        let team_goal = cx.new(SearchInput::new);
         let worker_name = cx.new(SearchInput::new);
         let post_body = cx.new(SearchInput::new);
+        let task_title = cx.new(SearchInput::new);
+        let task_brief = cx.new(SearchInput::new);
+        let task_assignee = cx.new(SearchInput::new);
+        let finding_description = cx.new(SearchInput::new);
+        let finding_evidence = cx.new(SearchInput::new);
         team_name.update(cx, |input, cx| {
             input.set_placeholder_with(|| fl!("team-field-name-placeholder"), cx);
             input.set_label(&fl!("team-field-name-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        team_goal.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-goal-placeholder"), cx);
+            input.set_label(&fl!("team-field-goal-placeholder"), cx);
             input.set_appearance(font.clone(), theme.clone(), cx);
         });
         worker_name.update(cx, |input, cx| {
@@ -82,7 +129,42 @@ impl TeamView {
             input.set_label(&fl!("team-field-post-placeholder"), cx);
             input.set_appearance(font.clone(), theme.clone(), cx);
         });
-        for input in [&team_name, &worker_name, &post_body] {
+        task_title.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-task-title-placeholder"), cx);
+            input.set_label(&fl!("team-field-task-title-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        task_brief.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-task-brief-placeholder"), cx);
+            input.set_label(&fl!("team-field-task-brief-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        task_assignee.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-task-assignee-placeholder"), cx);
+            input.set_label(&fl!("team-field-task-assignee-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        finding_description.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-finding-description-placeholder"), cx);
+            input.set_label(&fl!("team-field-finding-description-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        finding_evidence.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-finding-evidence-placeholder"), cx);
+            input.set_label(&fl!("team-field-finding-evidence-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        for input in [
+            &team_name,
+            &team_goal,
+            &worker_name,
+            &post_body,
+            &task_title,
+            &task_brief,
+            &task_assignee,
+            &finding_description,
+            &finding_evidence,
+        ] {
             cx.subscribe(input, |_, _, _: &crate::search_input::Changed, cx| {
                 cx.notify();
             })
@@ -91,8 +173,15 @@ impl TeamView {
         Self {
             snapshot: TeamSnapshot::default(),
             team_name,
+            team_goal,
             worker_name,
             post_body,
+            task_title,
+            task_brief,
+            task_assignee,
+            finding_description,
+            finding_evidence,
+            finding_confidence: Confidence::High,
             reply_to: None,
             action_warning: None,
             font,
@@ -131,7 +220,17 @@ impl TeamView {
         let changed = self.font != font || self.theme != theme;
         self.theme = theme.clone();
         self.font = font.clone();
-        for input in [&self.team_name, &self.worker_name, &self.post_body] {
+        for input in [
+            &self.team_name,
+            &self.team_goal,
+            &self.worker_name,
+            &self.post_body,
+            &self.task_title,
+            &self.task_brief,
+            &self.task_assignee,
+            &self.finding_description,
+            &self.finding_evidence,
+        ] {
             input.update(cx, |input, cx| {
                 input.set_appearance(font.clone(), theme.clone(), cx);
             });
@@ -259,6 +358,14 @@ impl TeamView {
                 .border_b_1()
                 .border_color(rgb(self.theme.active))
                 .child(div().flex_1().child(member.name.clone()))
+                .when(!member.agent.is_empty(), |r| {
+                    r.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(self.theme.muted))
+                            .child(member.agent.clone()),
+                    )
+                })
                 .child(
                     div()
                         .text_color(rgb(self.theme.muted))
@@ -471,12 +578,19 @@ impl Render for TeamView {
                 .items_center()
                 .gap_3()
                 .child(div().flex_1().text_size(px(21.)).child(team_name.clone()))
+                .child(self.action_button(
+                    "team-switch",
+                    fl!("team-action-switch"),
+                    TeamAction::SwitchTeamView,
+                    cx,
+                ))
                 .child(
                     div()
                         .text_color(rgb(theme.muted))
                         .child(fl!("sidebar-activity-team")),
                 ),
         );
+        body = body.child(self.render_goal(&team_id, cx));
         body = body.child(if self.snapshot.members.is_empty() {
             div()
                 .text_color(rgb(theme.muted))
@@ -485,6 +599,8 @@ impl Render for TeamView {
             self.render_roster(cx)
         });
         body = body.child(self.render_add_worker(cx));
+        body = body.child(self.render_tasks(&team_id, cx));
+        body = body.child(self.render_findings(&team_id, cx));
         body = body.child(div().text_size(px(16.)).child(fl!("team-bulletin")));
         body = body.child(self.render_posts(cx));
         if let Some((author, author_label)) = self.snapshot.post_author.as_ref() {

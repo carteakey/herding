@@ -135,3 +135,105 @@ fn only_a_recipient_can_acknowledge_a_directed_post() {
         .is_err()
     );
 }
+
+#[test]
+fn register_status_goal_tasks_and_findings_round_trip() {
+    let (_dir, mut store) = store();
+    let newcomer = target(3);
+    let Reply::ScopedRegistered { member, .. } = scoped(
+        &mut store,
+        "t",
+        &newcomer,
+        ScopedAction::Register {
+            name: "investigator".into(),
+        },
+    )
+    .unwrap() else {
+        panic!("expected registered reply");
+    };
+    assert_eq!(member.display_name, "investigator");
+
+    scoped(
+        &mut store,
+        "t",
+        &target(1),
+        ScopedAction::GoalSet {
+            goal: "Ship herding".into(),
+        },
+    )
+    .unwrap();
+
+    let Reply::ScopedTask { task, .. } = scoped(
+        &mut store,
+        "t",
+        &target(1),
+        ScopedAction::TaskCreate {
+            task_id: "task-1".into(),
+            title: "Audit".into(),
+            brief: "Check code".into(),
+            assignee: Some("investigator".into()),
+        },
+    )
+    .unwrap() else {
+        panic!("expected task reply");
+    };
+    assert_eq!(task.assignee.as_deref(), Some(member.member_id.as_str()));
+
+    let Reply::ScopedStatus {
+        goal,
+        open_tasks,
+        assigned_tasks,
+        ..
+    } = scoped(
+        &mut store,
+        "",
+        &newcomer,
+        ScopedAction::Status { team_id: None },
+    )
+    .unwrap()
+    else {
+        panic!("expected status reply");
+    };
+    assert_eq!(goal.as_deref(), Some("Ship herding"));
+    assert_eq!(open_tasks, 1);
+    assert_eq!(assigned_tasks, 1);
+
+    scoped(
+        &mut store,
+        "t",
+        &newcomer,
+        ScopedAction::TaskClaim {
+            task_id: "task-1".into(),
+        },
+    )
+    .unwrap();
+
+    scoped(
+        &mut store,
+        "t",
+        &newcomer,
+        ScopedAction::TaskComplete {
+            task_id: "task-1".into(),
+            result: "Verified".into(),
+        },
+    )
+    .unwrap();
+
+    let Reply::ScopedFinding { finding, .. } = scoped(
+        &mut store,
+        "t",
+        &newcomer,
+        ScopedAction::FindingAdd {
+            finding_id: "finding-1".into(),
+            task_id: Some("task-1".into()),
+            description: "All clear".into(),
+            evidence: "cargo test".into(),
+            confidence: Confidence::High,
+            supersedes: None,
+        },
+    )
+    .unwrap() else {
+        panic!("expected finding reply");
+    };
+    assert_eq!(finding.confidence, Confidence::High);
+}

@@ -1,6 +1,4 @@
-//! Team membership and bulletin operations carried over the app control socket.
-//! Teams are created by the UI, which assigns the supervisor; agent callers
-//! can only register with an existing team and cannot claim that role.
+//! Team membership, bulletin, task board, and finding operations carried over the app control socket.
 use serde::{Deserialize, Serialize};
 
 /// Maximum UTF-8 byte lengths. The server must enforce these at the handler
@@ -11,15 +9,24 @@ pub const MAX_MEMBER_ID_BYTES: usize = 128;
 pub const MAX_MEMBER_NAME_BYTES: usize = 128;
 pub const MAX_AGENT_BYTES: usize = 64;
 pub const MAX_MESSAGE_ID_BYTES: usize = 128;
+pub const MAX_TASK_ID_BYTES: usize = 128;
+pub const MAX_TASK_TITLE_BYTES: usize = 256;
+pub const MAX_FINDING_ID_BYTES: usize = 128;
 pub const MAX_BULLETIN_TEXT_BYTES: usize = 16 * 1024;
 /// Maximum number of explicitly mentioned member IDs on one entry.
 pub const MAX_MENTIONS: usize = 64;
-/// Maximum entries returned by a single roster or bulletin-list reply.
+/// Maximum entries returned by a single roster, bulletin, task, or finding reply.
 pub const MAX_PAGE_SIZE: usize = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TeamOp {
+    /// Discover the caller session's active team, membership, goal, and pending counts.
+    Status {
+        /// Optional team identifier; when omitted, discovers the caller's registered team.
+        #[serde(default)]
+        team_id: Option<String>,
+    },
     /// Register the caller's current agent session as a member of `team_id`.
     Register {
         /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
@@ -31,6 +38,13 @@ pub enum TeamOp {
     Roster {
         /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
         team_id: String,
+    },
+    /// Set or update the team goal description.
+    GoalSet {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Goal text, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
+        goal: String,
     },
     /// Read bulletin entries after an optional opaque cursor.
     BulletinList {
@@ -47,8 +61,8 @@ pub enum TeamOp {
         /// Optional parent message ID, at most [`MAX_MESSAGE_ID_BYTES`] bytes.
         #[serde(default)]
         reply_to: Option<String>,
-        /// Explicit recipient member IDs, each at most [`MAX_MEMBER_ID_BYTES`] bytes;
-        /// at most [`MAX_MENTIONS`]. Empty means a team-wide post.
+        /// Explicit recipient member IDs or names, each at most [`MAX_MEMBER_ID_BYTES`] bytes;
+        /// at most [`MAX_MENTIONS`]. Empty means resolve `@mentions` in `text` or broadcast.
         #[serde(default)]
         mentions: Vec<String>,
         /// Entry body, at most [`MAX_BULLETIN_TEXT_BYTES`] UTF-8 bytes.
@@ -60,6 +74,87 @@ pub enum TeamOp {
         team_id: String,
         /// Opaque message identifier, at most [`MAX_MESSAGE_ID_BYTES`] bytes.
         message_id: String,
+    },
+    /// List tasks on the team board.
+    TaskList {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+    },
+    /// Create a new task on the team board.
+    TaskCreate {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Short task title, at most [`MAX_TASK_TITLE_BYTES`] bytes.
+        title: String,
+        /// Optional task brief/context, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
+        #[serde(default)]
+        brief: String,
+        /// Optional assignee member ID or display name.
+        #[serde(default)]
+        assignee: Option<String>,
+    },
+    /// Assign or reassign an open or blocked task to a member.
+    TaskAssign {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Opaque task identifier, at most [`MAX_TASK_ID_BYTES`] bytes.
+        task_id: String,
+        /// Assignee member ID or display name.
+        assignee: String,
+    },
+    /// Atomically claim an open task for the caller's member identity.
+    TaskClaim {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Opaque task identifier, at most [`MAX_TASK_ID_BYTES`] bytes.
+        task_id: String,
+    },
+    /// Mark a task blocked with a reason.
+    TaskBlock {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Opaque task identifier, at most [`MAX_TASK_ID_BYTES`] bytes.
+        task_id: String,
+        /// Blocker explanation, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
+        reason: String,
+    },
+    /// Complete a task with a result summary or evidence reference.
+    TaskComplete {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Opaque task identifier, at most [`MAX_TASK_ID_BYTES`] bytes.
+        task_id: String,
+        /// Completion result or evidence summary, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
+        result: String,
+    },
+    /// Cancel a task.
+    TaskCancel {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Opaque task identifier, at most [`MAX_TASK_ID_BYTES`] bytes.
+        task_id: String,
+    },
+    /// List durable findings recorded by the team.
+    FindingList {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+    },
+    /// Record a durable finding with evidence and confidence.
+    FindingAdd {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Optional linked task ID, at most [`MAX_TASK_ID_BYTES`] bytes.
+        #[serde(default)]
+        task_id: Option<String>,
+        /// Confidence level in the finding.
+        confidence: ConfidenceLevel,
+        /// Evidence or artifact reference, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
+        evidence: String,
+        /// Optional prior finding ID that this finding supersedes.
+        #[serde(default)]
+        supersedes: Option<String>,
+        /// Finding description, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
+        description: String,
     },
 }
 
@@ -116,15 +211,72 @@ pub enum DeliveryState {
     Acknowledged,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState {
+    Open,
+    InProgress,
+    Blocked,
+    Done,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskInfo {
+    pub id: String,
+    pub title: String,
+    pub brief: String,
+    pub creator: String,
+    pub assignee_id: Option<String>,
+    pub assignee: Option<String>,
+    pub status: TaskState,
+    pub blocker_reason: Option<String>,
+    pub result: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingInfo {
+    pub id: String,
+    pub author_id: String,
+    pub author: String,
+    pub task_id: Option<String>,
+    pub description: String,
+    pub evidence: String,
+    pub confidence: ConfidenceLevel,
+    pub supersedes: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reply {
+    Status {
+        team: TeamInfo,
+        goal: Option<String>,
+        member: Box<MemberInfo>,
+        pending_mentions: usize,
+        open_tasks: usize,
+        assigned_tasks: usize,
+    },
     Registered {
-        member: MemberInfo,
+        member: Box<MemberInfo>,
     },
     Roster {
         team: TeamInfo,
         members: Vec<MemberInfo>,
+    },
+    GoalUpdated {
+        team_id: String,
+        goal: Option<String>,
     },
     Bulletin {
         entries: Vec<BulletinEntry>,
@@ -137,6 +289,18 @@ pub enum Reply {
     Acknowledged {
         message_id: String,
         delivery_state: DeliveryState,
+    },
+    Tasks {
+        tasks: Vec<TaskInfo>,
+    },
+    Task {
+        task: Box<TaskInfo>,
+    },
+    Findings {
+        findings: Vec<FindingInfo>,
+    },
+    Finding {
+        finding: Box<FindingInfo>,
     },
 }
 

@@ -13,7 +13,7 @@ mod mods;
 mod remote;
 mod settings;
 mod tabs;
-mod team;
+pub(crate) mod team;
 pub(crate) mod team_service;
 pub(crate) mod team_worker;
 mod work;

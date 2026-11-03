@@ -6,8 +6,8 @@
 //! after an accepted mutation does not cancel that mutation; the caller's
 //! outcome is unknown until it reads the reply.
 use herdr_orchestrator::team_store::{
-    self, Acknowledgement, Author, Post, RecipientStatus, Recipients, SessionTarget, Team,
-    TeamStore,
+    self, Acknowledgement, Author, Confidence, Finding, Member, Post, RecipientStatus, Recipients,
+    SessionTarget, Task, TaskStatus, Team, TeamStore,
 };
 use std::{
     path::PathBuf,
@@ -23,6 +23,10 @@ const QUEUE_CAPACITY: usize = 16;
 
 pub(crate) enum Operation {
     SaveTeam(Team),
+    SetGoal {
+        team_id: String,
+        goal: String,
+    },
     ListTeams {
         after: Option<String>,
         limit: usize,
@@ -34,6 +38,35 @@ pub(crate) enum Operation {
         reply_to: Option<String>,
         body: String,
         recipients: Recipients,
+    },
+    CreateTask {
+        task_id: String,
+        team_id: String,
+        creator: Author,
+        title: String,
+        brief: String,
+        assignee: Option<String>,
+    },
+    CompleteTask {
+        task_id: String,
+        team_id: String,
+        actor: Author,
+        result: String,
+    },
+    CancelTask {
+        task_id: String,
+        team_id: String,
+        actor: Author,
+    },
+    AddFinding {
+        finding_id: String,
+        team_id: String,
+        author: Author,
+        task_id: Option<String>,
+        description: String,
+        evidence: String,
+        confidence: Confidence,
+        supersedes_finding_id: Option<String>,
     },
     /// The Team view's read: a team with its newest posts and delivery states.
     Snapshot {
@@ -50,7 +83,16 @@ pub(crate) enum Operation {
 }
 
 pub(crate) enum ScopedAction {
+    Status {
+        team_id: Option<String>,
+    },
+    Register {
+        name: String,
+    },
     Roster,
+    GoalSet {
+        goal: String,
+    },
     BulletinList {
         after: i64,
         limit: usize,
@@ -64,6 +106,40 @@ pub(crate) enum ScopedAction {
     BulletinAck {
         message_id: String,
     },
+    TaskList,
+    TaskCreate {
+        task_id: String,
+        title: String,
+        brief: String,
+        assignee: Option<String>,
+    },
+    TaskAssign {
+        task_id: String,
+        assignee: String,
+    },
+    TaskClaim {
+        task_id: String,
+    },
+    TaskBlock {
+        task_id: String,
+        reason: String,
+    },
+    TaskComplete {
+        task_id: String,
+        result: String,
+    },
+    TaskCancel {
+        task_id: String,
+    },
+    FindingList,
+    FindingAdd {
+        finding_id: String,
+        task_id: Option<String>,
+        description: String,
+        evidence: String,
+        confidence: Confidence,
+        supersedes: Option<String>,
+    },
 }
 
 /// A post with each recipient's delivery state.
@@ -72,10 +148,29 @@ pub(crate) type PostDelivery = (Post, Vec<(String, RecipientStatus)>);
 pub(crate) enum Reply {
     Snapshot {
         team: Option<Team>,
+        goal: Option<String>,
         posts: Vec<PostDelivery>,
+        tasks: Vec<Task>,
+        findings: Vec<Finding>,
+    },
+    ScopedStatus {
+        team: Team,
+        member: Member,
+        goal: Option<String>,
+        pending_mentions: usize,
+        open_tasks: usize,
+        assigned_tasks: usize,
+    },
+    ScopedRegistered {
+        team: Team,
+        member: Member,
     },
     ScopedRoster {
         team: Team,
+    },
+    ScopedGoalUpdated {
+        team: Team,
+        goal: String,
     },
     ScopedBulletin {
         team: Team,
@@ -88,6 +183,22 @@ pub(crate) enum Reply {
     },
     ScopedAcknowledged {
         acknowledgement: Acknowledgement,
+    },
+    ScopedTasks {
+        team: Team,
+        tasks: Vec<Task>,
+    },
+    ScopedTask {
+        team: Team,
+        task: Task,
+    },
+    ScopedFindings {
+        team: Team,
+        findings: Vec<Finding>,
+    },
+    ScopedFinding {
+        team: Team,
+        finding: Finding,
     },
     Saved,
     Teams(Vec<Team>),
@@ -214,9 +325,24 @@ fn run(path: PathBuf, queue: Receiver<Job>) {
         let mutation = matches!(
             &job.operation,
             Operation::SaveTeam(_)
+                | Operation::SetGoal { .. }
                 | Operation::AddPost { .. }
+                | Operation::CreateTask { .. }
+                | Operation::CompleteTask { .. }
+                | Operation::CancelTask { .. }
+                | Operation::AddFinding { .. }
                 | Operation::Scoped {
-                    action: ScopedAction::BulletinPost { .. } | ScopedAction::BulletinAck { .. },
+                    action: ScopedAction::Register { .. }
+                        | ScopedAction::GoalSet { .. }
+                        | ScopedAction::BulletinPost { .. }
+                        | ScopedAction::BulletinAck { .. }
+                        | ScopedAction::TaskCreate { .. }
+                        | ScopedAction::TaskAssign { .. }
+                        | ScopedAction::TaskClaim { .. }
+                        | ScopedAction::TaskBlock { .. }
+                        | ScopedAction::TaskComplete { .. }
+                        | ScopedAction::TaskCancel { .. }
+                        | ScopedAction::FindingAdd { .. },
                     ..
                 }
         );
@@ -236,6 +362,10 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
     let reply = match operation {
         Operation::SaveTeam(team) => {
             store.save_team(&team)?;
+            Reply::Saved
+        }
+        Operation::SetGoal { team_id, goal } => {
+            store.set_team_goal(&team_id, &goal)?;
             Reply::Saved
         }
         Operation::ListTeams { after, limit } => {
@@ -259,6 +389,63 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             )?;
             Reply::Saved
         }
+        Operation::CreateTask {
+            task_id,
+            team_id,
+            creator,
+            title,
+            brief,
+            assignee,
+        } => {
+            store.create_task(
+                &task_id,
+                &team_id,
+                &creator,
+                &title,
+                &brief,
+                assignee.as_deref(),
+            )?;
+            Reply::Saved
+        }
+        Operation::CompleteTask {
+            task_id,
+            team_id,
+            actor,
+            result,
+        } => {
+            store.complete_task(&team_id, &task_id, &actor, &result)?;
+            Reply::Saved
+        }
+        Operation::CancelTask {
+            task_id,
+            team_id,
+            actor,
+        } => {
+            store.cancel_task(&team_id, &task_id, &actor)?;
+            Reply::Saved
+        }
+        Operation::AddFinding {
+            finding_id,
+            team_id,
+            author,
+            task_id,
+            description,
+            evidence,
+            confidence,
+            supersedes_finding_id,
+        } => {
+            store.add_finding(
+                &finding_id,
+                &team_id,
+                &author,
+                task_id.as_deref(),
+                &description,
+                &evidence,
+                confidence,
+                supersedes_finding_id.as_deref(),
+            )?;
+            Reply::Saved
+        }
         Operation::Snapshot { team_id, limit } => snapshot(store, &team_id, limit)?,
         Operation::Scoped {
             team_id,
@@ -277,9 +464,13 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
     let Some(team) = store.team(team_id)? else {
         return Ok(Reply::Snapshot {
             team: None,
+            goal: None,
             posts: Vec::new(),
+            tasks: Vec::new(),
+            findings: Vec::new(),
         });
     };
+    let goal = store.team_goal(team_id)?;
     let mut scanned = Vec::new();
     let mut cursor = 0;
     while scanned.len() < MAX_SCANNED_POSTS {
@@ -298,9 +489,14 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
         let statuses = store.recipient_statuses(&post.post_id)?;
         posts.push((post, statuses));
     }
+    let tasks = store.tasks(team_id, team_store::MAX_PAGE_SIZE)?;
+    let findings = store.findings(team_id, team_store::MAX_PAGE_SIZE)?;
     Ok(Reply::Snapshot {
         team: Some(team),
+        goal,
         posts,
+        tasks,
+        findings,
     })
 }
 
@@ -310,14 +506,87 @@ fn scoped(
     caller: &SessionTarget,
     action: ScopedAction,
 ) -> Result<Reply, Error> {
+    if let ScopedAction::Register { name } = action {
+        let member_id = uuid::Uuid::new_v4().to_string();
+        let member = store.register_member(team_id, &member_id, &name, caller)?;
+        let team = store.team(team_id)?.ok_or(Error::NotMember)?;
+        return Ok(Reply::ScopedRegistered { team, member });
+    }
+    if let ScopedAction::Status { team_id: hint } = action {
+        let filter = hint
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .or_else(|| (!team_id.trim().is_empty()).then_some(team_id));
+        let (team, member) = store
+            .find_member_team(filter, caller)?
+            .ok_or(Error::NotMember)?;
+        let goal = store.team_goal(&team.team_id)?;
+        let mut pending_mentions = 0usize;
+        let mut cursor = 0;
+        while let Ok(page) = store.posts(&team.team_id, cursor, team_store::MAX_PAGE_SIZE) {
+            let Some((last, _)) = page.last() else { break };
+            cursor = *last;
+            let full = page.len() == team_store::MAX_PAGE_SIZE;
+            for (_, post) in page {
+                if store
+                    .recipient_statuses(&post.post_id)?
+                    .iter()
+                    .any(|(id, status)| {
+                        id == &member.member_id && *status == RecipientStatus::Pending
+                    })
+                {
+                    pending_mentions = pending_mentions.saturating_add(1);
+                }
+            }
+            if !full {
+                break;
+            }
+        }
+        let tasks = store.tasks(&team.team_id, team_store::MAX_PAGE_SIZE)?;
+        let open_tasks = tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    TaskStatus::Open | TaskStatus::InProgress | TaskStatus::Blocked
+                )
+            })
+            .count();
+        let assigned_tasks = tasks
+            .iter()
+            .filter(|t| {
+                t.assignee.as_deref() == Some(member.member_id.as_str())
+                    && matches!(
+                        t.status,
+                        TaskStatus::Open | TaskStatus::InProgress | TaskStatus::Blocked
+                    )
+            })
+            .count();
+        return Ok(Reply::ScopedStatus {
+            team,
+            member,
+            goal,
+            pending_mentions,
+            open_tasks,
+            assigned_tasks,
+        });
+    }
     let team = store.team(team_id)?.ok_or(Error::NotMember)?;
     let member_id = std::iter::once(&team.supervisor)
         .chain(team.members.iter())
         .find(|member| member.target == *caller)
         .map(|member| member.member_id.clone())
         .ok_or(Error::NotMember)?;
+    let actor = Author::Member {
+        member_id: member_id.clone(),
+    };
     Ok(match action {
+        ScopedAction::Status { .. } | ScopedAction::Register { .. } => unreachable!(),
         ScopedAction::Roster => Reply::ScopedRoster { team },
+        ScopedAction::GoalSet { goal } => {
+            store.set_team_goal(team_id, &goal)?;
+            Reply::ScopedGoalUpdated { team, goal }
+        }
         ScopedAction::BulletinList { after, limit } => {
             let mut entries = Vec::new();
             for (sequence, post) in store.posts(team_id, after, limit)? {
@@ -340,15 +609,11 @@ fn scoped(
             text,
             mentions,
         } => {
-            let recipients = if mentions.is_empty() {
-                Recipients::All
-            } else {
-                Recipients::Explicit(mentions)
-            };
+            let recipients = team_store::resolve_recipients(&team, &actor, &mentions, &text)?;
             let post = store.add_post_with_recipients(
                 &post_id,
                 team_id,
-                &Author::Member { member_id },
+                &actor,
                 reply_to.as_deref(),
                 &text,
                 &recipients,
@@ -358,6 +623,75 @@ fn scoped(
         ScopedAction::BulletinAck { message_id } => Reply::ScopedAcknowledged {
             acknowledgement: store.acknowledge(&message_id, &member_id)?,
         },
+        ScopedAction::TaskList => Reply::ScopedTasks {
+            tasks: store.tasks(team_id, team_store::MAX_PAGE_SIZE)?,
+            team,
+        },
+        ScopedAction::TaskCreate {
+            task_id,
+            title,
+            brief,
+            assignee,
+        } => {
+            let assignee_id = assignee
+                .as_deref()
+                .map(|raw| team_store::resolve_member_ref(&team, raw))
+                .transpose()?;
+            let task = store.create_task(
+                &task_id,
+                team_id,
+                &actor,
+                &title,
+                &brief,
+                assignee_id.as_deref(),
+            )?;
+            Reply::ScopedTask { team, task }
+        }
+        ScopedAction::TaskAssign { task_id, assignee } => {
+            let assignee_id = team_store::resolve_member_ref(&team, &assignee)?;
+            let task = store.assign_task(team_id, &task_id, &actor, &assignee_id)?;
+            Reply::ScopedTask { team, task }
+        }
+        ScopedAction::TaskClaim { task_id } => {
+            let task = store.claim_task(team_id, &task_id, &member_id)?;
+            Reply::ScopedTask { team, task }
+        }
+        ScopedAction::TaskBlock { task_id, reason } => {
+            let task = store.block_task(team_id, &task_id, &actor, &reason)?;
+            Reply::ScopedTask { team, task }
+        }
+        ScopedAction::TaskComplete { task_id, result } => {
+            let task = store.complete_task(team_id, &task_id, &actor, &result)?;
+            Reply::ScopedTask { team, task }
+        }
+        ScopedAction::TaskCancel { task_id } => {
+            let task = store.cancel_task(team_id, &task_id, &actor)?;
+            Reply::ScopedTask { team, task }
+        }
+        ScopedAction::FindingList => Reply::ScopedFindings {
+            findings: store.findings(team_id, team_store::MAX_PAGE_SIZE)?,
+            team,
+        },
+        ScopedAction::FindingAdd {
+            finding_id,
+            task_id,
+            description,
+            evidence,
+            confidence,
+            supersedes,
+        } => {
+            let finding = store.add_finding(
+                &finding_id,
+                team_id,
+                &actor,
+                task_id.as_deref(),
+                &description,
+                &evidence,
+                confidence,
+                supersedes.as_deref(),
+            )?;
+            Reply::ScopedFinding { team, finding }
+        }
     })
 }
 

@@ -60,6 +60,133 @@ fn parses_roster_list_post_and_ack() {
 }
 
 #[test]
+fn parses_status_goal_tasks_and_findings() {
+    assert_eq!(parse(&["status"]), TeamCommand::Status { team_id: None });
+    assert_eq!(
+        parse(&["status", "team-1"]),
+        TeamCommand::Status {
+            team_id: Some("team-1".into())
+        }
+    );
+    assert_eq!(
+        parse(&["goal", "team-1", "Reverse", "engineer", "auth"]),
+        TeamCommand::GoalSet {
+            team_id: "team-1".into(),
+            goal: "Reverse engineer auth".into(),
+        }
+    );
+    assert_eq!(
+        parse(&["task", "list", "team-1"]),
+        TeamCommand::TaskList {
+            team_id: "team-1".into()
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "task",
+            "create",
+            "team-1",
+            "--title",
+            "Map ELF",
+            "--brief",
+            "Inspect sections",
+            "--assign",
+            "worker-1"
+        ]),
+        TeamCommand::TaskCreate {
+            team_id: "team-1".into(),
+            title: "Map ELF".into(),
+            brief: "Inspect sections".into(),
+            assignee: Some("worker-1".into()),
+        }
+    );
+    assert_eq!(
+        parse(&["task", "assign", "team-1", "task-1", "--to", "worker-2"]),
+        TeamCommand::TaskAssign {
+            team_id: "team-1".into(),
+            task_id: "task-1".into(),
+            assignee: "worker-2".into(),
+        }
+    );
+    assert_eq!(
+        parse(&["task", "claim", "team-1", "task-1"]),
+        TeamCommand::TaskClaim {
+            team_id: "team-1".into(),
+            task_id: "task-1".into(),
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "task",
+            "block",
+            "team-1",
+            "task-1",
+            "--reason",
+            "Needs packet header"
+        ]),
+        TeamCommand::TaskBlock {
+            team_id: "team-1".into(),
+            task_id: "task-1".into(),
+            reason: "Needs packet header".into(),
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "task",
+            "complete",
+            "team-1",
+            "task-1",
+            "--result",
+            "Found parser at 0x4010"
+        ]),
+        TeamCommand::TaskComplete {
+            team_id: "team-1".into(),
+            task_id: "task-1".into(),
+            result: "Found parser at 0x4010".into(),
+        }
+    );
+    assert_eq!(
+        parse(&["task", "cancel", "team-1", "task-1"]),
+        TeamCommand::TaskCancel {
+            team_id: "team-1".into(),
+            task_id: "task-1".into(),
+        }
+    );
+    assert_eq!(
+        parse(&["finding", "list", "team-1"]),
+        TeamCommand::FindingList {
+            team_id: "team-1".into()
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "finding",
+            "add",
+            "team-1",
+            "--task",
+            "task-1",
+            "--confidence",
+            "high",
+            "--evidence",
+            "bin/auth:0x1040",
+            "--supersedes",
+            "find-0",
+            "Packet",
+            "uses",
+            "HMAC"
+        ]),
+        TeamCommand::FindingAdd {
+            team_id: "team-1".into(),
+            task_id: Some("task-1".into()),
+            confidence: ConfidenceLevel::High,
+            evidence: "bin/auth:0x1040".into(),
+            supersedes: Some("find-0".into()),
+            description: "Packet uses HMAC".into(),
+        }
+    );
+}
+
+#[test]
 fn rejects_invalid_bounds_and_missing_text() {
     for words in [
         vec!["roster", ""],

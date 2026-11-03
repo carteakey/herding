@@ -135,11 +135,15 @@ and builds without embedded pages return exit 8. See [px0](../crates/herdr-gpui/
 | `chat [status]` | The `herdr-acp` chat panes of the window's host, this machine or an SSH host: agent, status, model, context window use, and whether the chat view or the terminal shows |
 | `chat show\|hide\|toggle [--pane ID]` | Show the native chat view over your pane (or ID, else the focused one), or its terminal |
 | `chat new AGENT [--pane ID]` | Open a tab running a `herdr-acp` chat with a built-in agent (`claude`, `codex`, `copilot`, `gemini`, `opencode`, `pi`) in the workspace and folder of your pane (or ID). On an SSH host the tab runs that host's `herdr-acp` (see [Chats on SSH hosts](#chats-on-ssh-hosts)). Exits 8 when `herdr-acp` is missing here, the host cannot be reached, or the agent is not installed on it (`herdr-acp agents` lists those that are) |
+| `team [status] [TEAM_ID]` | Show the team this pane's active agent session belongs to, its goal, pending mentions, and open/assigned task counts |
 | `team register TEAM_ID --name NAME` | Explicitly register this pane's current agent session with a team created in Herdr UI |
 | `team roster TEAM_ID` | List registered members of a team |
+| `team goal TEAM_ID GOAL...` | Set or update the team's high-level goal |
 | `team bulletin list TEAM_ID [--after SEQUENCE]` | Read a page of entries after a sequence cursor; each entry reports this member's delivery state |
-| `team bulletin post TEAM_ID [--reply-to MESSAGE_ID] [--mention MEMBER_ID]... TEXT...` | Post to the whole team or explicitly mention members; replies can point to an earlier entry |
+| `team bulletin post TEAM_ID [--reply-to MESSAGE_ID] [--mention MEMBER]... TEXT...` | Post to the whole team or explicitly mention members (`@supervisor`, `@team`, `@name`, or member ID); replies can point to an earlier entry |
 | `team bulletin ack TEAM_ID MESSAGE_ID` | Acknowledge an entry addressed to this member |
+| `team task list\|create\|assign\|claim\|block\|complete\|cancel ...` | Manage the team's durable task board |
+| `team finding list\|add ...` | Record and inspect structured findings with supporting evidence and confidence levels |
 
 ### Hosts
 

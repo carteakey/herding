@@ -27,7 +27,10 @@ fn stale_snapshot_does_not_clear_or_replace_newer_request() {
         request_id: 1,
         result: Ok(Reply::Snapshot {
             team: None,
+            goal: None,
             posts: Vec::new(),
+            tasks: Vec::new(),
+            findings: Vec::new(),
         }),
     });
     assert_eq!(bridge.snapshot_in_flight, Some(2));

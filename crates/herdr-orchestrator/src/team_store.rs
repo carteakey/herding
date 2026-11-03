@@ -1,7 +1,16 @@
 //! Small durable store for explicit team coordination records.
 //!
-//! This module stores posts and targeting metadata only. It does not deliver,
-//! dispatch, or acknowledge anything on behalf of a recipient.
+//! This module stores teams, goals, members, posts, tasks, findings, and
+//! targeting metadata. It does not deliver, dispatch, or acknowledge anything
+//! on behalf of a recipient.
+
+mod findings;
+mod mentions;
+mod tasks;
+
+pub use findings::{Confidence, Finding};
+pub use mentions::{extract_at_tokens, resolve_member_ref, resolve_recipients};
+pub use tasks::{Task, TaskStatus};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -26,6 +35,14 @@ pub enum Error {
     TeamNotFound(String),
     #[error("Post {0:?} was not found")]
     PostNotFound(String),
+    #[error("Task {0:?} was not found")]
+    TaskNotFound(String),
+    #[error("Task {0:?} is not available for this member or transition")]
+    TaskUnavailable(String),
+    #[error("Task {task_id:?} cannot transition from status {status:?}")]
+    InvalidTaskTransition { task_id: String, status: String },
+    #[error("Finding {0:?} was not found")]
+    FindingNotFound(String),
     #[error("Member {member_id:?} is not in team {team_id:?}")]
     MemberNotInTeam { team_id: String, member_id: String },
     #[error("Reply target {0:?} is absent or belongs to another team")]
@@ -34,12 +51,18 @@ pub enum Error {
     TooManyMembers { max: usize },
     #[error("Team repeats member id {0:?}")]
     DuplicateMember(String),
+    #[error("Team already has a member named {0:?}")]
+    DuplicateDisplayName(String),
     #[error(
         "Member {member_id:?} in team {team_id:?} cannot be reassigned to a different session target"
     )]
     MemberTargetChanged { team_id: String, member_id: String },
     #[error("Post repeats recipient id {0:?}")]
     DuplicateRecipient(String),
+    #[error("Mention {0:?} does not match any member in this team")]
+    UnknownMention(String),
+    #[error("Mention {0:?} matches more than one member in this team")]
+    AmbiguousMention(String),
     #[error("Recipient {recipient_id:?} was not mentioned in post {post_id:?}")]
     NotMentioned {
         post_id: String,
@@ -116,7 +139,7 @@ pub enum RecipientStatus {
 }
 
 pub struct TeamStore {
-    db: Connection,
+    pub(super) db: Connection,
 }
 
 impl TeamStore {
@@ -125,10 +148,16 @@ impl TeamStore {
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         db.execute_batch(
-            "PRAGMA foreign_keys = ON;
+            "PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS teams (
                 team_id TEXT PRIMARY KEY, name TEXT NOT NULL,
                 supervisor_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS team_goals (
+                team_id TEXT PRIMARY KEY REFERENCES teams(team_id) ON DELETE CASCADE,
+                goal TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS members (
                 team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
@@ -154,7 +183,37 @@ impl TeamStore {
                 post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
                 recipient_id TEXT NOT NULL, acknowledged_at TEXT NOT NULL,
                 PRIMARY KEY(post_id, recipient_id)
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS tasks (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL UNIQUE,
+                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
+                creator_kind TEXT NOT NULL CHECK(creator_kind IN ('human','member')),
+                creator_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                brief TEXT NOT NULL,
+                assignee_id TEXT,
+                status TEXT NOT NULL CHECK(status IN ('open','in_progress','blocked','done','cancelled')),
+                blocker_reason TEXT,
+                result TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS tasks_team_idx ON tasks(team_id, sequence);
+            CREATE TABLE IF NOT EXISTS findings (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                finding_id TEXT NOT NULL UNIQUE,
+                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
+                author_kind TEXT NOT NULL CHECK(author_kind IN ('human','member')),
+                author_id TEXT NOT NULL,
+                task_id TEXT REFERENCES tasks(task_id),
+                description TEXT NOT NULL,
+                evidence TEXT NOT NULL,
+                confidence TEXT NOT NULL CHECK(confidence IN ('low','medium','high')),
+                supersedes TEXT REFERENCES findings(finding_id),
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS findings_team_idx ON findings(team_id, sequence);",
         )?;
         Ok(Self { db })
     }
@@ -542,14 +601,14 @@ impl TeamStore {
     }
 }
 
-fn validate(field: &'static str, value: &str, max: usize) -> Result<()> {
+pub(super) fn validate(field: &'static str, value: &str, max: usize) -> Result<()> {
     if value.is_empty() || value.len() > max {
         Err(Error::Invalid { field, max })
     } else {
         Ok(())
     }
 }
-fn validate_member(m: &Member) -> Result<()> {
+pub(super) fn validate_member(m: &Member) -> Result<()> {
     validate("member_id", &m.member_id, MAX_ID_BYTES)?;
     validate("display_name", &m.display_name, MAX_NAME_BYTES)?;
     validate("host", &m.target.host, MAX_ID_BYTES)?;
@@ -564,11 +623,15 @@ fn validate_member(m: &Member) -> Result<()> {
     }
     Ok(())
 }
-fn insert_member(tx: &rusqlite::Transaction<'_>, team_id: &str, m: &Member) -> Result<()> {
+pub(super) fn insert_member(
+    tx: &rusqlite::Transaction<'_>,
+    team_id: &str,
+    m: &Member,
+) -> Result<()> {
     tx.execute("INSERT INTO members(team_id,member_id,display_name,host,session,workspace,pane) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(team_id,member_id) DO UPDATE SET display_name=excluded.display_name,host=excluded.host,session=excluded.session,workspace=excluded.workspace,pane=excluded.pane",params![team_id,m.member_id,m.display_name,m.target.host,m.target.session,m.target.workspace,m.target.pane])?;
     Ok(())
 }
-fn read_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<Member> {
+pub(super) fn read_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<Member> {
     Ok(Member {
         member_id: r.get(0)?,
         display_name: r.get(1)?,
@@ -580,12 +643,62 @@ fn read_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<Member> {
         },
     })
 }
-fn parse_time(value: String) -> Result<DateTime<Utc>> {
+pub(super) fn parse_time(value: String) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(&value)
         .map(|v| v.to_utc())
         .map_err(|source| Error::Time { value, source })
+}
+pub(super) fn now_stamp() -> Result<(DateTime<Utc>, String)> {
+    let at =
+        DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).ok_or(Error::Invalid {
+            field: "current timestamp",
+            max: MAX_ID_BYTES,
+        })?;
+    let stamp = at.to_rfc3339_opts(SecondsFormat::Millis, true);
+    Ok((at, stamp))
+}
+pub(super) fn is_member(
+    tx: &rusqlite::Transaction<'_>,
+    team_id: &str,
+    member_id: &str,
+) -> rusqlite::Result<bool> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM members WHERE team_id = ?1 AND member_id = ?2)",
+        params![team_id, member_id],
+        |row| row.get(0),
+    )
+}
+pub(super) fn ensure_author_in_team<'a>(
+    tx: &rusqlite::Transaction<'_>,
+    team_id: &str,
+    author: &'a Author,
+) -> Result<(&'static str, &'a str)> {
+    let (kind, id) = match author {
+        Author::Human { user_id } => ("human", user_id.as_str()),
+        Author::Member { member_id } => ("member", member_id.as_str()),
+    };
+    validate("author_id", id, MAX_ID_BYTES)?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM teams WHERE team_id = ?1)",
+        [team_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(Error::TeamNotFound(team_id.to_owned()));
+    }
+    if kind == "member" && !is_member(tx, team_id, id)? {
+        return Err(Error::MemberNotInTeam {
+            team_id: team_id.to_owned(),
+            member_id: id.to_owned(),
+        });
+    }
+    Ok((kind, id))
 }
 
 #[cfg(test)]
 #[path = "team_store/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "team_store/workflow_tests.rs"]
+mod workflow_tests;

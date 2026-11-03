@@ -1,6 +1,6 @@
 use crate::i18n::fl;
 use gpui::SharedString;
-use herdr_orchestrator::team_store::Author;
+use herdr_orchestrator::team_store::{Author, Confidence, TaskStatus};
 
 /// Explicit daemon, session, workspace, and pane scope for a worker target.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +28,7 @@ impl PaneIdentity {
 pub(crate) struct PaneCandidate {
     pub(crate) identity: PaneIdentity,
     pub(crate) label: SharedString,
+    pub(crate) agent: SharedString,
     pub(crate) status: SharedString,
 }
 
@@ -42,6 +43,7 @@ pub(crate) struct TeamMember {
     pub(crate) member_id: String,
     pub(crate) name: SharedString,
     pub(crate) role: SharedString,
+    pub(crate) agent: SharedString,
     pub(crate) pane: Option<PaneIdentity>,
     pub(crate) status: SharedString,
     pub(crate) supervisor: bool,
@@ -55,6 +57,27 @@ pub(crate) struct TeamPost {
     pub(crate) reply_to: Option<String>,
     pub(crate) reply_to_author: Option<SharedString>,
     pub(crate) deliveries: Vec<(String, SharedString, DeliveryState)>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TeamTask {
+    pub(crate) id: String,
+    pub(crate) title: SharedString,
+    pub(crate) brief: SharedString,
+    pub(crate) assignee: Option<SharedString>,
+    pub(crate) status: TaskStatus,
+    pub(crate) blocker_reason: Option<SharedString>,
+    pub(crate) result: Option<SharedString>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TeamFinding {
+    pub(crate) id: String,
+    pub(crate) author: SharedString,
+    pub(crate) description: SharedString,
+    pub(crate) evidence: SharedString,
+    pub(crate) confidence: Confidence,
+    pub(crate) supersedes: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,12 +99,15 @@ pub(crate) struct TeamSnapshot {
     pub(crate) state: TeamLoadState,
     pub(crate) team_id: Option<String>,
     pub(crate) team_name: Option<SharedString>,
+    pub(crate) team_goal: Option<SharedString>,
     /// Bounded choices allow selecting a persisted team after app restart.
     pub(crate) teams: Vec<TeamChoice>,
     pub(crate) teams_after: Option<String>,
     pub(crate) members: Vec<TeamMember>,
     pub(crate) pane_candidates: Vec<PaneCandidate>,
     pub(crate) posts: Vec<TeamPost>,
+    pub(crate) tasks: Vec<TeamTask>,
+    pub(crate) findings: Vec<TeamFinding>,
     /// An explicit model identity allowed to author posts. `None` hides the
     /// composer; the view never invents an agent or human author.
     pub(crate) post_author: Option<(Author, SharedString)>,
@@ -93,11 +119,14 @@ impl Default for TeamSnapshot {
             state: TeamLoadState::Failed(fl!("team-error-not-connected").into()),
             team_id: None,
             team_name: None,
+            team_goal: None,
             teams: Vec::new(),
             teams_after: None,
             members: Vec::new(),
             pane_candidates: Vec::new(),
             posts: Vec::new(),
+            tasks: Vec::new(),
+            findings: Vec::new(),
             post_author: None,
         }
     }

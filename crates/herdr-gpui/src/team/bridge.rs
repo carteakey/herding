@@ -4,8 +4,8 @@
 use super::{
     TeamAction,
     model::{
-        DeliveryState, PaneCandidate, PaneIdentity, TeamChoice, TeamLoadState, TeamMember,
-        TeamPost, TeamSnapshot,
+        DeliveryState, PaneCandidate, PaneIdentity, TeamChoice, TeamFinding, TeamLoadState,
+        TeamMember, TeamPost, TeamSnapshot, TeamTask,
     },
 };
 use crate::{
@@ -18,8 +18,9 @@ use crate::{
     navigation::NavigationTarget,
 };
 use gpui::{Context, SharedString};
+use herdr_client::protocol::AgentStatus;
 use herdr_orchestrator::team_store::{
-    Author, MAX_MEMBERS, Member, RecipientStatus, Recipients, SessionTarget, Team,
+    self, Author, Finding, MAX_MEMBERS, Member, RecipientStatus, SessionTarget, Task, Team,
 };
 use std::{
     collections::HashMap,
@@ -52,10 +53,14 @@ pub(crate) struct Bridge {
     pending: HashMap<u64, Pending>,
     selected: Option<String>,
     team: Option<Team>,
+    goal: Option<String>,
     posts: Vec<PostDelivery>,
+    tasks: Vec<Task>,
+    findings: Vec<Finding>,
     teams: Vec<TeamChoice>,
     teams_after: Option<String>,
     failure: Option<SharedString>,
+    warning: Option<SharedString>,
     last_refresh: Option<Instant>,
     snapshot_in_flight: Option<u64>,
     candidates: Vec<PaneIdentity>,
@@ -63,6 +68,14 @@ pub(crate) struct Bridge {
 }
 
 impl Bridge {
+    pub(crate) fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.last_refresh = None;
+        if let Some(team_id) = self.selected.clone() {
+            self.refresh(&team_id);
+        }
+    }
+
     fn start(&mut self) {
         if self.started {
             return;
@@ -161,14 +174,26 @@ impl Bridge {
                     self.teams = choices.collect();
                 }
             }
-            (Pending::Snapshot { team_id }, Reply::Snapshot { team, posts }) => {
+            (
+                Pending::Snapshot { team_id },
+                Reply::Snapshot {
+                    team,
+                    goal,
+                    posts,
+                    tasks,
+                    findings,
+                },
+            ) => {
                 if self.snapshot_in_flight == Some(completion.request_id) {
                     self.snapshot_in_flight = None;
                 }
                 // A reply for a team that is no longer selected is stale.
                 if self.selected.as_deref() == Some(team_id.as_str()) {
                     self.team = team;
+                    self.goal = goal;
                     self.posts = posts;
+                    self.tasks = tasks;
+                    self.findings = findings;
                 }
             }
             (Pending::Write { team_id }, _) => {
@@ -194,11 +219,33 @@ impl Bridge {
                     .any(|candidate| candidate.identity == *pane)
         };
         match action {
+            TeamAction::SwitchTeamView => {
+                self.selected = None;
+                self.team = None;
+                self.goal = None;
+                self.posts.clear();
+                self.tasks.clear();
+                self.findings.clear();
+                self.snapshot_in_flight = None;
+                self.warning = None;
+                self.dirty = true;
+                self.submit(
+                    Operation::ListTeams {
+                        after: None,
+                        limit: TEAM_PAGE,
+                    },
+                    Pending::Teams { append: false },
+                );
+            }
             TeamAction::SelectTeam { team_id } => {
                 self.selected = Some(team_id.clone());
                 self.team = None;
+                self.goal = None;
                 self.posts.clear();
+                self.tasks.clear();
+                self.findings.clear();
                 self.snapshot_in_flight = None;
+                self.warning = None;
                 self.refresh(&team_id);
             }
             TeamAction::LoadMoreTeams { after } => {
@@ -226,8 +273,26 @@ impl Bridge {
                 };
                 self.selected = Some(team.team_id.clone());
                 self.team = None;
+                self.goal = None;
                 self.posts.clear();
+                self.tasks.clear();
+                self.findings.clear();
+                self.warning = None;
                 self.save(team);
+            }
+            TeamAction::SetGoal { team_id, goal } => {
+                let goal = goal.trim().to_owned();
+                if goal.is_empty() {
+                    return;
+                }
+                self.warning = None;
+                self.submit(
+                    Operation::SetGoal {
+                        team_id: team_id.clone(),
+                        goal,
+                    },
+                    Pending::Write { team_id },
+                );
             }
             TeamAction::AddWorker {
                 team_id,
@@ -241,6 +306,12 @@ impl Bridge {
                 if !live(&pane) || name.is_empty() || team.members.len() + 1 >= MAX_MEMBERS {
                     return;
                 }
+                if roster(&team).any(|m| m.display_name.eq_ignore_ascii_case(name)) {
+                    self.warning = Some(fl!("team-warning-duplicate-name", name = name).into());
+                    self.dirty = true;
+                    return;
+                }
+                self.warning = None;
                 team.members.push(member(name, target));
                 self.save(team);
             }
@@ -251,6 +322,7 @@ impl Bridge {
                 let Some(index) = team.members.iter().position(|m| m.member_id == member_id) else {
                     return;
                 };
+                self.warning = None;
                 std::mem::swap(&mut team.supervisor, &mut team.members[index]);
                 self.save(team);
             }
@@ -265,6 +337,105 @@ impl Bridge {
                 reply_to,
                 body,
             } => self.post(&team_id, author, Some(reply_to), body),
+            TeamAction::CreateTask {
+                team_id,
+                title,
+                brief,
+                assignee,
+            } => {
+                let Some(team) = self.current(&team_id) else {
+                    return;
+                };
+                let title = title.trim().to_owned();
+                let brief = brief.trim().to_owned();
+                if title.is_empty() {
+                    return;
+                }
+                let assignee_id = match assignee.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                {
+                    Some(raw) => match team_store::resolve_member_ref(&team, raw) {
+                        Ok(id) => Some(id),
+                        Err(error) => {
+                            self.warning = Some(error.to_string().into());
+                            self.dirty = true;
+                            return;
+                        }
+                    },
+                    None => None,
+                };
+                self.warning = None;
+                self.submit(
+                    Operation::CreateTask {
+                        task_id: uuid::Uuid::new_v4().to_string(),
+                        team_id: team_id.clone(),
+                        creator: human(),
+                        title,
+                        brief,
+                        assignee: assignee_id,
+                    },
+                    Pending::Write { team_id },
+                );
+            }
+            TeamAction::CompleteTask {
+                team_id,
+                task_id,
+                result,
+            } => {
+                let result = result.trim().to_owned();
+                let result = if result.is_empty() {
+                    fl!("team-task-completed-default")
+                } else {
+                    result
+                };
+                self.warning = None;
+                self.submit(
+                    Operation::CompleteTask {
+                        task_id,
+                        team_id: team_id.clone(),
+                        actor: human(),
+                        result,
+                    },
+                    Pending::Write { team_id },
+                );
+            }
+            TeamAction::CancelTask { team_id, task_id } => {
+                self.warning = None;
+                self.submit(
+                    Operation::CancelTask {
+                        task_id,
+                        team_id: team_id.clone(),
+                        actor: human(),
+                    },
+                    Pending::Write { team_id },
+                );
+            }
+            TeamAction::AddFinding {
+                team_id,
+                author,
+                description,
+                evidence,
+                confidence,
+            } => {
+                let description = description.trim().to_owned();
+                let evidence = evidence.trim().to_owned();
+                if description.is_empty() || evidence.is_empty() {
+                    return;
+                }
+                self.warning = None;
+                self.submit(
+                    Operation::AddFinding {
+                        finding_id: uuid::Uuid::new_v4().to_string(),
+                        team_id: team_id.clone(),
+                        author,
+                        task_id: None,
+                        description,
+                        evidence,
+                        confidence,
+                        supersedes_finding_id: None,
+                    },
+                    Pending::Write { team_id },
+                );
+            }
             TeamAction::FocusWorker { .. } => {}
         }
     }
@@ -281,12 +452,15 @@ impl Bridge {
         if body.is_empty() {
             return;
         }
-        let mentioned = mentions(&team, &body);
-        let recipients = if mentioned.is_empty() {
-            Recipients::All
-        } else {
-            Recipients::Explicit(mentioned)
+        let recipients = match team_store::resolve_recipients(&team, &author, &[], &body) {
+            Ok(recipients) => recipients,
+            Err(error) => {
+                self.warning = Some(error.to_string().into());
+                self.dirty = true;
+                return;
+            }
         };
+        self.warning = None;
         self.submit(
             Operation::AddPost {
                 post_id: uuid::Uuid::new_v4().to_string(),
@@ -308,19 +482,27 @@ impl Bridge {
             (None, false) => TeamLoadState::Loading,
             (None, true) => TeamLoadState::Ready,
         };
-        let (members, posts) = match &self.team {
-            Some(team) => (members(team, candidates), self.view_posts(team)),
-            None => (Vec::new(), Vec::new()),
+        let (members, posts, tasks, findings) = match &self.team {
+            Some(team) => (
+                members(team, candidates),
+                self.view_posts(team),
+                self.view_tasks(team),
+                self.view_findings(team),
+            ),
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
         };
         TeamSnapshot {
             state,
             team_id: self.team.as_ref().map(|team| team.team_id.clone()),
             team_name: self.team.as_ref().map(|team| team.name.clone().into()),
+            team_goal: self.goal.as_ref().map(|goal| goal.clone().into()),
             teams: self.teams.clone(),
             teams_after: self.teams_after.clone(),
             members,
             pane_candidates: candidates.to_vec(),
             posts,
+            tasks,
+            findings,
             post_author: self
                 .team
                 .as_ref()
@@ -365,6 +547,51 @@ impl Bridge {
             })
             .collect()
     }
+
+    fn view_tasks(&self, team: &Team) -> Vec<TeamTask> {
+        let name = |id: &str| -> SharedString {
+            roster(team)
+                .find(|member| member.member_id == id)
+                .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
+                .into()
+        };
+        self.tasks
+            .iter()
+            .map(|task| TeamTask {
+                id: task.task_id.clone(),
+                title: task.title.clone().into(),
+                brief: task.brief.clone().into(),
+                assignee: task.assignee.as_deref().map(name),
+                status: task.status,
+                blocker_reason: task.blocker_reason.clone().map(Into::into),
+                result: task.result.clone().map(Into::into),
+            })
+            .collect()
+    }
+
+    fn view_findings(&self, team: &Team) -> Vec<TeamFinding> {
+        let name = |id: &str| -> SharedString {
+            roster(team)
+                .find(|member| member.member_id == id)
+                .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
+                .into()
+        };
+        let author = |author: &Author| match author {
+            Author::Human { .. } => SharedString::from(fl!("team-author-human")),
+            Author::Member { member_id } => name(member_id),
+        };
+        self.findings
+            .iter()
+            .map(|finding| TeamFinding {
+                id: finding.finding_id.clone(),
+                author: author(&finding.author),
+                description: finding.description.clone().into(),
+                evidence: finding.evidence.clone().into(),
+                confidence: finding.confidence,
+                supersedes: finding.supersedes.clone(),
+            })
+            .collect()
+    }
 }
 
 fn human() -> Author {
@@ -403,30 +630,14 @@ fn pane_of(member: &Member) -> Option<PaneIdentity> {
     })
 }
 
-/// `@name` mentions resolved to member IDs; an unknown name mentions no one.
-fn mentions(team: &Team, body: &str) -> Vec<String> {
-    let lowered = body.to_lowercase();
-    roster(team)
-        .filter(|member| {
-            let tag = format!("@{}", member.display_name.to_lowercase());
-            lowered.match_indices(&tag).any(|(at, _)| {
-                lowered[at + tag.len()..]
-                    .chars()
-                    .next()
-                    .is_none_or(|next| !next.is_alphanumeric())
-            })
-        })
-        .map(|member| member.member_id.clone())
-        .collect()
-}
-
 fn members(team: &Team, candidates: &[PaneCandidate]) -> Vec<TeamMember> {
     roster(team)
         .map(|member| {
             let pane = pane_of(member);
-            let live = pane
+            let matched = pane
                 .as_ref()
-                .is_some_and(|pane| candidates.iter().any(|c| c.identity == *pane));
+                .and_then(|pane| candidates.iter().find(|c| c.identity == *pane));
+            let live = matched.is_some();
             let supervisor = member.member_id == team.supervisor.member_id;
             TeamMember {
                 member_id: member.member_id.clone(),
@@ -437,22 +648,30 @@ fn members(team: &Team, candidates: &[PaneCandidate]) -> Vec<TeamMember> {
                     fl!("team-role-worker")
                 }
                 .into(),
+                agent: matched.map(|c| c.agent.clone()).unwrap_or_default(),
                 pane: pane.filter(|_| live),
-                status: if live {
-                    fl!("team-status-live")
-                } else {
-                    fl!("team-status-unavailable")
-                }
-                .into(),
+                status: matched
+                    .map(|c| c.status.clone())
+                    .unwrap_or_else(|| fl!("team-status-unavailable").into()),
                 supervisor,
             }
         })
         .collect()
 }
 
+fn status_label(status: AgentStatus) -> SharedString {
+    match status {
+        AgentStatus::Idle => fl!("team-status-idle").into(),
+        AgentStatus::Working => fl!("team-status-working").into(),
+        AgentStatus::Blocked => fl!("team-status-blocked").into(),
+        AgentStatus::Done => fl!("team-status-done").into(),
+        AgentStatus::Unknown => fl!("team-status-live").into(),
+    }
+}
+
 impl HerdrWindow {
-    /// Sessions this window can prove: native ACP chats that are attached,
-    /// have a transcript session ID, and sit in the selected daemon's snapshot.
+    /// Sessions this window can prove: native ACP chats, verified CLI bindings,
+    /// and active terminal agent sessions in the selected daemon's snapshot.
     fn team_candidates(&self) -> Vec<PaneCandidate> {
         let Some(snapshot) = self.live.snapshot.as_deref() else {
             return Vec::new();
@@ -460,21 +679,30 @@ impl HerdrWindow {
         if !self.live.status.is_connected() || snapshot.boot_id.is_empty() {
             return Vec::new();
         }
-        self.chats
-            .panes()
-            .filter(|chat| chat.target.existing.is_none() && chat.attached())
-            .filter_map(|chat| {
-                let session = chat
-                    .session
-                    .transcript()
-                    .session
-                    .as_ref()
-                    .map(|session| session.id.clone())
-                    .filter(|id| !id.is_empty())?;
-                let pane = snapshot
-                    .panes
+        snapshot
+            .panes
+            .iter()
+            .filter_map(|pane| {
+                let (session, agent_kind) =
+                    crate::control::server::team::prove_pane_session(self, &pane.pane_id)?;
+                let agent_entry = snapshot
+                    .agents
                     .iter()
-                    .find(|pane| pane.pane_id == chat.target.pane_id)?;
+                    .find(|agent| agent.pane_id == pane.pane_id);
+                let base_label = pane
+                    .label
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| agent_entry.and_then(|a| a.title.as_deref()))
+                    .unwrap_or(pane.pane_id.as_str());
+                let label = if agent_kind.is_empty() {
+                    base_label.to_owned()
+                } else {
+                    format!("{base_label} ({agent_kind})")
+                };
+                let status = agent_entry
+                    .map(|a| status_label(a.agent_status))
+                    .unwrap_or_else(|| fl!("team-status-live").into());
                 Some(PaneCandidate {
                     identity: PaneIdentity {
                         daemon_id: snapshot.boot_id.clone(),
@@ -482,12 +710,9 @@ impl HerdrWindow {
                         workspace_id: pane.workspace_id.clone(),
                         pane_id: pane.pane_id.clone(),
                     },
-                    label: pane
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| pane.pane_id.clone())
-                        .into(),
-                    status: fl!("team-status-live").into(),
+                    label: label.into(),
+                    agent: agent_kind.into(),
+                    status,
                 })
             })
             .collect()
@@ -528,8 +753,11 @@ impl HerdrWindow {
         if bridge.dirty || bridge.candidates != identities {
             bridge.dirty = false;
             bridge.candidates = identities;
+            let warning = bridge.warning.clone();
             let snapshot = bridge.snapshot(&candidates);
             self.set_team_snapshot(snapshot, cx);
+            self.team_view
+                .update(cx, |view, cx| view.set_action_warning(warning, cx));
         }
         if let Some(pane) = focus {
             self.navigate(NavigationTarget::Pane(pane.pane_id.as_str()), cx);

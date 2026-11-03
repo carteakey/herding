@@ -240,11 +240,28 @@ impl HerdrWindow {
     }
 
     /// The section that takes the window's body, if one other than
-    /// Workspaces is shown. Zen mode keeps the terminals.
+    /// Workspaces or Team is shown. Zen mode keeps the terminals.
     pub(crate) fn activity_section(&self) -> Option<ActivityPanel> {
         self.activity_bar_leads()
             .then(|| self.activity_panel())
-            .filter(|panel| *panel != ActivityPanel::Workspaces)
+            .filter(|panel| !matches!(*panel, ActivityPanel::Workspaces | ActivityPanel::Team))
+    }
+
+    /// Whether the Team sidebar panel is shown beside the terminals.
+    pub(crate) fn team_panel_shown(&self) -> bool {
+        self.activity_bar_leads()
+            && self.activity_panel() == ActivityPanel::Team
+            && self.mod_app().is_none()
+    }
+
+    fn team_sidebar_width(&self, window_width: f32) -> Option<f32> {
+        match self.sidebar_mode() {
+            SidebarMode::Expanded => self
+                .sidebar_mode()
+                .width(self.sidebar_width, window_width)
+                .map(|w| w.max(380.).min((window_width - BAR_WIDTH - 240.).max(w))),
+            mode => mode.width(self.sidebar_width, window_width),
+        }
     }
 
     /// The left column's width: the bar alone beside a section, else the
@@ -254,14 +271,18 @@ impl HerdrWindow {
         if self.activity_section().is_some() || self.mod_app().is_some() {
             return Some(BAR_WIDTH);
         }
-        let width = self.sidebar_mode().width(self.sidebar_width, window_width);
+        let width = if self.team_panel_shown() {
+            self.team_sidebar_width(window_width)
+        } else {
+            self.sidebar_mode().width(self.sidebar_width, window_width)
+        };
         if !self.activity_bar_leads() {
             return width;
         }
         Some(width.unwrap_or(0.) + BAR_WIDTH)
     }
 
-    /// Shows `panel`. Picking Workspaces while it is shown collapses the
+    /// Shows `panel`. Picking Workspaces or Team while it is shown collapses the
     /// sidebar instead, as a second click on a tab bar's selected icon does.
     pub(crate) fn select_activity_panel(
         &mut self,
@@ -269,7 +290,7 @@ impl HerdrWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if panel == ActivityPanel::Workspaces
+        if matches!(panel, ActivityPanel::Workspaces | ActivityPanel::Team)
             && self.activity_panel() == panel
             && self.sidebar_visible
             && self.mod_app().is_none()
@@ -292,7 +313,8 @@ impl HerdrWindow {
         if !self.activity_panel_listed(panel) {
             return;
         }
-        if panel == ActivityPanel::Workspaces && !self.sidebar_visible {
+        if matches!(panel, ActivityPanel::Workspaces | ActivityPanel::Team) && !self.sidebar_visible
+        {
             self.toggle_sidebar();
         }
         // A section picked is where the user is now, not a place to go back to.
@@ -322,7 +344,7 @@ impl HerdrWindow {
         cx.notify();
     }
 
-    /// The shown section across the window's body, or `None` in Workspaces.
+    /// The shown section across the window's body, or `None` in Workspaces/Team.
     pub(crate) fn render_activity_section(
         &self,
         window: &Window,
@@ -332,12 +354,11 @@ impl HerdrWindow {
             return self.render_mod_app(cx);
         }
         let section = match self.activity_section()? {
-            ActivityPanel::Workspaces => return None,
+            ActivityPanel::Workspaces | ActivityPanel::Team => return None,
             ActivityPanel::Overview => self.render_overview(cx),
             ActivityPanel::Security => self.render_security_section(window, cx),
             ActivityPanel::Automations => self.render_automations_section(cx),
             ActivityPanel::Usage => self.render_usage_section(cx),
-            ActivityPanel::Team => self.render_team_section(cx),
             ActivityPanel::PullRequests | ActivityPanel::Issues => {
                 return self.render_orchestrator_section();
             }
@@ -357,7 +378,7 @@ impl HerdrWindow {
     }
 
     /// The left column with the bar: beside a section, the bar alone; in
-    /// Workspaces, the bar and the sidebar as its mode shows it, under a
+    /// Workspaces or Team, the bar and the sidebar as its mode shows it, under a
     /// title row that holds the sidebar toggle.
     pub(crate) fn render_activity(
         &self,
@@ -376,29 +397,42 @@ impl HerdrWindow {
         if self.activity_section().is_some() || self.mod_app().is_some() {
             return column;
         }
+        let window_width = f32::from(window.viewport_size().width);
+        let team_shown = self.team_panel_shown();
+        let width = if team_shown {
+            self.team_sidebar_width(window_width)
+        } else {
+            self.sidebar_mode().width(self.sidebar_width, window_width)
+        };
         let sidebar = match self.sidebar_mode() {
+            SidebarMode::Expanded if team_shown => div()
+                .id("team-sidebar")
+                .w(px(width.unwrap_or(380.)))
+                .h_full()
+                .min_h_0()
+                .border_e(px(1.))
+                .border_color(rgb(self.theme.active))
+                .child(self.render_team_section(cx)),
             SidebarMode::Expanded => self.render_sidebar(indicators, window, cx),
             // A window too narrow for the rail keeps the bar alone, which
             // still brings the sidebar back.
-            SidebarMode::Rail
-                if SidebarMode::Rail
-                    .width(None, f32::from(window.viewport_size().width))
-                    .is_some() =>
-            {
+            SidebarMode::Rail if SidebarMode::Rail.width(None, window_width).is_some() => {
                 self.render_rail(indicators, window, cx)
             }
             SidebarMode::Rail | SidebarMode::Hidden => return column,
+        };
+        let title_panel = if team_shown {
+            ActivityPanel::Team
+        } else {
+            ActivityPanel::Workspaces
         };
         let panel = div()
             .flex()
             .flex_col()
             .h_full()
             .min_h_0()
-            .child(self.panel_title(ActivityPanel::Workspaces, cx))
+            .child(self.panel_title(title_panel, cx))
             .child(div().row().flex_1().min_h_0().child(sidebar));
-        let width = self
-            .sidebar_mode()
-            .width(self.sidebar_width, f32::from(window.viewport_size().width));
         match self.sidebar_slide_shown().zip(width) {
             Some((shown, width)) => column.child(crate::window::slide_start(panel, width, shown)),
             None => column.child(panel),

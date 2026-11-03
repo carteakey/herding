@@ -130,6 +130,7 @@ impl HerdrWindow {
             |this, _, event: &crate::team::TeamAction, cx| {
                 if this.team_actions.len() < crate::team::ACTION_QUEUE_CAPACITY {
                     this.team_actions.push_back(event.clone());
+                    this.poll_team(cx);
                 } else {
                     this.team_action_overflow = true;
                     this.team_view.update(cx, |view, cx| {

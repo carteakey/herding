@@ -255,12 +255,13 @@ impl TeamView {
                 candidate.identity.pane_id
             )))
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .py_2()
             .border_b_1()
             .border_color(rgb(theme.active))
-            .child(div().flex_1().child(candidate.label.clone()))
+            .child(div().flex_1().min_w_0().child(candidate.label.clone()))
             .child(
                 div()
                     .text_color(rgb(theme.muted))
@@ -352,12 +353,13 @@ impl TeamView {
             let mut row = div()
                 .id(SharedString::from(format!("team-member-{index}")))
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .py_2()
                 .border_b_1()
                 .border_color(rgb(self.theme.active))
-                .child(div().flex_1().child(member.name.clone()))
+                .child(div().flex_1().min_w_0().child(member.name.clone()))
                 .when(!member.agent.is_empty(), |r| {
                     r.child(
                         div()

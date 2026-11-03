@@ -187,6 +187,77 @@ fn parses_status_goal_tasks_and_findings() {
 }
 
 #[test]
+fn finding_add_accepts_description_option_and_defaults_confidence() {
+    assert_eq!(
+        parse(&[
+            "finding",
+            "add",
+            "team-1",
+            "--description",
+            "Packet uses HMAC",
+            "--evidence",
+            "bin/auth:0x1040",
+        ]),
+        TeamCommand::FindingAdd {
+            team_id: "team-1".into(),
+            task_id: None,
+            confidence: ConfidenceLevel::Medium,
+            evidence: "bin/auth:0x1040".into(),
+            supersedes: None,
+            description: "Packet uses HMAC".into(),
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "finding",
+            "add",
+            "team-1",
+            "--evidence",
+            "bin/auth:0x1040",
+            "Trailing",
+            "description",
+        ]),
+        TeamCommand::FindingAdd {
+            team_id: "team-1".into(),
+            task_id: None,
+            confidence: ConfidenceLevel::Medium,
+            evidence: "bin/auth:0x1040".into(),
+            supersedes: None,
+            description: "Trailing description".into(),
+        }
+    );
+    let mut both = Args::new(
+        [
+            "finding",
+            "add",
+            "team-1",
+            "--description",
+            "one",
+            "--evidence",
+            "here",
+            "two",
+        ]
+        .map(OsString::from),
+        "team",
+    );
+    assert_eq!(
+        team(&mut both).unwrap_err(),
+        CliError::DuplicateOption("--description")
+    );
+    let mut neither = Args::new(
+        ["finding", "add", "team-1", "--evidence", "here"].map(OsString::from),
+        "team",
+    );
+    assert_eq!(
+        team(&mut neither).unwrap_err(),
+        CliError::MissingArgument {
+            command: "team finding add",
+            what: "DESCRIPTION",
+        }
+    );
+}
+
+#[test]
 fn rejects_invalid_bounds_and_missing_text() {
     for words in [
         vec!["roster", ""],

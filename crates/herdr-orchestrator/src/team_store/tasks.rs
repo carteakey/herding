@@ -291,11 +291,17 @@ impl TeamStore {
                 member_id: assignee.to_owned(),
             });
         }
-        let _ = read_task_in_tx(&tx, team_id, task_id)?;
+        let current = read_task_in_tx(&tx, team_id, task_id)?;
+        // A different assignee cannot continue another worker's in-progress or
+        // blocked claim, so the task returns to the board as claimable work.
+        let reset = current.assignee.as_deref() != assignee
+            && matches!(current.status, TaskStatus::InProgress | TaskStatus::Blocked);
         tx.execute(
-            "UPDATE tasks SET title = ?1, brief = ?2, assignee_id = ?3, updated_at = ?4
+            "UPDATE tasks SET title = ?1, brief = ?2, assignee_id = ?3, updated_at = ?4,
+                 status = CASE WHEN ?7 THEN 'open' ELSE status END,
+                 blocker_reason = CASE WHEN ?7 THEN NULL ELSE blocker_reason END
              WHERE team_id = ?5 AND task_id = ?6",
-            params![title, brief, assignee, stamp, team_id, task_id],
+            params![title, brief, assignee, stamp, team_id, task_id, reset],
         )?;
         let updated = read_task_in_tx(&tx, team_id, task_id)?;
         tx.commit()?;

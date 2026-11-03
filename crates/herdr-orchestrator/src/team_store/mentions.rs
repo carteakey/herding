@@ -2,7 +2,8 @@
 
 use super::{
     Author, Error, MAX_ID_BYTES, MAX_MEMBERS, MAX_MENTIONS, MAX_TEXT_BYTES, Member, Recipients,
-    Result, SessionTarget, Team, TeamStore, insert_member, read_member, validate, validate_member,
+    Result, SessionTarget, Team, TeamStore, insert_member, now_stamp, read_member, validate,
+    validate_member,
 };
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
@@ -52,6 +53,7 @@ impl TeamStore {
     pub fn remove_member(&mut self, team_id: &str, member_id: &str) -> Result<()> {
         validate("team_id", team_id, MAX_ID_BYTES)?;
         validate("member_id", member_id, MAX_ID_BYTES)?;
+        let (_, stamp) = now_stamp()?;
         let tx = self.db.transaction()?;
         let supervisor_id: Option<String> = tx
             .query_row(
@@ -69,9 +71,19 @@ impl TeamStore {
                 max: 1,
             });
         }
+        // The member's in-progress or blocked work returns to the board so
+        // another worker can claim it; done and cancelled work keeps its
+        // outcome and status.
         tx.execute(
-            "UPDATE tasks SET assignee_id = NULL WHERE team_id = ?1 AND assignee_id = ?2",
-            params![team_id, member_id],
+            "UPDATE tasks
+             SET assignee_id = NULL,
+                 status = CASE WHEN status IN ('in_progress', 'blocked')
+                               THEN 'open' ELSE status END,
+                 blocker_reason = CASE WHEN status IN ('in_progress', 'blocked')
+                                       THEN NULL ELSE blocker_reason END,
+                 updated_at = ?3
+             WHERE team_id = ?1 AND assignee_id = ?2",
+            params![team_id, member_id, stamp],
         )?;
         let changed = tx.execute(
             "DELETE FROM members WHERE team_id = ?1 AND member_id = ?2",

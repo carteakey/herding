@@ -23,6 +23,10 @@ A native Rust/GPUI client for macOS, Linux, and Windows, for a
 [Herdr](https://herdr.dev/) daemon you installed yourself. It paints the daemon's terminal cells, split panes included, without
 running another terminal emulator or wrapping the TUI.
 
+**Herding** turns the same window into a team workspace: a supervisor agent
+plans a goal into tasks for the worker sessions you already run, and you follow
+their bulletin, task board, and evidence without copying output between panes.
+
 > **Unaffiliated project.** Not affiliated with, endorsed by, or supported by
 > Herdr or [herdr.dev](https://herdr.dev/).
 
@@ -127,6 +131,46 @@ symbol, file, or printed `path:line` in your terminal editor,
 [sounds](crates/herdr-gpui/README.md#notification-sounds), and a
 [Dock badge](crates/herdr-gpui/README.md#macos-dock-badge) (on Windows, a
 [taskbar badge](crates/herdr-gpui/README.md#windows-shell)) when an agent needs you.
+
+## Herding: agent teams
+
+A team workspace is in active development. Message delivery, session identity,
+and remote coordination still have known limitations; see the [implementation
+handoff](docs/herding-handoff.md) and [review notes](docs/herding-review-notes.md).
+
+A team is a set of ordinary agent sessions in your panes plus one durable record
+of what they are doing. You choose a session as the **supervisor** and give it a
+goal; it decomposes the goal into bounded tasks, assigns them to **workers**, and
+coordinates through a shared bulletin while you watch and steer every real
+session.
+
+- **Roles.** The supervisor plans, delegates, unblocks, and synthesizes the
+  result instead of doing the implementation itself. Workers own bounded tasks
+  and report evidence; a worker given a verification task acts as the reviewer.
+  The [roadmap](docs/herding-roadmap.md#52-predefined-specialized-agent-roles)
+  extends this with role presets (architect, implementer, reviewer, researcher,
+  debugger) and role-driven handoffs.
+- **Team view.** A native workspace shows the roster with each member's live
+  session, a task board (open, in progress, blocked, done, and cancelled),
+  findings with evidence and confidence, and the bulletin sidebar. Selecting a
+  member focuses its actual Herdr pane; nothing is relayed through a hidden
+  terminal.
+- **Durable records.** Teams, messages, acknowledgements, tasks, and findings
+  live in a local SQLite store. Claiming a task is atomic, reading and
+  acknowledging a message stay distinct, and the bulletin shows pending and
+  acknowledged recipients. A notification does not prove an agent read it.
+- **Agent coordination.** Agents drive the same records from their own panes
+  with `herdr-gpui team status|roster|goal|bulletin|task|finding ...`; new task
+  assignments notify their owners. See the [command line](docs/cli.md).
+- **Workspace isolation stays optional.** Workers can share the checkout, which
+  needs no setup and shares one Cargo cache, or use Git worktrees when parallel
+  branches or isolated builds help. Because membership is keyed by Herdr pane
+  and workspace, agents in the shared tree and in worktrees coordinate on the
+  same bulletin, task board, and findings.
+
+The [Herding specification](docs/herding-spec.md) and the [detailed
+specification](docs/herding-detailed-spec.md) describe the model, roles, and
+roadmap.
 
 ## Install
 

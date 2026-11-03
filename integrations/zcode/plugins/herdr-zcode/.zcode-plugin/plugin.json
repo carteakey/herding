@@ -1,0 +1,6 @@
+{
+  "name": "herdr-zcode",
+  "version": "0.1.1",
+  "description": "Report ZCode CLI sessions to Herdr and coordinate with Herdr Teams.",
+  "skills": "skills"
+}

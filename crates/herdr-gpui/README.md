@@ -3287,6 +3287,11 @@ start refreshes it off the UI thread, so it follows the app when it moves or
 updates. Only files carrying the app's managed-skill marker are rewritten or
 removed; a skill of the same name you wrote yourself is left alone.
 
+The same local installation also includes `herdr-team`, a separate skill for
+agents responding to Team messages and working with its task board. It teaches
+the Team commands and their limitations; a skill alone does not wake an agent or
+deliver a message. Team commands are not available through the SSH-side shim.
+
 - The offer appears in the first window after it connects. **Not now**, or
   closing it, is remembered in `$XDG_STATE_HOME/herdr/gpui/agent-skill.json`
   and it is not asked again.

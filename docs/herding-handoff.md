@@ -41,12 +41,18 @@ execute tests or prove the exact final branch state.
    failures, team switching, stale responses, long content, and narrow views.
    Add the requested recognizable Team icon and verify the actual UI in light
    and dark themes. Confirm how a user finds the view.
-2. **Connect real agent sessions.** The current identity check is restricted
-   to attached native ACP chats with a verifiable session in the selected
-   daemon snapshot. Ordinary Herdr terminal agents, including ZCode, are not
-   supported by this path. Design session identity and membership for those
-   agents without accepting a pane ID as proof of a stable session. Test Codex,
-   OpenCode, and ZCode, including the user's ZCode account/profile setup.
+2. **Connect real agent sessions.** The identity check accepts attached native
+   ACP chats, verified CLI conversation bindings, and active agent sessions
+   reported in the selected daemon snapshot. The ZCode plugin in
+   [herding-zcode.md](herding-zcode.md) reports its active state and resume
+   metadata through Herdr's supported agent-report command. The Team path can
+   recognize the resulting active agent record without a daemon patch, but its
+   fallback identity is based on agent kind and pane, not proof of a stable
+   session or the caller's identity. This is an open issue in the
+   [review notes](herding-review-notes.md). The plugin does not provide a native
+   transcript view or message injection. Exercise it with ZCode, including
+   resume after a Herdr restart; then test Codex and OpenCode through their
+   supported session-report paths.
 3. **Make the supervisor functional.** Provide agent instructions or tools to
    discover their team, read the roster and bulletin, delegate and follow up,
    exchange evidence, and synthesize a result. A selected supervisor is not

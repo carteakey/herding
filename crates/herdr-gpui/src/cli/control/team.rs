@@ -309,10 +309,10 @@ fn parse_finding(args: &mut Args) -> Result<TeamCommand, CliError> {
         }),
         Some("add") => {
             let task_id = args.text_option("--task")?.map(task_id).transpose()?;
-            let confidence = confidence(
-                args.text_option("--confidence")?
-                    .ok_or(CliError::MissingValue("--confidence"))?,
-            )?;
+            let confidence = match args.text_option("--confidence")? {
+                Some(value) => confidence(value)?,
+                None => ConfidenceLevel::Medium,
+            };
             let evidence = bounded(
                 args.text_option("--evidence")?
                     .ok_or(CliError::MissingValue("--evidence"))?,
@@ -323,15 +323,22 @@ fn parse_finding(args: &mut Args) -> Result<TeamCommand, CliError> {
                 .text_option("--supersedes")?
                 .map(finding_id)
                 .transpose()?;
+            let displayed = args.text_option("--description")?;
             let team_id = team_id(args)?;
-            let description = bounded(
-                args.words()?.ok_or(CliError::MissingArgument {
-                    command: "team finding add",
-                    what: "DESCRIPTION",
-                })?,
-                "DESCRIPTION",
-                MAX_BULLETIN_TEXT_BYTES,
-            )?;
+            let trailing = args.words()?;
+            let description = match (displayed, trailing) {
+                (Some(description), None) | (None, Some(description)) => description,
+                (Some(_), Some(_)) => {
+                    return Err(CliError::DuplicateOption("--description"));
+                }
+                (None, None) => {
+                    return Err(CliError::MissingArgument {
+                        command: "team finding add",
+                        what: "DESCRIPTION",
+                    });
+                }
+            };
+            let description = bounded(description, "DESCRIPTION", MAX_BULLETIN_TEXT_BYTES)?;
             Ok(TeamCommand::FindingAdd {
                 team_id,
                 task_id,

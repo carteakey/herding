@@ -17,6 +17,9 @@ const AUTOMATIONS_NAME: &str = "herdr-automations";
 /// How agents write mods for this app, installed beside the browser skill.
 const MODS: &str = include_str!("../../../skills/herdr-mods/SKILL.md");
 const MODS_NAME: &str = "herdr-mods";
+/// How agents participate in a Herdr UI team.
+const TEAM: &str = include_str!("../../../skills/herdr-team/SKILL.md");
+const TEAM_NAME: &str = "herdr-team";
 /// Marks a skill file this app manages.
 const MARKER: &str = "<!-- herdr-gpui-managed-skill v1";
 const NAME: &str = "herdr-gpui-browser";
@@ -97,6 +100,14 @@ pub(crate) fn mods_text(executable: Option<&Path>) -> String {
     escape_description(MODS.replace("herdr-gpui ", &format!("{} ", command(executable))))
 }
 
+/// The team skill, naming this executable in its commands.
+fn team_text(executable: Option<&Path>) -> String {
+    if executable.and_then(Path::to_str).is_none() {
+        return TEAM.to_owned();
+    }
+    escape_description(TEAM.replace("herdr-gpui ", &format!("{} ", command(executable))))
+}
+
 /// The frontmatter's description is a double-quoted YAML scalar, where a
 /// Windows path's backslashes would read as escapes such as `\U`.
 fn escape_description(text: String) -> String {
@@ -143,6 +154,7 @@ pub(crate) fn install(home: &Path, text: &str) -> crate::Result<Vec<PathBuf>> {
         &automations_text(executable.as_deref()),
     )?;
     place(home, MODS_NAME, &mods_text(executable.as_deref()))?;
+    place(home, TEAM_NAME, &team_text(executable.as_deref()))?;
     Ok(placed)
 }
 
@@ -176,7 +188,7 @@ fn place(home: &Path, name: &str, text: &str) -> crate::Result<Vec<PathBuf>> {
 pub(crate) fn remove(home: &Path) -> crate::Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
     for root in ROOTS.map(|root| home.join(root)) {
-        for name in [NAME, AUTOMATIONS_NAME, MODS_NAME] {
+        for name in [NAME, AUTOMATIONS_NAME, MODS_NAME, TEAM_NAME] {
             let path = file(&root, name);
             let Ok(current) = std::fs::read_to_string(&path) else {
                 continue;
@@ -194,6 +206,10 @@ pub(crate) fn remove(home: &Path) -> crate::Result<Vec<PathBuf>> {
     }
     Ok(removed)
 }
+
+#[cfg(test)]
+#[path = "agent_skill/team_tests.rs"]
+mod team_tests;
 
 /// Whether any agent directory exists to install into.
 fn agents_present(home: &Path) -> bool {

@@ -844,10 +844,10 @@ impl HerdrWindow {
             .debug_selector(|| "agent-skill-offer".into())
             .child(div().p(px(8.)).child("Let agents show you pages?"))
             .child(div().p(px(8.)).child(
-                "Agents in your panes can open pages and HTML drafts in browser tabs here, read the notes you pin on them, write automations for you to approve, and write mods that extend this app. Skills teach them how.",
+                "Agents in your panes can open pages and HTML drafts in browser tabs here, read the notes you pin on them, coordinate in a Team, write automations for you to approve, and write mods that extend this app. Skills teach them how.",
             ))
             .child(div().p(px(8.)).text_color(rgb(theme.muted)).child(
-                "Install writes herdr-gpui-browser/SKILL.md, herdr-automations/SKILL.md, and herdr-mods/SKILL.md into ~/.claude/skills and ~/.agents/skills, whichever exist, and keeps them up to date. A skill of any of those names you wrote yourself is left alone. Remove them any time in Settings.",
+                "Install writes herdr-gpui-browser/SKILL.md, herdr-automations/SKILL.md, herdr-mods/SKILL.md, and herdr-team/SKILL.md into ~/.claude/skills and ~/.agents/skills, whichever exist, and keeps them up to date. A skill of any of those names you wrote yourself is left alone. Remove them any time in Settings.",
             ))
             .child(
                 div()

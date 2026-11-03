@@ -1,8 +1,9 @@
 //! Agent-facing team operations. Identity is proved from an attached ACP
 //! transcript, a verified CLI binding, or an active agent session in the
-//! current selected daemon snapshot on the UI thread; the worker repeats exact
-//! target membership matching before accessing the store.
-use crate::HerdrWindow;
+//! caller's daemon snapshot on the UI thread; the worker repeats exact target
+//! membership matching before accessing the store. The window may be showing
+//! another host, so the snapshot comes from the caller's endpoint, not the
+//! selected one.
 use crate::control::server::team_worker::{
     Error as WorkerError, Operation, Reply, ScopedAction, Worker,
 };
@@ -16,6 +17,7 @@ use crate::control::{
     },
     server::{Watches, in_window, socket},
 };
+use crate::{HerdrWindow, state::LiveState};
 use gpui::App;
 use herdr_client::protocol::AgentStatus;
 use herdr_orchestrator::team_store::{
@@ -43,11 +45,11 @@ pub(super) fn serve(
     let Call { caller, op } = call;
     let mut incoming = Some(incoming);
     let response = in_window(&caller, cx, |view, _, window_cx| {
-        let target = match current_identity(view, &caller) {
-            Ok(target) => target,
+        let (target, endpoint) = match current_identity(view, &caller) {
+            Ok(identity) => identity,
             Err(response) => return response,
         };
-        let pane_agents = pane_agents(view);
+        let pane_agents = pane_agents(view, endpoint);
         let (team_id, action) = match op {
             team::TeamOp::Status { team_id } => {
                 if let Some(id) = team_id.as_deref()
@@ -401,10 +403,37 @@ fn prompts_for_scoped_reply(reply: &Reply) -> Vec<(String, String, String)> {
     }
 }
 
-/// Resolves the proven session identity and agent kind for `pane_id` in `view`.
+/// Resolves the proven session identity and agent kind for `pane_id` in the
+/// window's selected daemon.
 pub(crate) fn prove_pane_session(view: &HerdrWindow, pane_id: &str) -> Option<(String, String)> {
-    let snapshot = view.live.snapshot.as_deref()?;
-    if !view.live.status.is_connected() || snapshot.boot_id.is_empty() {
+    prove_pane_session_in(view, view.selected_endpoint, &view.live, pane_id)
+}
+
+/// [`prove_pane_session`] against the endpoint at `index`. ACP transcripts and
+/// CLI bindings are projected from the selected daemon alone, so they only
+/// prove a pane on that daemon; every other host is proved by the agent
+/// session its own snapshot reports.
+fn prove_pane_session_at(
+    view: &HerdrWindow,
+    index: usize,
+    pane_id: &str,
+) -> Option<(String, String)> {
+    let live = if index == view.selected_endpoint {
+        &view.live
+    } else {
+        &view.endpoints.get(index)?.live
+    };
+    prove_pane_session_in(view, index, live, pane_id)
+}
+
+fn prove_pane_session_in(
+    view: &HerdrWindow,
+    index: usize,
+    live: &LiveState,
+    pane_id: &str,
+) -> Option<(String, String)> {
+    let snapshot = live.snapshot.as_deref()?;
+    if !live.status.is_connected() || snapshot.boot_id.is_empty() {
         return None;
     }
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pane_id)?;
@@ -416,7 +445,8 @@ pub(crate) fn prove_pane_session(view: &HerdrWindow, pane_id: &str) -> Option<(S
         .to_owned();
 
     // 1. Native attached ACP chat transcript
-    if let Some(chat) = view.chats.pane(pane_id)
+    if index == view.selected_endpoint
+        && let Some(chat) = view.chats.pane(pane_id)
         && chat.target.existing.is_none()
         && chat.attached()
         && chat.target.pane_id == pane_id
@@ -437,12 +467,13 @@ pub(crate) fn prove_pane_session(view: &HerdrWindow, pane_id: &str) -> Option<(S
     }
 
     // 2. Verified existing CLI conversation binding (Codex / Claude process + session ID)
-    if let Some(binding) = view
-        .chats
-        .existing
-        .bindings()
-        .iter()
-        .find(|b| b.pane_id == pane_id)
+    if index == view.selected_endpoint
+        && let Some(binding) = view
+            .chats
+            .existing
+            .bindings()
+            .iter()
+            .find(|b| b.pane_id == pane_id)
     {
         let kind = if agent_label.is_empty() {
             binding.agent.name().to_owned()
@@ -489,33 +520,49 @@ pub(crate) fn prove_pane_session(view: &HerdrWindow, pane_id: &str) -> Option<(S
     None
 }
 
-fn pane_agents(view: &HerdrWindow) -> HashMap<String, String> {
-    let Some(snapshot) = view.live.snapshot.as_deref() else {
+fn pane_agents(view: &HerdrWindow, endpoint: usize) -> HashMap<String, String> {
+    let Some(snapshot) = live_at(view, endpoint).and_then(|live| live.snapshot.as_deref()) else {
         return HashMap::new();
     };
     snapshot
         .panes
         .iter()
         .filter_map(|pane| {
-            let (_, kind) = prove_pane_session(view, &pane.pane_id)?;
+            let (_, kind) = prove_pane_session_at(view, endpoint, &pane.pane_id)?;
             Some((pane.pane_id.clone(), kind))
         })
         .collect()
 }
 
+/// The live projection of the endpoint at `index`, which the selected endpoint
+/// keeps as `view.live`.
+fn live_at(view: &HerdrWindow, index: usize) -> Option<&LiveState> {
+    if index == view.selected_endpoint {
+        Some(&view.live)
+    } else {
+        view.endpoints.get(index).map(|endpoint| &endpoint.live)
+    }
+}
+
 fn current_identity(
     view: &HerdrWindow,
     caller: &crate::control::protocol::Caller,
-) -> Result<SessionTarget, Response> {
+) -> Result<(SessionTarget, usize), Response> {
     let pane = caller
         .pane_id
         .as_deref()
         .ok_or_else(|| invalid("Team operations require --pane"))?;
     let found = super::work::find(view, caller)?;
-    if found.index != view.selected_endpoint || !view.live.status.is_connected() {
+    let live = live_at(view, found.index).ok_or_else(|| {
+        Response::error(
+            ErrorCode::Unsupported,
+            "The caller's host is no longer shown by this window",
+        )
+    })?;
+    if !live.status.is_connected() {
         return Err(Response::error(
             ErrorCode::Unsupported,
-            "Team calls require the caller's connected selected daemon",
+            "Team calls require the caller's connected daemon",
         ));
     }
     if caller.workspace_id.as_deref() != Some(found.workspace.workspace_id.as_str()) {
@@ -530,18 +577,21 @@ fn current_identity(
             "The caller pane does not match the current pane snapshot",
         ));
     }
-    let (session, _) = prove_pane_session(view, pane).ok_or_else(|| {
+    let (session, _) = prove_pane_session_at(view, found.index, pane).ok_or_else(|| {
         Response::error(
             ErrorCode::Unsupported,
             "No active agent session or attached ACP transcript proves this caller's pane",
         )
     })?;
-    Ok(SessionTarget {
-        host: found.snapshot.boot_id.clone(),
-        session,
-        workspace: Some(found.workspace.workspace_id.clone()),
-        pane: Some(pane.to_owned()),
-    })
+    Ok((
+        SessionTarget {
+            host: found.snapshot.boot_id.clone(),
+            session,
+            workspace: Some(found.workspace.workspace_id.clone()),
+            pane: Some(pane.to_owned()),
+        },
+        found.index,
+    ))
 }
 
 fn validate_post(
@@ -822,3 +872,6 @@ fn reply_response(reply: Reply, pane_agents: &HashMap<String, String>) -> Respon
         _ => Response::error(ErrorCode::Failed, "Unexpected team worker reply"),
     }
 }
+
+#[cfg(test)]
+mod tests;

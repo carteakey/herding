@@ -696,6 +696,10 @@ pub(super) fn ensure_author_in_team<'a>(
 }
 
 #[cfg(test)]
+#[path = "team_store/task_lifecycle_tests.rs"]
+mod task_lifecycle_tests;
+
+#[cfg(test)]
 #[path = "team_store/tests.rs"]
 mod tests;
 

@@ -122,3 +122,127 @@ Instead of generic "Worker" slots, adding or spawning a teammate should let the 
   - Store `role_preset` (`supervisor`, `architect`, `implementer`, `reviewer`, `researcher`, `debugger`) on `team_members`.
   - Display the role badge on each Agent Card and allow changing a member's role preset inline.
   - Inject role-specific system instructions whenever an agent is spawned, added, or promoted.
+
+### 5.4 Flexible Workspace Isolation: Shared Working Tree vs. Opt-In Git Worktrees
+Workers may or may not want to use git worktrees depending on the task and role:
+- **Shared Working Tree (Fast Iteration & Shared Build Cache)**:
+  - Zero setup overhead and shared Cargo `target/` cache.
+  - Ideal for `Supervisor`, `Researcher`, `Reviewer`, or `Implementer` agents working on disjoint files/docs (e.g., `README.md` vs. `team_store`), or small sequential fixes where branch merging would add unnecessary friction.
+- **Opt-In Git Worktrees (Isolated Compilation & Parallel Branches)**:
+  - Prevents mid-edit compile errors in one worker's crate (e.g. an in-progress UI edit in `herdr-gpui`) from blocking another worker's `cargo test` run in the same repository.
+  - Ideal for larger parallel feature work (like `worker bee`'s `zcode` CLI integration or multi-file refactors).
+- **Herdr Support**:
+  - Keep worktrees strictly **optional** (per-worker or per-task opt-in via UI spawn toggle or agent choice) rather than forced.
+  - Because `TeamStore` lives in the app's central SQLite database and routes via `HERDR_PANE_ID` / `HERDR_WORKSPACE_ID`, agents in both the main working tree and any secondary `git worktree` coordinate seamlessly on the same Bulletin, Task Board, and Findings feed.
+
+### 5.5 Agent "PTO": Quota Exhaustion, Rate Limits & Supervisor Succession
+In real-world multi-agent runs, any agent — **including the Supervisor** — can suddenly "take PTO" (hit provider usage caps, 429 rate limits, context exhaustion, or session crashes):
+
+1. **Detection (Quota / Rate-Limit / Lease Expiry)**:
+   - **ACP & Terminal Signals**: Detect provider quota/rate-limit errors from ACP streams or terminal output (e.g. Claude/Codex/Gemini usage limit banners) and transition the member's state to **`OutOfOffice` (`QuotaExhausted`)** with an optional reset timestamp.
+   - **Task Lease & Heartbeat**: Track `claimed_at` / `last_activity_at` on `[in_progress]` tasks; if a pane exits or errors out while holding an active task, flag the task as stalled.
+2. **Worker PTO Failover (Cross-Provider Handoff)**:
+   - Because all coordination state (task brief, linked findings, bulletin thread, and git working tree/worktree) lives in **SQLite (`TeamStore`)** rather than inside one agent's memory:
+     - Releasing or reassigning a PTO worker's `[in_progress]` task resets its status to `[open]` (already implemented in `TeamStore::update_task` / `remove_member`) while preserving every recorded finding and bulletin note.
+     - The Supervisor (or Herdr's auto-failover policy) can immediately spawn or assign a standby worker on a **different provider** (e.g. failing over from a quota-exhausted Claude worker to Codex, Gemini, OpenCode, or `zcode`).
+3. **Supervisor PTO & Automatic Succession ("Acting Supervisor")**:
+   - If the **Supervisor** hits a usage limit, workers completing tasks would otherwise stall waiting for `@supervisor`.
+   - **Dynamic `@supervisor` Role Resolution**: Because `TeamStore::resolve_recipients` resolves `@supervisor` dynamically to whichever member currently holds `TeamRole::Supervisor` (and `TeamAction::SelectSupervisor` can promote any member on the fly), Herdr can designate a **Deputy / Fallback Supervisor** (or auto-promote a healthy `Reviewer` / `Architect` on a different provider when the Supervisor goes `OutOfOffice`).
+   - Upon promotion, the new Acting Supervisor receives the full SQLite state snapshot (Goal, Open/In-Progress Tasks, Findings, and unacknowledged `@supervisor` mentions) and resumes orchestration without losing a single beat.
+
+---
+
+### 5.6 Supervisor follow-through without endless polling
+
+While a team has useful work in progress, let its supervisor react to task
+results, blockers, and messages without requiring the user to repeatedly wake
+it. Prefer event-driven check-ins and use a bounded, low-frequency fallback
+only where needed. Avoid busy loops, continuous model calls, and unbounded
+unattended execution. Show the user whether coordination is active, idle, or
+waiting for a decision, and provide a way to pause or stop it.
+
+Continue with clear work within the user's existing authorization. Stop or
+become idle when the goal is complete or there is no clear useful action;
+ask the user when a decision, approval, or missing information actually needs
+them. Never infer that a quiet worker has completed its task. Respect member
+identity, durable message state, and busy or permission-blocked sessions;
+where a safe wake-up is unavailable, leave work pending and say so. Stopping
+coordination or closing the UI must not terminate user-owned sessions.
+
+**Acceptance:** With deterministic events and a controllable clock, verify
+that new work wakes coordination without a spin loop, periodic checks are
+bounded, interruption and pause work, completed and blocked goals stop
+unattended activity, and an unavailable recipient is not falsely reported
+as notified. Exercise the flow with real agents separately.
+
+## 6. Remote agent teams (planned)
+
+Build on a reliable local team first. Herdr UI can already show panes from an
+SSH host, but showing a pane is not the same as giving its agent access to the
+team's board. The current SSH-side `herdr-gpui` shim supports browser commands;
+it does not provide the Team CLI. Do not describe remote teams as working until
+their coordination path is implemented and tested.
+
+### 6.1 First milestone: one team on one remote machine
+
+Let the user select an existing SSH host in Herdr UI and create a team whose
+supervisor and workers run on that host. Keep one authoritative team record in
+the coordinating UI, and let the remote agents use the same task, bulletin,
+acknowledgement, and finding operations as local agents through a deliberately
+scoped, authenticated connection. Choose and document the actual transport and
+its lifecycle after checking the existing SSH and control-socket capabilities;
+viewing a remote daemon or forwarding an unprotected socket is not sufficient.
+
+- Bind every member to a verified host, daemon, and agent session. Revalidate
+  identity after reconnects and pane reuse, and show unavailable or unsupported
+  capabilities rather than silently targeting another session.
+- Preserve the existing approval and session controls. Store a message before
+  attempting notification; do not inject into a busy or blocked agent, and
+  surface failed or uncertain delivery without blindly replaying a submission.
+- Keep queues and responses bounded. Define how remote agents discover the
+  coordinator, what remains available when the UI or connection is down, and
+  how access is removed when a member leaves.
+- Keep credentials on the machine where each agent runs. Treat files, working
+  directories, and artifacts as belonging to that remote host; record enough
+  context to make evidence references useful without implying they are local.
+- Show the selected host and the actual state of each member in the Team view.
+  Reuse existing launch and attach paths where they can establish the needed
+  identity and capabilities; leave user-owned sessions running when UI detaches.
+
+**Acceptance:** In isolated test environments, create a team on one SSH host
+with a real supervisor and two real workers. Have them claim distinct tasks,
+exchange a targeted message while a recipient is busy, acknowledge it later,
+and produce a result with a remote evidence reference. Verify scoped access,
+session replacement, disconnect/reconnect, and accurate pending, failure, and
+uncertain states. Also validate the actual native UI; simulated peers alone do
+not establish real agent compatibility.
+
+### 6.2 Later milestone: one team across multiple hosts
+
+Allow a single team to include members from the local machine and multiple SSH
+hosts. Retain one authority for team state, and route each operation to the
+member's verified host and session rather than the currently selected host or a
+pane ID alone. Specify offline handoff, ordering, duplicate and uncertain
+delivery, reconnect, and coordinator availability before claiming support.
+
+Filesystems and Git worktrees remain host-local unless deliberately shared.
+Define an explicit, user-visible handoff for source revisions, uncommitted
+changes, binaries, and artifacts, including availability and integrity. Keep
+provider credentials on their own hosts and do not require Git for a team.
+
+**Acceptance:** Run a supervisor and workers across at least two hosts, take a
+host offline during work, and reconnect without silent loss or duplicate
+delivery. Verify the resulting task state, evidence, and any transferred
+artifact on the intended host. See the separate multi-machine requirements in
+the [detailed spec](herding-detailed-spec.md#10-multi-machine-evolution).
+
+For related projects and questions to investigate, see
+[Herding: projects to study](herding-references.md).
+
+## 7. UI responsiveness (planned)
+
+Investigate the reported slow UI with a representative team and a release
+build. Measure the interaction that feels slow, identify whether state updates,
+layout, rendering, or background work causes it, and fix the measured cause.
+Keep UI-thread work bounded and compare before and after; headless tests alone
+do not establish native interactive performance.

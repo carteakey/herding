@@ -515,6 +515,7 @@ fn worker_error(error: WorkerError) -> Response {
         WorkerError::Stopped | WorkerError::WatchUnavailable => {
             Response::error(ErrorCode::Failed, "Team worker is unavailable")
         }
+        WorkerError::External(msg) => Response::error(ErrorCode::Failed, msg),
         WorkerError::Store(source) => {
             let code = match source.as_ref() {
                 team_store::Error::TeamNotFound(_)

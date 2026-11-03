@@ -258,6 +258,50 @@ impl TeamStore {
         Ok(updated)
     }
 
+    /// Updates a task's title, brief, and optional assignee.
+    pub fn update_task(
+        &mut self,
+        team_id: &str,
+        task_id: &str,
+        actor: &Author,
+        title: &str,
+        brief: &str,
+        assignee: Option<&str>,
+    ) -> Result<Task> {
+        validate("team_id", team_id, MAX_ID_BYTES)?;
+        validate("task_id", task_id, MAX_ID_BYTES)?;
+        validate("title", title, MAX_NAME_BYTES)?;
+        if brief.len() > MAX_TEXT_BYTES {
+            return Err(Error::Invalid {
+                field: "brief",
+                max: MAX_TEXT_BYTES,
+            });
+        }
+        if let Some(assignee) = assignee {
+            validate("assignee", assignee, MAX_ID_BYTES)?;
+        }
+        let (_, stamp) = now_stamp()?;
+        let tx = self.db.transaction()?;
+        ensure_author_in_team(&tx, team_id, actor)?;
+        if let Some(assignee) = assignee
+            && !is_member(&tx, team_id, assignee)?
+        {
+            return Err(Error::MemberNotInTeam {
+                team_id: team_id.to_owned(),
+                member_id: assignee.to_owned(),
+            });
+        }
+        let _ = read_task_in_tx(&tx, team_id, task_id)?;
+        tx.execute(
+            "UPDATE tasks SET title = ?1, brief = ?2, assignee_id = ?3, updated_at = ?4
+             WHERE team_id = ?5 AND task_id = ?6",
+            params![title, brief, assignee, stamp, team_id, task_id],
+        )?;
+        let updated = read_task_in_tx(&tx, team_id, task_id)?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
     pub fn cancel_task(&mut self, team_id: &str, task_id: &str, actor: &Author) -> Result<Task> {
         validate("team_id", team_id, MAX_ID_BYTES)?;
         validate("task_id", task_id, MAX_ID_BYTES)?;

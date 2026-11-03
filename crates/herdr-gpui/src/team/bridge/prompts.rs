@@ -1,0 +1,384 @@
+use super::{PaneCandidate, REFRESH, TeamAction, roster, status_label};
+use crate::{HerdrWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
+use gpui::Context;
+use herdr_orchestrator::team_store::{Task, Team};
+
+impl HerdrWindow {
+    /// Sessions this window can prove: native ACP chats, verified CLI bindings,
+    /// and active terminal agent sessions in the selected daemon's snapshot.
+    pub(super) fn team_candidates(&self) -> Vec<PaneCandidate> {
+        let Some(snapshot) = self.live.snapshot.as_deref() else {
+            return Vec::new();
+        };
+        if !self.live.status.is_connected() || snapshot.boot_id.is_empty() {
+            return Vec::new();
+        }
+        snapshot
+            .panes
+            .iter()
+            .filter_map(|pane| {
+                let (session, agent_kind) =
+                    crate::control::server::team::prove_pane_session(self, &pane.pane_id)?;
+                let agent_entry = snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == pane.pane_id);
+                let base_label = pane
+                    .label
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| agent_entry.and_then(|a| a.title.as_deref()))
+                    .unwrap_or(pane.pane_id.as_str());
+                let label = if agent_kind.is_empty() {
+                    base_label.to_owned()
+                } else {
+                    format!("{base_label} ({agent_kind})")
+                };
+                let status = agent_entry
+                    .map(|a| status_label(a.agent_status))
+                    .unwrap_or_else(|| fl!("team-status-live").into());
+                Some(PaneCandidate {
+                    identity: PaneIdentity {
+                        daemon_id: snapshot.boot_id.clone(),
+                        session_id: Some(session),
+                        workspace_id: pane.workspace_id.clone(),
+                        pane_id: pane.pane_id.clone(),
+                    },
+                    label: label.into(),
+                    agent: agent_kind.into(),
+                    status,
+                })
+            })
+            .collect()
+    }
+
+    /// Runs on each window tick. Idle until the Team panel is first shown.
+    pub(crate) fn poll_team(&mut self, cx: &mut Context<Self>) {
+        let shown = self.team_panel_shown();
+        if !shown && !self.team_bridge.started {
+            return;
+        }
+        let candidates = self.team_candidates();
+        let actions = self.take_team_actions(cx);
+        let bridge = &mut self.team_bridge;
+        bridge.start();
+        if let Some(service) = bridge.service.as_ref() {
+            for completion in service.poll() {
+                bridge.complete(completion);
+            }
+        }
+        let mut focus = None;
+        let mut prompts = Vec::new();
+        let mut spawn_agents = Vec::new();
+        let mut split_pane = false;
+        for action in actions {
+            match action {
+                // Panes belong to the window, so focusing is not the bridge's.
+                TeamAction::FocusWorker { pane } => {
+                    bridge.last_activity = Some(format!("Focused pane {}", pane.pane_id).into());
+                    bridge.dirty = true;
+                    focus = Some(pane);
+                }
+                TeamAction::SpawnAgentSession { agent } => {
+                    bridge.last_activity =
+                        Some(format!("Spawning {} session...", agent.display_name()).into());
+                    bridge.dirty = true;
+                    spawn_agents.push(agent);
+                }
+                TeamAction::SplitNewPane => {
+                    bridge.last_activity = Some("Splitting new terminal pane...".into());
+                    bridge.dirty = true;
+                    split_pane = true;
+                }
+                action => {
+                    let dispatches =
+                        prompts_for_team_action(&action, bridge.team.as_ref(), &bridge.tasks);
+                    bridge.act(action, &candidates);
+                    if bridge.warning.is_none() {
+                        prompts.extend(dispatches);
+                    }
+                    prompts.extend(bridge.drain_unpaused_prompts());
+                }
+            }
+        }
+        if shown
+            && let Some(team_id) = bridge.selected.clone()
+            && bridge.last_refresh.is_none_or(|at| at.elapsed() >= REFRESH)
+        {
+            bridge.refresh(&team_id);
+        }
+        for agent in spawn_agents {
+            self.start_chat_or_flash(agent, cx);
+        }
+        if split_pane {
+            self.split_team_pane(cx);
+        }
+        for (pane_id, prompt, summary) in prompts {
+            if self.team_bridge.is_pane_paused(&pane_id) {
+                self.team_bridge
+                    .queued_prompts
+                    .push((pane_id.clone(), prompt, summary));
+                let held = self.team_bridge.queued_prompts.len();
+                self.team_bridge.last_activity =
+                    Some(format!("Held prompt for paused pane {pane_id} ({held} queued)").into());
+                self.team_bridge.dirty = true;
+            } else {
+                self.dispatch_team_prompt(&pane_id, prompt, cx);
+                self.team_bridge.last_activity = Some(summary.into());
+                self.team_bridge.dirty = true;
+            }
+        }
+        let identities: Vec<_> = candidates.iter().map(|c| c.identity.clone()).collect();
+        let focus = focus.filter(|pane| {
+            candidates
+                .iter()
+                .any(|c| c.identity.pane_id == pane.pane_id)
+                || self
+                    .live
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.panes.iter().any(|p| p.pane_id == pane.pane_id))
+        });
+        let bridge = &mut self.team_bridge;
+        if bridge.dirty || bridge.candidates != identities {
+            bridge.dirty = false;
+            bridge.candidates = identities;
+            let warning = bridge.warning.clone();
+            let snapshot = bridge.snapshot(&candidates);
+            self.set_team_snapshot(snapshot, cx);
+            self.team_view
+                .update(cx, |view, cx| view.set_action_warning(warning, cx));
+        }
+        if let Some(pane) = focus {
+            self.navigate(NavigationTarget::Pane(pane.pane_id.as_str()), cx);
+            if let Some(tab_id) = self
+                .live
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.panes.iter().find(|p| p.pane_id == pane.pane_id))
+                .map(|p| p.tab_id.clone())
+            {
+                self.terminal_focus_moved(&tab_id, false, cx);
+            }
+        }
+    }
+
+    fn dispatch_team_prompt(&mut self, pane_id: &str, prompt: String, cx: &mut Context<Self>) {
+        if let Some(chat) = self.chats.pane_mut(pane_id)
+            && chat.target.existing.is_none()
+            && !chat.session.transcript().read_only
+        {
+            let _ = chat.send(herdr_chat_protocol::Command::Prompt {
+                text: prompt,
+                attachments: Vec::new(),
+            });
+            return;
+        }
+        if self.endpoints.is_empty() {
+            return;
+        }
+        let target = crate::browser::FeedbackKey {
+            scope: crate::browser::scope(&self.endpoints[self.selected_endpoint]),
+            pane_id: pane_id.to_owned(),
+        };
+        let _ = self.deliver_notes(Some(target), prompt, None, None, cx);
+        self.poll_deliveries(cx);
+    }
+
+    fn split_team_pane(&mut self, cx: &mut Context<Self>) {
+        if !self.input_ready() || self.endpoints.is_empty() {
+            return;
+        }
+        let Some(snapshot) = self.live.snapshot.as_ref() else {
+            return;
+        };
+        let Some(focused_pane) = snapshot
+            .focused_pane_id
+            .clone()
+            .or_else(|| snapshot.panes.first().map(|p| p.pane_id.clone()))
+        else {
+            return;
+        };
+        let boot = snapshot.boot_id.clone();
+        if let Some(handle) = self.endpoints[self.selected_endpoint]
+            .connection
+            .handle
+            .as_ref()
+        {
+            let _ = handle.request(
+                &boot,
+                herdr_client::Method::PaneSplit,
+                serde_json::json!({
+                    "target_pane_id": focused_pane,
+                    "direction": "right",
+                    "focus": true,
+                }),
+            );
+            self.fence_focus_change(None);
+            cx.notify();
+        }
+    }
+}
+
+fn prompts_for_team_action(
+    action: &TeamAction,
+    team: Option<&Team>,
+    tasks: &[Task],
+) -> Vec<(String, String, String)> {
+    match action {
+        TeamAction::CreateTeam { name, supervisor } if !name.trim().is_empty() => {
+            vec![(
+                supervisor.pane_id.clone(),
+                format!(
+                    "[Herdr Team] You are now the Supervisor of team \"{}\". Run `herdr team status` to inspect your team, `herdr team task list` to check tasks, and `herdr team inbox --unread` to read messages.",
+                    name.trim()
+                ),
+                format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
+            )]
+        }
+        TeamAction::SetGoal { goal, .. } if !goal.trim().is_empty() => team
+            .and_then(supervisor_pane_id)
+            .into_iter()
+            .map(|pane_id| {
+                (
+                    pane_id.clone(),
+                    format!(
+                        "[Herdr Team] Team goal set: \"{}\". Run `herdr team status`, break down work with `herdr team task create`, and coordinate with teammates via `herdr team post`.",
+                        goal.trim()
+                    ),
+                    format!("Sent updated goal to supervisor ({pane_id})"),
+                )
+            })
+            .collect(),
+        TeamAction::AddWorker { name, pane, .. } if !name.trim().is_empty() => {
+            vec![(
+                pane.pane_id.clone(),
+                format!(
+                    "[Herdr Team] You joined the team as Worker \"{}\". Run `herdr team status` to view the team goal, `herdr team task list` to claim open tasks (`herdr team task claim <id>`), and `herdr team inbox --unread` to read messages.",
+                    name.trim()
+                ),
+                format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
+            )]
+        }
+        TeamAction::NudgeMember { member_id, .. } => {
+            let Some(team) = team else {
+                return Vec::new();
+            };
+            roster(team)
+                .find(|m| m.member_id == *member_id)
+                .and_then(|m| {
+                    let pane_id = m.target.pane.clone()?;
+                    Some((
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] Status check for {}: please run `herdr team status`, `herdr team task list`, and `herdr team inbox --unread` to check active tasks and messages.",
+                            m.display_name
+                        ),
+                        format!("Nudged {} ({pane_id})", m.display_name),
+                    ))
+                })
+                .into_iter()
+                .collect()
+        }
+        TeamAction::CreateTask {
+            title,
+            brief,
+            assignee,
+            ..
+        } if !title.trim().is_empty() => {
+            let target_pane = team.and_then(|team| {
+                resolve_assignee_pane(team, assignee.as_deref())
+                    .or_else(|| supervisor_pane_id(team))
+            });
+            let brief_part = if brief.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", brief.trim())
+            };
+            target_pane
+                .into_iter()
+                .map(|pane_id| {
+                    (
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] New task \"{}\"{}. Run `herdr team task list` to inspect it, `herdr team task claim <task-id>` to start working on it, and `herdr team task done <task-id> --result \"...\"` when finished.",
+                            title.trim(),
+                            brief_part
+                        ),
+                        format!("Dispatched task \"{}\" to {pane_id}", title.trim()),
+                    )
+                })
+                .collect()
+        }
+        TeamAction::DispatchTask { task_id, .. } => {
+            let Some(team) = team else {
+                return Vec::new();
+            };
+            let Some(task) = tasks.iter().find(|t| t.task_id == *task_id) else {
+                return Vec::new();
+            };
+            let target_pane = task
+                .assignee
+                .as_deref()
+                .and_then(|id| resolve_assignee_pane(team, Some(id)))
+                .or_else(|| supervisor_pane_id(team));
+            let brief_part = if task.brief.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", task.brief.trim())
+            };
+            target_pane
+                .into_iter()
+                .map(|pane_id| {
+                    (
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] Please work on task {} (\"{}\"){}. Claim it with `herdr team task claim {}` and complete it with `herdr team task done {} --result \"...\"`.",
+                            task.task_id, task.title, brief_part, task.task_id, task.task_id
+                        ),
+                        format!("Sent task \"{}\" to {pane_id}", task.title),
+                    )
+                })
+                .collect()
+        }
+        TeamAction::Post { body, .. } | TeamAction::Reply { body, .. }
+            if !body.trim().is_empty() =>
+        {
+            let Some(team) = team else {
+                return Vec::new();
+            };
+            roster(team)
+                .filter_map(|m| m.target.pane.clone())
+                .map(|pane_id| {
+                    (
+                        pane_id.clone(),
+                        format!(
+                            "[Herdr Team] New bulletin message: \"{}\". Run `herdr team inbox --unread` to view and `herdr team post` to reply.",
+                            body.trim()
+                        ),
+                        format!("Posted bulletin to team ({pane_id})"),
+                    )
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_assignee_pane(team: &Team, assignee: Option<&str>) -> Option<String> {
+    let target = assignee?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    roster(team)
+        .find(|m| {
+            m.member_id == target
+                || m.target.pane.as_deref() == Some(target)
+                || m.display_name.eq_ignore_ascii_case(target)
+        })
+        .and_then(|m| m.target.pane.clone())
+}
+
+fn supervisor_pane_id(team: &Team) -> Option<String> {
+    team.supervisor.target.pane.clone()
+}

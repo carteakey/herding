@@ -4,11 +4,13 @@ use gpui::{prelude::*, *};
 use herdr_orchestrator::team_store::{Author, Confidence};
 
 mod board;
+mod bulletin;
+mod roster;
 
-const MAX_VISIBLE_MEMBERS: usize = 64;
-const MAX_VISIBLE_CANDIDATES: usize = 64;
+pub(super) const MAX_VISIBLE_MEMBERS: usize = 64;
+pub(super) const MAX_VISIBLE_CANDIDATES: usize = 64;
 const MAX_VISIBLE_TEAMS: usize = 64;
-const MAX_VISIBLE_POSTS: usize = 200;
+pub(super) const MAX_VISIBLE_POSTS: usize = 200;
 
 /// Intent emitted by the view. The subscriber must validate current identities
 /// and perform writes, focus changes, and refreshes outside rendering.
@@ -25,6 +27,13 @@ pub(crate) enum TeamAction {
         name: String,
         supervisor: PaneIdentity,
     },
+    RenameTeam {
+        team_id: String,
+        name: String,
+    },
+    DeleteTeam {
+        team_id: String,
+    },
     SetGoal {
         team_id: String,
         goal: String,
@@ -33,6 +42,26 @@ pub(crate) enum TeamAction {
         team_id: String,
         member_id: String,
     },
+    RenameMember {
+        team_id: String,
+        member_id: String,
+        name: String,
+    },
+    RemoveMember {
+        team_id: String,
+        member_id: String,
+    },
+    NudgeMember {
+        member_id: String,
+    },
+    TogglePauseTeam,
+    TogglePauseMember {
+        member_id: String,
+    },
+    SpawnAgentSession {
+        agent: herdr_chat_protocol::Agent,
+    },
+    SplitNewPane,
     AddWorker {
         team_id: String,
         name: String,
@@ -55,6 +84,21 @@ pub(crate) enum TeamAction {
         brief: String,
         assignee: Option<String>,
     },
+    UpdateTask {
+        team_id: String,
+        task_id: String,
+        title: String,
+        brief: String,
+        assignee: Option<String>,
+    },
+    DispatchTask {
+        task_id: String,
+    },
+    ImportGithubIssue {
+        team_id: String,
+        issue_ref: String,
+        as_goal: bool,
+    },
     CompleteTask {
         team_id: String,
         task_id: String,
@@ -71,27 +115,38 @@ pub(crate) enum TeamAction {
         evidence: String,
         confidence: Confidence,
     },
+    ToggleBulletinSidebar,
     FocusWorker {
         pane: PaneIdentity,
     },
 }
 
 pub(crate) struct TeamView {
-    snapshot: TeamSnapshot,
+    pub(super) snapshot: TeamSnapshot,
     team_name: Entity<SearchInput>,
-    team_goal: Entity<SearchInput>,
-    worker_name: Entity<SearchInput>,
-    post_body: Entity<SearchInput>,
-    task_title: Entity<SearchInput>,
-    task_brief: Entity<SearchInput>,
-    task_assignee: Entity<SearchInput>,
-    finding_description: Entity<SearchInput>,
-    finding_evidence: Entity<SearchInput>,
-    finding_confidence: Confidence,
-    reply_to: Option<String>,
+    pub(super) rename_input: Entity<SearchInput>,
+    pub(super) team_goal: Entity<SearchInput>,
+    pub(super) worker_name: Entity<SearchInput>,
+    pub(super) post_body: Entity<SearchInput>,
+    pub(super) task_title: Entity<SearchInput>,
+    pub(super) task_brief: Entity<SearchInput>,
+    pub(super) task_assignee: Entity<SearchInput>,
+    pub(super) issue_input: Entity<SearchInput>,
+    pub(super) finding_description: Entity<SearchInput>,
+    pub(super) finding_evidence: Entity<SearchInput>,
+    pub(super) finding_confidence: Confidence,
+    pub(super) reply_to: Option<String>,
+    pub(super) editing_team_name: bool,
+    pub(super) editing_member_id: Option<String>,
+    pub(super) editing_goal: bool,
+    pub(super) worker_form_open: bool,
+    pub(super) task_form_open: bool,
+    pub(super) issue_form_open: bool,
+    pub(super) editing_task_id: Option<String>,
+    pub(super) finding_form_open: bool,
     action_warning: Option<SharedString>,
     font: crate::config::FontConfig,
-    theme: Theme,
+    pub(super) theme: Theme,
 }
 
 impl TeamView {
@@ -101,15 +156,22 @@ impl TeamView {
         cx: &mut Context<Self>,
     ) -> Self {
         let team_name = cx.new(SearchInput::new);
+        let rename_input = cx.new(SearchInput::new);
         let team_goal = cx.new(SearchInput::new);
         let worker_name = cx.new(SearchInput::new);
         let post_body = cx.new(SearchInput::new);
         let task_title = cx.new(SearchInput::new);
         let task_brief = cx.new(SearchInput::new);
         let task_assignee = cx.new(SearchInput::new);
+        let issue_input = cx.new(SearchInput::new);
         let finding_description = cx.new(SearchInput::new);
         let finding_evidence = cx.new(SearchInput::new);
         team_name.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-name-placeholder"), cx);
+            input.set_label(&fl!("team-field-name-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
+        rename_input.update(cx, |input, cx| {
             input.set_placeholder_with(|| fl!("team-field-name-placeholder"), cx);
             input.set_label(&fl!("team-field-name-placeholder"), cx);
             input.set_appearance(font.clone(), theme.clone(), cx);
@@ -144,6 +206,11 @@ impl TeamView {
             input.set_label(&fl!("team-field-task-assignee-placeholder"), cx);
             input.set_appearance(font.clone(), theme.clone(), cx);
         });
+        issue_input.update(cx, |input, cx| {
+            input.set_placeholder_with(|| fl!("team-field-issue-placeholder"), cx);
+            input.set_label(&fl!("team-field-issue-placeholder"), cx);
+            input.set_appearance(font.clone(), theme.clone(), cx);
+        });
         finding_description.update(cx, |input, cx| {
             input.set_placeholder_with(|| fl!("team-field-finding-description-placeholder"), cx);
             input.set_label(&fl!("team-field-finding-description-placeholder"), cx);
@@ -156,58 +223,45 @@ impl TeamView {
         });
         for input in [
             &team_name,
+            &rename_input,
             &team_goal,
             &worker_name,
             &post_body,
             &task_title,
             &task_brief,
             &task_assignee,
+            &issue_input,
             &finding_description,
             &finding_evidence,
         ] {
-            cx.subscribe(input, |_, _, _: &crate::search_input::Changed, cx| {
-                cx.notify();
-            })
-            .detach();
+            cx.observe(input, |_, _, cx| cx.notify()).detach();
         }
         Self {
             snapshot: TeamSnapshot::default(),
             team_name,
+            rename_input,
             team_goal,
             worker_name,
             post_body,
             task_title,
             task_brief,
             task_assignee,
+            issue_input,
             finding_description,
             finding_evidence,
             finding_confidence: Confidence::High,
             reply_to: None,
+            editing_team_name: false,
+            editing_member_id: None,
+            editing_goal: false,
+            worker_form_open: false,
+            task_form_open: false,
+            issue_form_open: false,
+            editing_task_id: None,
+            finding_form_open: false,
             action_warning: None,
             font,
             theme,
-        }
-    }
-
-    pub(crate) fn set_snapshot(&mut self, snapshot: TeamSnapshot, cx: &mut Context<Self>) {
-        if self.snapshot.team_id != snapshot.team_id {
-            self.reply_to = None;
-        }
-        self.snapshot = snapshot;
-        if self.snapshot.team_name.is_none() {
-            self.reply_to = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn set_action_warning(
-        &mut self,
-        warning: Option<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.action_warning != warning {
-            self.action_warning = warning;
-            cx.notify();
         }
     }
 
@@ -217,17 +271,21 @@ impl TeamView {
         theme: Theme,
         cx: &mut Context<Self>,
     ) {
-        let changed = self.font != font || self.theme != theme;
-        self.theme = theme.clone();
+        if self.font == font && self.theme == theme {
+            return;
+        }
         self.font = font.clone();
+        self.theme = theme.clone();
         for input in [
             &self.team_name,
+            &self.rename_input,
             &self.team_goal,
             &self.worker_name,
             &self.post_body,
             &self.task_title,
             &self.task_brief,
             &self.task_assignee,
+            &self.issue_input,
             &self.finding_description,
             &self.finding_evidence,
         ] {
@@ -235,12 +293,36 @@ impl TeamView {
                 input.set_appearance(font.clone(), theme.clone(), cx);
             });
         }
-        if changed {
-            cx.notify();
-        }
+        cx.notify();
     }
 
-    fn candidate_button(
+    pub(crate) fn set_snapshot(&mut self, snapshot: TeamSnapshot, cx: &mut Context<Self>) {
+        if self.snapshot.team_id != snapshot.team_id {
+            self.reply_to = None;
+            self.editing_team_name = false;
+            self.editing_member_id = None;
+            self.editing_goal = false;
+            self.editing_task_id = None;
+            self.action_warning = None;
+        } else if let Some(reply_to) = self.reply_to.as_ref()
+            && !snapshot.posts.iter().any(|post| post.id == *reply_to)
+        {
+            self.reply_to = None;
+        }
+        self.snapshot = snapshot;
+        cx.notify();
+    }
+
+    pub(crate) fn set_action_warning(
+        &mut self,
+        warning: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.action_warning = warning;
+        cx.notify();
+    }
+
+    pub(super) fn candidate_button(
         &self,
         candidate: &PaneCandidate,
         label: impl Into<SharedString>,
@@ -258,12 +340,21 @@ impl TeamView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .py_2()
-            .border_b_1()
+            .p_2()
+            .rounded(px(crate::config::corners::CONTROL))
+            .bg(rgb(theme.surface))
+            .border_1()
             .border_color(rgb(theme.active))
-            .child(div().flex_1().min_w_0().child(candidate.label.clone()))
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .child(candidate.label.clone()),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
                     .text_color(rgb(theme.muted))
                     .child(candidate.status.clone()),
             )
@@ -275,7 +366,7 @@ impl TeamView {
             ))
     }
 
-    fn action_button(
+    pub(super) fn action_button(
         &self,
         id: impl Into<SharedString>,
         label: impl Into<SharedString>,
@@ -286,14 +377,39 @@ impl TeamView {
         let label = label.into();
         div()
             .id(id.into())
-            .px_3()
+            .px_2()
             .py_1()
             .rounded(px(crate::config::corners::CONTROL))
             .bg(rgb(theme.active))
+            .text_size(px(12.))
             .cursor_pointer()
             .role(Role::Button)
             .child(label)
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(action.clone())))
+    }
+
+    pub(super) fn render_spawn_bar(&self, prefix: &str, cx: &mut Context<Self>) -> Div {
+        let mut row = div().flex().flex_wrap().items_center().gap_1();
+        for (id_suffix, agent) in [
+            ("claude", herdr_chat_protocol::Agent::Claude),
+            ("codex", herdr_chat_protocol::Agent::Codex),
+            ("gemini", herdr_chat_protocol::Agent::Gemini),
+            ("opencode", herdr_chat_protocol::Agent::Opencode),
+        ] {
+            row = row.child(self.action_button(
+                SharedString::from(format!("{prefix}-spawn-{id_suffix}")),
+                format!("+ {}", agent.display_name()),
+                TeamAction::SpawnAgentSession { agent },
+                cx,
+            ));
+        }
+        row = row.child(self.action_button(
+            SharedString::from(format!("{prefix}-split-pane")),
+            fl!("team-action-split-pane"),
+            TeamAction::SplitNewPane,
+            cx,
+        ));
+        row
     }
 
     fn render_create_team(&self, cx: &mut Context<Self>) -> Div {
@@ -304,8 +420,14 @@ impl TeamView {
             .iter()
             .take(MAX_VISIBLE_CANDIDATES);
         let mut body = div().flex().flex_col().gap_2();
-        body = body.child(div().text_size(px(19.)).child(fl!("team-create-title")));
+        body = body.child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(15.))
+                .child(fl!("team-create-title")),
+        );
         body = body.child(self.team_name.clone());
+        body = body.child(self.render_spawn_bar("team-create", cx));
         for (index, candidate) in candidates.enumerate() {
             let action = TeamAction::CreateTeam {
                 name: name.clone(),
@@ -334,200 +456,9 @@ impl TeamView {
         if self.snapshot.pane_candidates.is_empty() {
             body = body.child(
                 div()
+                    .text_size(px(12.))
                     .text_color(rgb(self.theme.muted))
                     .child(fl!("team-candidates-empty")),
-            );
-        }
-        body
-    }
-
-    fn render_roster(&self, cx: &mut Context<Self>) -> Div {
-        let mut rows = div().flex().flex_col().gap_1();
-        for (index, member) in self
-            .snapshot
-            .members
-            .iter()
-            .take(MAX_VISIBLE_MEMBERS)
-            .enumerate()
-        {
-            let mut row = div()
-                .id(SharedString::from(format!("team-member-{index}")))
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .py_2()
-                .border_b_1()
-                .border_color(rgb(self.theme.active))
-                .child(div().flex_1().min_w_0().child(member.name.clone()))
-                .when(!member.agent.is_empty(), |r| {
-                    r.child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(self.theme.muted))
-                            .child(member.agent.clone()),
-                    )
-                })
-                .child(
-                    div()
-                        .text_color(rgb(self.theme.muted))
-                        .child(member.role.clone()),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(self.theme.muted))
-                        .child(member.status.clone()),
-                );
-            if let Some(pane) = member.pane.as_ref().filter(|pane| pane.verified()) {
-                let focus = TeamAction::FocusWorker { pane: pane.clone() };
-                row = row.child(self.action_button(
-                    SharedString::from(format!("team-focus-{index}")),
-                    fl!("team-action-focus"),
-                    focus,
-                    cx,
-                ));
-            } else if member.pane.is_some() {
-                row = row.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(self.theme.muted))
-                        .child(fl!("team-roster-session-unavailable")),
-                );
-            }
-            if !member.supervisor
-                && let Some(team_id) = self.snapshot.team_id.as_ref()
-            {
-                let select = TeamAction::SelectSupervisor {
-                    team_id: team_id.clone(),
-                    member_id: member.member_id.clone(),
-                };
-                row = row.child(self.action_button(
-                    SharedString::from(format!("team-supervisor-{index}")),
-                    fl!("team-action-select-supervisor"),
-                    select,
-                    cx,
-                ));
-            }
-            rows = rows.child(row);
-        }
-        rows
-    }
-
-    fn render_add_worker(&self, cx: &mut Context<Self>) -> Div {
-        let name = self.worker_name.read(cx).text().to_owned();
-        let mut body = div().flex().flex_col().gap_1();
-        body = body.child(
-            div()
-                .text_size(px(16.))
-                .child(fl!("team-action-add-worker")),
-        );
-        body = body.child(self.worker_name.clone());
-        for candidate in self
-            .snapshot
-            .pane_candidates
-            .iter()
-            .take(MAX_VISIBLE_CANDIDATES)
-        {
-            if !name.trim().is_empty()
-                && candidate.identity.verified()
-                && let Some(team_id) = self.snapshot.team_id.as_ref()
-            {
-                body = body.child(self.candidate_button(
-                    candidate,
-                    fl!("team-action-add"),
-                    TeamAction::AddWorker {
-                        team_id: team_id.clone(),
-                        name: name.clone(),
-                        pane: candidate.identity.clone(),
-                    },
-                    cx,
-                ));
-            }
-        }
-        body
-    }
-
-    fn render_posts(&self, cx: &mut Context<Self>) -> Div {
-        let mut body = div().flex().flex_col().gap_2();
-        if self.snapshot.posts.is_empty() {
-            return body.child(
-                div()
-                    .text_color(rgb(self.theme.muted))
-                    .child(fl!("team-posts-empty")),
-            );
-        }
-        for post in self.snapshot.posts.iter().take(MAX_VISIBLE_POSTS) {
-            let post_id = post.id.clone();
-            let mut deliveries = String::new();
-            for (index, (_, recipient, state)) in post.deliveries.iter().enumerate() {
-                if index > 0 {
-                    deliveries.push_str(" · ");
-                }
-                let status = match state {
-                    super::model::DeliveryState::Pending => fl!("team-delivery-pending"),
-                    super::model::DeliveryState::Acknowledged => {
-                        fl!("team-delivery-acknowledged")
-                    }
-                };
-                deliveries.push_str(&fl!(
-                    "team-delivery-recipient-status",
-                    recipient = recipient.as_ref(),
-                    status = status
-                ));
-            }
-            if post.deliveries.is_empty() {
-                deliveries.push_str(&fl!("team-delivery-unavailable"));
-            }
-            body = body.child(
-                div()
-                    .id(SharedString::from(format!("team-post-{}", post.id)))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_3()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(self.theme.surface))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(post.author.clone()),
-                    )
-                    .when_some(post.reply_to.as_ref(), |card, _| {
-                        card.child(
-                            div().text_color(rgb(self.theme.muted)).child(
-                                post.reply_to_author
-                                    .clone()
-                                    .map(|author| fl!("team-reply-to", author = author.as_ref()))
-                                    .unwrap_or_else(|| fl!("team-action-reply")),
-                            ),
-                        )
-                    })
-                    .child(div().child(post.body.clone()))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(self.theme.muted))
-                            .child(deliveries),
-                    )
-                    .when(self.snapshot.post_author.is_some(), |post_card| {
-                        post_card.child(
-                            div()
-                                .id(SharedString::from(format!("team-reply-{}", post.id)))
-                                .px_3()
-                                .py_1()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(self.theme.active))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(fl!("team-action-reply"))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.reply_to = Some(post_id.clone());
-                                    let focus = this.post_body.read(cx).focus.clone();
-                                    window.focus(&focus, cx);
-                                    cx.notify();
-                                })),
-                        )
-                    }),
             );
         }
         body
@@ -547,13 +478,21 @@ impl Render for TeamView {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .gap_4()
-            .p_4()
+            .gap_3()
+            .p_3()
             .overflow_y_scroll()
             .bg(rgb(theme.background))
             .text_color(rgb(theme.foreground));
         if let Some(warning) = self.action_warning.as_ref() {
-            body = body.child(div().text_color(rgb(theme.muted)).child(warning.clone()));
+            body = body.child(
+                div()
+                    .p_2()
+                    .rounded(px(crate::config::corners::CONTROL))
+                    .bg(rgb(theme.surface))
+                    .text_size(px(12.))
+                    .text_color(rgb(theme.muted))
+                    .child(warning.clone()),
+            );
         }
         match &self.snapshot.state {
             TeamLoadState::Loading => {
@@ -574,85 +513,155 @@ impl Render for TeamView {
             return body.child(div().child(fl!("team-error-id-missing")));
         };
         let team_id = team_id.clone();
-        body = body.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().flex_1().text_size(px(21.)).child(team_name.clone()))
-                .child(self.action_button(
-                    "team-switch",
-                    fl!("team-action-switch"),
-                    TeamAction::SwitchTeamView,
-                    cx,
-                ))
-                .child(
-                    div()
-                        .text_color(rgb(theme.muted))
-                        .child(fl!("sidebar-activity-team")),
-                ),
-        );
+        let current_team_name = team_name.to_string();
+
+        let mut header_card = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .rounded(px(crate::config::corners::CONTROL))
+            .bg(rgb(theme.surface))
+            .border_1()
+            .border_color(rgb(theme.active))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(17.))
+                            .child(team_name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("team-rename-toggle")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(crate::config::corners::CONTROL))
+                                    .bg(rgb(theme.active))
+                                    .text_size(px(11.))
+                                    .cursor_pointer()
+                                    .role(Role::Button)
+                                    .child(fl!("team-action-rename"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.editing_member_id = None;
+                                        this.editing_team_name = !this.editing_team_name;
+                                        if this.editing_team_name {
+                                            let current = current_team_name.clone();
+                                            this.rename_input.update(cx, |i, cx| {
+                                                i.set_text_at(&current, current.len(), cx)
+                                            });
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(self.action_button(
+                                "team-toggle-pause",
+                                if self.snapshot.paused {
+                                    fl!("team-action-resume")
+                                } else {
+                                    fl!("team-action-pause")
+                                },
+                                TeamAction::TogglePauseTeam,
+                                cx,
+                            ))
+                            .child(self.action_button(
+                                "team-toggle-bulletin",
+                                if self.snapshot.bulletin_open {
+                                    fl!("team-action-hide-bulletin")
+                                } else {
+                                    fl!("team-action-toggle-bulletin")
+                                },
+                                TeamAction::ToggleBulletinSidebar,
+                                cx,
+                            ))
+                            .child(self.action_button(
+                                "team-switch",
+                                fl!("team-action-switch"),
+                                TeamAction::SwitchTeamView,
+                                cx,
+                            ))
+                            .child(self.action_button(
+                                "team-delete",
+                                fl!("team-action-delete-team"),
+                                TeamAction::DeleteTeam {
+                                    team_id: team_id.clone(),
+                                },
+                                cx,
+                            )),
+                    ),
+            );
+
+        if self.editing_team_name {
+            let team_id_save = team_id.clone();
+            header_card = header_card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().child(self.rename_input.clone()))
+                    .child(
+                        div()
+                            .id("team-rename-save")
+                            .px_2()
+                            .py_1()
+                            .rounded(px(crate::config::corners::CONTROL))
+                            .bg(rgb(theme.active))
+                            .text_size(px(11.))
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child(fl!("team-action-save"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let name = this.rename_input.read(cx).text().trim().to_owned();
+                                if name.is_empty() {
+                                    return;
+                                }
+                                this.editing_team_name = false;
+                                this.rename_input.update(cx, |i, cx| i.clear(cx));
+                                cx.emit(TeamAction::RenameTeam {
+                                    team_id: team_id_save.clone(),
+                                    name,
+                                });
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("team-rename-cancel")
+                            .px_2()
+                            .py_1()
+                            .rounded(px(crate::config::corners::CONTROL))
+                            .bg(rgb(theme.background))
+                            .text_size(px(11.))
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child(fl!("team-action-cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.editing_team_name = false;
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+
+        body = body.child(header_card);
+        body = body.child(self.render_status_banner());
         body = body.child(self.render_goal(&team_id, cx));
-        body = body.child(if self.snapshot.members.is_empty() {
-            div()
-                .text_color(rgb(theme.muted))
-                .child(fl!("team-roster-empty"))
-        } else {
-            self.render_roster(cx)
-        });
-        body = body.child(self.render_add_worker(cx));
+        body = body.child(self.render_roster(&team_id, cx));
         body = body.child(self.render_tasks(&team_id, cx));
         body = body.child(self.render_findings(&team_id, cx));
-        body = body.child(div().text_size(px(16.)).child(fl!("team-bulletin")));
-        body = body.child(self.render_posts(cx));
-        if let Some((author, author_label)) = self.snapshot.post_author.as_ref() {
-            let author = author.clone();
-            body = body
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(theme.muted))
-                        .child(fl!("team-posting-as", author = author_label.as_ref())),
-                )
-                .child(self.post_body.clone())
-                .child(
-                    div()
-                        .id("team-post-submit")
-                        .px_3()
-                        .py_1()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(if self.reply_to.is_some() {
-                            fl!("team-action-send-reply")
-                        } else {
-                            fl!("team-action-post")
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let body = this.post_body.read(cx).text().trim().to_owned();
-                            if body.is_empty() {
-                                return;
-                            }
-                            let action = match this.reply_to.clone() {
-                                Some(reply_to) => TeamAction::Reply {
-                                    team_id: team_id.clone(),
-                                    author: author.clone(),
-                                    reply_to,
-                                    body,
-                                },
-                                None => TeamAction::Post {
-                                    team_id: team_id.clone(),
-                                    author: author.clone(),
-                                    body,
-                                },
-                            };
-                            this.reply_to = None;
-                            this.post_body.update(cx, |input, cx| input.clear(cx));
-                            cx.emit(action);
-                        })),
-                );
-        }
         body
     }
 }

@@ -23,6 +23,13 @@ const QUEUE_CAPACITY: usize = 16;
 
 pub(crate) enum Operation {
     SaveTeam(Team),
+    DeleteTeam {
+        team_id: String,
+    },
+    RemoveMember {
+        team_id: String,
+        member_id: String,
+    },
     SetGoal {
         team_id: String,
         goal: String,
@@ -47,6 +54,14 @@ pub(crate) enum Operation {
         brief: String,
         assignee: Option<String>,
     },
+    UpdateTask {
+        task_id: String,
+        team_id: String,
+        actor: Author,
+        title: String,
+        brief: String,
+        assignee: Option<String>,
+    },
     CompleteTask {
         task_id: String,
         team_id: String,
@@ -57,6 +72,13 @@ pub(crate) enum Operation {
         task_id: String,
         team_id: String,
         actor: Author,
+    },
+    ImportGithubIssue {
+        task_id: String,
+        team_id: String,
+        creator: Author,
+        issue_ref: String,
+        as_goal: bool,
     },
     AddFinding {
         finding_id: String,
@@ -214,6 +236,8 @@ pub(crate) enum Error {
     Stopped,
     #[error("The proven caller session is not a member of this team")]
     NotMember,
+    #[error("{0}")]
+    External(String),
     #[error("The team store failed")]
     Store(#[source] Arc<team_store::Error>),
 }
@@ -325,11 +349,15 @@ fn run(path: PathBuf, queue: Receiver<Job>) {
         let mutation = matches!(
             &job.operation,
             Operation::SaveTeam(_)
+                | Operation::DeleteTeam { .. }
+                | Operation::RemoveMember { .. }
                 | Operation::SetGoal { .. }
                 | Operation::AddPost { .. }
                 | Operation::CreateTask { .. }
+                | Operation::UpdateTask { .. }
                 | Operation::CompleteTask { .. }
                 | Operation::CancelTask { .. }
+                | Operation::ImportGithubIssue { .. }
                 | Operation::AddFinding { .. }
                 | Operation::Scoped {
                     action: ScopedAction::Register { .. }
@@ -362,6 +390,14 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
     let reply = match operation {
         Operation::SaveTeam(team) => {
             store.save_team(&team)?;
+            Reply::Saved
+        }
+        Operation::DeleteTeam { team_id } => {
+            store.delete_team(&team_id)?;
+            Reply::Saved
+        }
+        Operation::RemoveMember { team_id, member_id } => {
+            store.remove_member(&team_id, &member_id)?;
             Reply::Saved
         }
         Operation::SetGoal { team_id, goal } => {
@@ -407,6 +443,24 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             )?;
             Reply::Saved
         }
+        Operation::UpdateTask {
+            task_id,
+            team_id,
+            actor,
+            title,
+            brief,
+            assignee,
+        } => {
+            store.update_task(
+                &team_id,
+                &task_id,
+                &actor,
+                &title,
+                &brief,
+                assignee.as_deref(),
+            )?;
+            Reply::Saved
+        }
         Operation::CompleteTask {
             task_id,
             team_id,
@@ -422,6 +476,16 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             actor,
         } => {
             store.cancel_task(&team_id, &task_id, &actor)?;
+            Reply::Saved
+        }
+        Operation::ImportGithubIssue {
+            task_id,
+            team_id,
+            creator,
+            issue_ref,
+            as_goal,
+        } => {
+            import_github_issue(store, &team_id, &task_id, &creator, &issue_ref, as_goal)?;
             Reply::Saved
         }
         Operation::AddFinding {
@@ -454,6 +518,76 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
         } => scoped(store, &team_id, &caller, action)?,
     };
     Ok(reply)
+}
+
+fn import_github_issue(
+    store: &mut TeamStore,
+    team_id: &str,
+    task_id: &str,
+    creator: &Author,
+    issue_ref: &str,
+    as_goal: bool,
+) -> Result<(), Error> {
+    let raw = issue_ref.trim();
+    if raw.is_empty() {
+        return Err(Error::External("Issue reference must not be empty".into()));
+    }
+    let mut cmd = herdr_client::new_command("gh");
+    cmd.arg("issue").arg("view");
+    if let Some((repo, num)) = raw.split_once('#')
+        && !repo.trim().is_empty()
+    {
+        cmd.arg(num.trim()).arg("--repo").arg(repo.trim());
+    } else {
+        cmd.arg(raw.trim_start_matches('#'));
+    }
+    cmd.args(["--json", "number,title,body,url"]);
+    let output = cmd
+        .output()
+        .map_err(|e| Error::External(format!("Failed to run `gh issue view`: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(Error::External(if stderr.is_empty() {
+            "gh issue view failed".into()
+        } else {
+            stderr
+        }));
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| Error::External(format!("Invalid JSON from `gh issue view`: {e}")))?;
+    let number = parsed["number"].as_u64().unwrap_or(0);
+    let title = parsed["title"].as_str().unwrap_or("Issue").trim();
+    let body = parsed["body"].as_str().unwrap_or("").trim();
+    let url = parsed["url"].as_str().unwrap_or("").trim();
+    let heading = if number > 0 {
+        format!("#{number}: {title}")
+    } else {
+        title.to_owned()
+    };
+    let mut details = String::new();
+    if !url.is_empty() {
+        details.push_str(url);
+    }
+    if !body.is_empty() {
+        if !details.is_empty() {
+            details.push_str("\n\n");
+        }
+        details.push_str(body);
+    }
+    if details.len() > 8000 {
+        details.truncate(details.floor_char_boundary(8000));
+    }
+    if as_goal {
+        let goal = if details.is_empty() {
+            heading
+        } else {
+            format!("{heading} — {details}")
+        };
+        store.set_team_goal(team_id, &goal)?;
+    } else {
+        store.create_task(task_id, team_id, creator, &heading, &details, None)?;
+    }
+    Ok(())
 }
 
 /// Pages are bounded; a team with more than `MAX_SCANNED_POSTS` posts shows

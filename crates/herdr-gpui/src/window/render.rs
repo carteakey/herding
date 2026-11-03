@@ -778,8 +778,10 @@ impl Render for HerdrWindow {
             groups.push(self.render_group(slot, body, ends, reach, window, cx));
         }
         let content = self.render_groups(groups, cx);
-        let content =
-            section.unwrap_or_else(|| self.with_mod_panel(self.zen_column(content), window, cx));
+        let content = section.unwrap_or_else(|| {
+            let main = self.with_mod_panel(self.zen_column(content), window, cx);
+            self.with_team_bulletin_panel(main, window, cx)
+        });
         // Not `||`: asking forgets group motion that has finished.
         if self.groups_moving()
             | self.tabs_growing()

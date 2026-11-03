@@ -47,6 +47,7 @@ pub(crate) struct TeamMember {
     pub(crate) pane: Option<PaneIdentity>,
     pub(crate) status: SharedString,
     pub(crate) supervisor: bool,
+    pub(crate) paused: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -54,7 +55,6 @@ pub(crate) struct TeamPost {
     pub(crate) id: String,
     pub(crate) author: SharedString,
     pub(crate) body: SharedString,
-    pub(crate) reply_to: Option<String>,
     pub(crate) reply_to_author: Option<SharedString>,
     pub(crate) deliveries: Vec<(String, SharedString, DeliveryState)>,
 }
@@ -111,6 +111,10 @@ pub(crate) struct TeamSnapshot {
     /// An explicit model identity allowed to author posts. `None` hides the
     /// composer; the view never invents an agent or human author.
     pub(crate) post_author: Option<(Author, SharedString)>,
+    pub(crate) bulletin_open: bool,
+    pub(crate) paused: bool,
+    pub(crate) queued_count: usize,
+    pub(crate) last_activity: Option<SharedString>,
 }
 
 impl Default for TeamSnapshot {
@@ -128,6 +132,10 @@ impl Default for TeamSnapshot {
             tasks: Vec::new(),
             findings: Vec::new(),
             post_author: None,
+            bulletin_open: true,
+            paused: false,
+            queued_count: 0,
+            last_activity: None,
         }
     }
 }

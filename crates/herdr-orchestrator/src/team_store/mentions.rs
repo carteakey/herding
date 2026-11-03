@@ -38,6 +38,55 @@ impl TeamStore {
         Ok(())
     }
 
+    pub fn delete_team(&mut self, team_id: &str) -> Result<()> {
+        validate("team_id", team_id, MAX_ID_BYTES)?;
+        let changed = self
+            .db
+            .execute("DELETE FROM teams WHERE team_id = ?1", [team_id])?;
+        if changed == 0 {
+            return Err(Error::TeamNotFound(team_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn remove_member(&mut self, team_id: &str, member_id: &str) -> Result<()> {
+        validate("team_id", team_id, MAX_ID_BYTES)?;
+        validate("member_id", member_id, MAX_ID_BYTES)?;
+        let tx = self.db.transaction()?;
+        let supervisor_id: Option<String> = tx
+            .query_row(
+                "SELECT supervisor_id FROM teams WHERE team_id = ?1",
+                [team_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(supervisor_id) = supervisor_id else {
+            return Err(Error::TeamNotFound(team_id.to_owned()));
+        };
+        if supervisor_id == member_id {
+            return Err(Error::Invalid {
+                field: "supervisor cannot be removed",
+                max: 1,
+            });
+        }
+        tx.execute(
+            "UPDATE tasks SET assignee_id = NULL WHERE team_id = ?1 AND assignee_id = ?2",
+            params![team_id, member_id],
+        )?;
+        let changed = tx.execute(
+            "DELETE FROM members WHERE team_id = ?1 AND member_id = ?2",
+            params![team_id, member_id],
+        )?;
+        if changed == 0 {
+            return Err(Error::MemberNotInTeam {
+                team_id: team_id.to_owned(),
+                member_id: member_id.to_owned(),
+            });
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn team_goal(&self, team_id: &str) -> Result<Option<String>> {
         validate("team_id", team_id, MAX_ID_BYTES)?;
         Ok(self

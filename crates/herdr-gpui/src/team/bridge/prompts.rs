@@ -2,6 +2,7 @@ use super::{PaneCandidate, REFRESH, TeamAction, roster, status_label};
 use crate::{HerdrWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
 use gpui::Context;
 use herdr_orchestrator::team_store::{Task, Team};
+use std::time::Instant;
 
 impl HerdrWindow {
     /// Sessions this window can prove: native ACP chats, verified CLI bindings,
@@ -107,14 +108,37 @@ impl HerdrWindow {
         {
             bridge.refresh(&team_id);
         }
+        // The bounded periodic supervisor check: only the shown team, only
+        // unseen results, at most one attempt per SUPERVISOR_FALLBACK.
+        if shown && let Some(wake) = self.team_bridge.supervisor_fallback_due(Instant::now()) {
+            let team_id = wake.team_id.clone();
+            let outcome = self.enqueue_or_dispatch_team_prompt(
+                Some(team_id.as_str()),
+                &wake.pane_id,
+                wake.prompt,
+                wake.summary,
+                cx,
+            );
+            if matches!(outcome, PromptOutcome::Sent | PromptOutcome::Held) {
+                self.team_bridge
+                    .mark_supervisor_woken(&team_id, wake.signals);
+            }
+        }
         for agent in spawn_agents {
             self.start_chat_or_flash(agent, cx);
         }
         if split_pane {
             self.split_team_pane(cx);
         }
+        let current_team = self.team_bridge.current_team_id().map(ToOwned::to_owned);
         for (pane_id, prompt, summary) in prompts {
-            self.enqueue_or_dispatch_team_prompt(&pane_id, prompt, summary, cx);
+            self.enqueue_or_dispatch_team_prompt(
+                current_team.as_deref(),
+                &pane_id,
+                prompt,
+                summary,
+                cx,
+            );
         }
         let identities: Vec<_> = candidates.iter().map(|c| c.identity.clone()).collect();
         let focus = focus.filter(|pane| {
@@ -153,46 +177,78 @@ impl HerdrWindow {
 
     pub(crate) fn enqueue_or_dispatch_team_prompt(
         &mut self,
+        team_id: Option<&str>,
         pane_id: &str,
         prompt: String,
         summary: String,
         cx: &mut Context<Self>,
-    ) {
-        let team_id = self.team_bridge.selected.clone().unwrap_or_default();
-        if self.team_bridge.is_pane_paused(pane_id) {
-            self.team_bridge
-                .enqueue_prompt(team_id, pane_id.to_owned(), prompt, summary);
+    ) -> PromptOutcome {
+        let team_id = team_id
+            .or_else(|| self.team_bridge.current_team_id())
+            .unwrap_or_default();
+        if self.team_bridge.is_pane_paused_for_team(team_id, pane_id) {
+            self.team_bridge.enqueue_prompt(
+                team_id.to_owned(),
+                pane_id.to_owned(),
+                prompt,
+                summary,
+            );
             let held = self.team_bridge.queued_count();
             self.team_bridge.last_activity =
                 Some(format!("Held prompt for paused pane {pane_id} ({held} queued)").into());
             self.team_bridge.dirty = true;
-        } else {
-            self.dispatch_team_prompt(pane_id, prompt, cx);
-            self.team_bridge.last_activity = Some(summary.into());
-            self.team_bridge.dirty = true;
+            return PromptOutcome::Held;
         }
+        let outcome = self.dispatch_team_prompt(pane_id, prompt, cx);
+        self.team_bridge.last_activity = Some(
+            match outcome {
+                PromptOutcome::Sent => summary,
+                PromptOutcome::Held => summary,
+                PromptOutcome::Unavailable => format!(
+                    "{summary}: not delivered, no reachable agent in {pane_id}; work stays pending"
+                ),
+                PromptOutcome::Failed => format!(
+                    "{summary}: not delivered, the agent refused the prompt; work stays pending"
+                ),
+            }
+            .into(),
+        );
+        self.team_bridge.dirty = true;
+        outcome
     }
 
-    fn dispatch_team_prompt(&mut self, pane_id: &str, prompt: String, cx: &mut Context<Self>) {
+    fn dispatch_team_prompt(
+        &mut self,
+        pane_id: &str,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) -> PromptOutcome {
         if let Some(chat) = self.chats.pane_mut(pane_id)
             && chat.target.existing.is_none()
             && !chat.session.transcript().read_only
         {
-            let _ = chat.send(herdr_chat_protocol::Command::Prompt {
-                text: prompt,
-                attachments: Vec::new(),
-            });
-            return;
+            return chat
+                .send(herdr_chat_protocol::Command::Prompt {
+                    text: prompt,
+                    attachments: Vec::new(),
+                })
+                .map_or(PromptOutcome::Failed, |_| PromptOutcome::Sent);
         }
         if self.endpoints.is_empty() {
-            return;
+            return PromptOutcome::Unavailable;
         }
         let target = crate::browser::FeedbackKey {
             scope: crate::browser::scope(&self.endpoints[self.selected_endpoint]),
             pane_id: pane_id.to_owned(),
         };
-        let _ = self.deliver_notes(Some(target), prompt, None, None, cx);
+        let outcome = match self.deliver_notes(Some(target), prompt, None, None, cx) {
+            crate::agent_notes::Delivered::Agent => PromptOutcome::Sent,
+            crate::agent_notes::Delivered::Kept | crate::agent_notes::Delivered::Copy(_) => {
+                PromptOutcome::Unavailable
+            }
+        };
         self.poll_deliveries(cx);
+        outcome
     }
 
     fn split_team_pane(&mut self, cx: &mut Context<Self>) {
@@ -264,7 +320,7 @@ fn prompts_for_team_action(
             vec![(
                 supervisor.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You are the Supervisor of team \"{}\". Strictly supervise: decompose the goal into tasks, assign tasks to workers, review findings, and coordinate via the bulletin rather than doing implementation work yourself. Run `{cli} status` to get your TEAM_ID, `{cli} roster <TEAM_ID>` to inspect workers, `{cli} task list <TEAM_ID>` to manage tasks, and `{cli} bulletin list <TEAM_ID>` to read messages.",
+                    "[Herdr Team] You are the Supervisor of team \"{}\". Strictly supervise: decompose the goal into tasks, assign tasks to workers, review findings, and coordinate via the bulletin rather than doing implementation work yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status` to get your TEAM_ID, `{cli} roster <TEAM_ID>` to inspect workers, `{cli} task list <TEAM_ID>` to manage tasks, and `{cli} bulletin list <TEAM_ID>` to read messages.",
                     name.trim()
                 ),
                 format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
@@ -294,7 +350,7 @@ fn prompts_for_team_action(
             vec![(
                 pane.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Run `{cli} status {team_id}` to view the goal, `{cli} task list {team_id}` to claim open tasks (`{cli} task claim {team_id} <TASK_ID>`), and `{cli} bulletin list {team_id}` to read messages.",
+                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}` to view the goal, `{cli} task list {team_id}` to claim open tasks (`{cli} task claim {team_id} <TASK_ID>`), and `{cli} bulletin list {team_id}` to read messages.",
                     name.trim()
                 ),
                 format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
@@ -334,7 +390,7 @@ fn prompts_for_team_action(
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Strictly supervise: delegate tasks to workers, review their findings, and coordinate via the bulletin rather than implementing tasks yourself. Run `{cli} status {team_id}`, `{cli} roster {team_id}`, and `{cli} task list {team_id}`.",
+                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Strictly supervise: delegate tasks to workers, review their findings, and coordinate via the bulletin rather than implementing tasks yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}`, `{cli} roster {team_id}`, and `{cli} task list {team_id}`.",
                             m.display_name, team.name
                         ),
                         format!("Promoted {} to supervisor ({pane_id})", m.display_name),
@@ -491,6 +547,43 @@ fn prompts_for_team_action(
     }
 }
 
+/// What actually happened to a dispatched team prompt, so activity lines
+/// never claim a delivery that did not reach an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PromptOutcome {
+    /// Sent to the agent now, or queued by the delivery machinery for when it
+    /// is idle.
+    Sent,
+    /// Held in the bridge queue for a paused team or member.
+    Held,
+    /// No reachable agent in the pane; the text was kept, not injected.
+    Unavailable,
+    /// The agent or chat refused the prompt.
+    Failed,
+}
+
+/// Caps a stored result to what fits in a wake prompt.
+pub(crate) fn excerpt(text: &str) -> String {
+    let trimmed = text.trim();
+    const LIMIT: usize = 240;
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_owned();
+    }
+    let cut: String = trimmed.chars().take(LIMIT).collect();
+    format!("{cut}...")
+}
+
+/// Dedupe key for a supervisor result wake: one stored task state, so a
+/// re-opened task wakes again while unchanged state never does.
+pub(crate) fn wake_signal(task: &Task) -> String {
+    format!(
+        "{}|{}|{}",
+        task.task_id,
+        task.status.as_str(),
+        task.updated_at.timestamp_millis()
+    )
+}
+
 fn resolve_assignee_pane(team: &Team, assignee: Option<&str>) -> Option<String> {
     let target = assignee?.trim();
     if target.is_empty() {
@@ -512,7 +605,7 @@ fn supervisor_pane_id(team: &Team) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use herdr_orchestrator::team_store::{Author, Member, SessionTarget};
+    use herdr_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskStatus};
 
     fn test_team() -> Team {
         Team {
@@ -617,5 +710,45 @@ mod tests {
         };
         let prompts = prompts_for_team_action(&action, Some(&team), &[]);
         assert_eq!(prompts.len(), 0);
+    }
+
+    fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH)
+    }
+
+    fn signal_task(status: TaskStatus) -> Task {
+        Task {
+            task_id: "task1".into(),
+            team_id: "t1".into(),
+            creator: Author::Human {
+                user_id: "human".into(),
+            },
+            title: "Write report".into(),
+            brief: String::new(),
+            assignee: None,
+            status,
+            blocker_reason: None,
+            result: None,
+            created_at: at(0),
+            updated_at: at(10),
+        }
+    }
+
+    #[test]
+    fn excerpt_caps_long_results() {
+        let long = "x".repeat(500);
+        assert_eq!(excerpt(&long).chars().count(), 243);
+        assert!(excerpt(&long).ends_with("..."));
+        assert_eq!(excerpt("  short  "), "short");
+    }
+
+    #[test]
+    fn wake_signal_tracks_status_and_revision() {
+        let mut task = signal_task(TaskStatus::Done);
+        let first = wake_signal(&task);
+        task.updated_at = at(11);
+        assert_ne!(wake_signal(&task), first, "a re-done task wakes again");
+        task.status = TaskStatus::Open;
+        assert_ne!(wake_signal(&task), first, "a reopened task wakes again");
     }
 }

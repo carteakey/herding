@@ -213,6 +213,7 @@ pub(crate) enum Reply {
     ScopedTask {
         team: Team,
         task: Task,
+        actor: Author,
     },
     ScopedFindings {
         team: Team,
@@ -779,28 +780,52 @@ fn scoped(
                 &brief,
                 assignee_id.as_deref(),
             )?;
-            Reply::ScopedTask { team, task }
+            Reply::ScopedTask {
+                team,
+                task,
+                actor: actor.clone(),
+            }
         }
         ScopedAction::TaskAssign { task_id, assignee } => {
             let assignee_id = team_store::resolve_member_ref(&team, &assignee)?;
             let task = store.assign_task(team_id, &task_id, &actor, &assignee_id)?;
-            Reply::ScopedTask { team, task }
+            Reply::ScopedTask {
+                team,
+                task,
+                actor: actor.clone(),
+            }
         }
         ScopedAction::TaskClaim { task_id } => {
             let task = store.claim_task(team_id, &task_id, &member_id)?;
-            Reply::ScopedTask { team, task }
+            Reply::ScopedTask {
+                team,
+                task,
+                actor: actor.clone(),
+            }
         }
         ScopedAction::TaskBlock { task_id, reason } => {
             let task = store.block_task(team_id, &task_id, &actor, &reason)?;
-            Reply::ScopedTask { team, task }
+            Reply::ScopedTask {
+                team,
+                task,
+                actor: actor.clone(),
+            }
         }
         ScopedAction::TaskComplete { task_id, result } => {
             let task = store.complete_task(team_id, &task_id, &actor, &result)?;
-            Reply::ScopedTask { team, task }
+            Reply::ScopedTask {
+                team,
+                task,
+                actor: actor.clone(),
+            }
         }
         ScopedAction::TaskCancel { task_id } => {
             let task = store.cancel_task(team_id, &task_id, &actor)?;
-            Reply::ScopedTask { team, task }
+            Reply::ScopedTask {
+                team,
+                task,
+                actor: actor.clone(),
+            }
         }
         ScopedAction::FindingList => Reply::ScopedFindings {
             findings: store.findings(team_id, team_store::MAX_PAGE_SIZE)?,

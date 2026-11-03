@@ -3,10 +3,7 @@
 //! blocks; storage runs on the worker threads behind [`Service`].
 use super::{
     TeamAction,
-    model::{
-        DeliveryState, PaneCandidate, PaneIdentity, TeamChoice, TeamFinding, TeamLoadState,
-        TeamMember, TeamPost, TeamSnapshot, TeamTask,
-    },
+    model::{PaneCandidate, PaneIdentity, TeamChoice, TeamLoadState, TeamSnapshot},
 };
 use crate::{
     control::server::{
@@ -16,22 +13,26 @@ use crate::{
     i18n::fl,
 };
 use gpui::SharedString;
-use herdr_client::protocol::AgentStatus;
-use herdr_orchestrator::team_store::{
-    self, Author, Finding, MAX_MEMBERS, Member, RecipientStatus, SessionTarget, Task, Team,
-};
+use herdr_orchestrator::team_store::{self, Author, Finding, MAX_MEMBERS, Task, TaskStatus, Team};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
 };
 
 pub(crate) mod prompts;
+mod views;
+pub(super) use views::*;
 
 const REFRESH: Duration = Duration::from_secs(2);
 const TEAM_PAGE: usize = 50;
 const POST_LIMIT: usize = 200;
-/// The one human author. Agents are authors only through the control socket.
-const HUMAN_ID: &str = "human";
+/// How often the periodic supervisor catch-up may attempt a wake. It only
+/// fires on stored results no wake has covered, so a quiet team is silent.
+pub(crate) const SUPERVISOR_FALLBACK: Duration = Duration::from_secs(600);
+/// Oldest wake signals fall off once the ledger outgrows this.
+const WAKE_LEDGER_CAPACITY: usize = 512;
+/// Results listed in one catch-up prompt before "(and N more)".
+const WAKE_LIST_LIMIT: usize = 8;
 
 enum Pending {
     Teams {
@@ -68,8 +69,22 @@ pub(crate) struct Bridge {
     paused_teams: HashSet<String>,
     paused_members: HashSet<String>,
     queued_prompts: Vec<QueuedPrompt>,
+    /// Stored results each team's supervisor has been woken about, keyed by
+    /// team id. Window-local: after a restart the fallback may repeat one
+    /// catch-up, which is bounded and rarely wrong to want.
+    supervisor_wakes: HashMap<String, VecDeque<String>>,
+    last_fallback: Option<Instant>,
     last_activity: Option<SharedString>,
     dirty: bool,
+}
+
+/// A pending catch-up dispatch for the selected team's supervisor.
+pub(super) struct SupervisorWake {
+    pub(super) team_id: String,
+    pub(super) pane_id: String,
+    pub(super) prompt: String,
+    pub(super) summary: String,
+    pub(super) signals: Vec<String>,
 }
 
 pub(crate) const PAUSE_QUEUE_CAPACITY: usize = 64;
@@ -91,22 +106,37 @@ impl Bridge {
         !self.bulletin_closed
     }
 
-    pub(super) fn is_team_paused(&self) -> bool {
-        self.selected
+    pub(super) fn current_team_id(&self) -> Option<&str> {
+        self.team
             .as_ref()
+            .map(|t| t.team_id.as_str())
+            .or(self.selected.as_deref())
+    }
+
+    pub(super) fn is_team_paused(&self) -> bool {
+        self.current_team_id()
             .is_some_and(|id| self.paused_teams.contains(id))
     }
 
-    pub(super) fn is_pane_paused(&self, pane_id: &str) -> bool {
-        if self.is_team_paused() {
+    pub(super) fn is_team_id_paused(&self, team_id: &str) -> bool {
+        self.paused_teams.contains(team_id)
+    }
+
+    pub(super) fn is_pane_paused_for_team(&self, team_id: &str, pane_id: &str) -> bool {
+        if self.is_team_id_paused(team_id) {
             return true;
         }
         let Some(team) = self.team.as_ref() else {
             return false;
         };
-        roster(team).any(|m| {
-            m.target.pane.as_deref() == Some(pane_id) && self.paused_members.contains(&m.member_id)
-        })
+        if team.team_id == team_id {
+            roster(team).any(|m| {
+                m.target.pane.as_deref() == Some(pane_id)
+                    && self.paused_members.contains(&m.member_id)
+            })
+        } else {
+            false
+        }
     }
 
     pub(super) fn enqueue_prompt(
@@ -128,11 +158,11 @@ impl Bridge {
     }
 
     pub(super) fn queued_count(&self) -> usize {
-        match self.team.as_ref() {
-            Some(t) => self
+        match self.current_team_id() {
+            Some(team_id) => self
                 .queued_prompts
                 .iter()
-                .filter(|p| p.team_id == t.team_id)
+                .filter(|p| p.team_id == team_id)
                 .count(),
             None => self.queued_prompts.len(),
         }
@@ -165,6 +195,99 @@ impl Bridge {
         }
         self.queued_prompts = held;
         ready
+    }
+
+    /// Whether this stored result has already been woken for the team's
+    /// supervisor (by an event or the fallback).
+    pub(crate) fn wake_seen(&self, team_id: &str, signal: &str) -> bool {
+        self.supervisor_wakes
+            .get(team_id)
+            .is_some_and(|ledger| ledger.iter().any(|seen| seen == signal))
+    }
+
+    /// Records that a wake reached the supervisor (or is held for it), so
+    /// neither the event path nor the fallback repeats it. Unavailable or
+    /// failed dispatches are not recorded: the work stays pending.
+    pub(crate) fn mark_supervisor_woken(
+        &mut self,
+        team_id: &str,
+        signals: impl IntoIterator<Item = impl AsRef<str>>,
+    ) {
+        let ledger = self.supervisor_wakes.entry(team_id.to_owned()).or_default();
+        for signal in signals {
+            let signal = signal.as_ref();
+            if ledger.iter().any(|seen| seen == signal) {
+                continue;
+            }
+            if ledger.len() >= WAKE_LEDGER_CAPACITY {
+                ledger.pop_front();
+            }
+            ledger.push_back(signal.to_owned());
+        }
+    }
+
+    /// The periodic check behind supervisor follow-through: at most one
+    /// attempt per [`SUPERVISOR_FALLBACK`], only for the selected team, and
+    /// only while stored task results exist that no wake has covered. A
+    /// paused team, an empty backlog, and a fully reviewed board all return
+    /// `None`, so completed and blocked goals stop unattended activity. A
+    /// supervisor without a pane is reported honestly instead of woken.
+    pub(super) fn supervisor_fallback_due(&mut self, now: Instant) -> Option<SupervisorWake> {
+        if self.is_team_paused()
+            || self
+                .last_fallback
+                .is_some_and(|at| now.duration_since(at) < SUPERVISOR_FALLBACK)
+        {
+            return None;
+        }
+        self.last_fallback = Some(now);
+        let team = self.team.as_ref()?;
+        let team_id = team.team_id.clone();
+        let unseen: Vec<(String, String)> = self
+            .tasks
+            .iter()
+            .filter(|task| matches!(task.status, TaskStatus::Done | TaskStatus::Blocked))
+            .filter(|task| !self.wake_seen(&team_id, &prompts::wake_signal(task)))
+            .map(|task| {
+                let mut label = format!("\"{}\" ({})", task.title, task.status.as_str());
+                if let Some(reason) = task.blocker_reason.as_deref() {
+                    label.push_str(&format!(": {}", prompts::excerpt(reason)));
+                }
+                (prompts::wake_signal(task), label)
+            })
+            .collect();
+        if unseen.is_empty() {
+            return None;
+        }
+        let Some(pane_id) = team.supervisor.target.pane.clone() else {
+            self.last_activity = Some(
+                format!(
+                    "Supervisor has no pane; {} stored result(s) pending on the board",
+                    unseen.len()
+                )
+                .into(),
+            );
+            self.dirty = true;
+            return None;
+        };
+        let cli = prompts::team_cli_prefix(&pane_id, team.supervisor.target.workspace.as_deref());
+        let mut list = String::new();
+        for (_, label) in unseen.iter().take(WAKE_LIST_LIMIT) {
+            list.push_str(&format!(" {label};"));
+        }
+        if unseen.len() > WAKE_LIST_LIMIT {
+            list.push_str(&format!(" (and {} more);", unseen.len() - WAKE_LIST_LIMIT));
+        }
+        Some(SupervisorWake {
+            team_id: team_id.clone(),
+            pane_id,
+            prompt: format!(
+                "[Herdr Team] Supervisor catch-up for team {team_id}: {} stored task result(s) not yet reviewed:{list} Run `{cli} task list {team_id}` to review the board, take the next clear actions, then go idle. Do not poll or re-check for updates: further results will wake you, and if the goal is complete or nothing clear remains, stop.",
+                unseen.len()
+            ),
+            summary: format!("Sent supervisor catch-up ({} unseen)", unseen.len()),
+            signals: unseen.into_iter().map(|(signal, _)| signal).collect(),
+        })
     }
 
     pub(crate) fn mark_dirty(&mut self) {
@@ -676,7 +799,15 @@ impl Bridge {
                 self.dirty = true;
             }
             TeamAction::TogglePauseTeam => {
-                if let Some(team_id) = self.selected.as_ref().cloned() {
+                if let Some(team_id) = self
+                    .team
+                    .as_ref()
+                    .map(|t| t.team_id.clone())
+                    .or_else(|| self.selected.clone())
+                {
+                    if self.selected.is_none() {
+                        self.selected = Some(team_id.clone());
+                    }
                     let paused = if self.paused_teams.contains(&team_id) {
                         self.paused_teams.remove(&team_id);
                         false
@@ -778,7 +909,7 @@ impl Bridge {
         );
     }
 
-    fn snapshot(&self, candidates: &[PaneCandidate]) -> TeamSnapshot {
+    pub(crate) fn snapshot(&self, candidates: &[PaneCandidate]) -> TeamSnapshot {
         let state = match (&self.failure, self.started) {
             (Some(message), _) => TeamLoadState::Failed(message.clone()),
             (None, false) => TeamLoadState::Loading,
@@ -792,9 +923,9 @@ impl Bridge {
                     self.is_team_paused(),
                     &self.paused_members,
                 ),
-                self.view_posts(team),
-                self.view_tasks(team),
-                self.view_findings(team),
+                view_posts(team, &self.posts),
+                view_tasks(team, &self.tasks),
+                view_findings(team, &self.findings),
             ),
             None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
         };
@@ -819,176 +950,6 @@ impl Bridge {
             queued_count: self.queued_count(),
             last_activity: self.last_activity.clone(),
         }
-    }
-
-    fn view_posts(&self, team: &Team) -> Vec<TeamPost> {
-        let name = |id: &str| -> SharedString {
-            roster(team)
-                .find(|member| member.member_id == id)
-                .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
-                .into()
-        };
-        let author = |author: &Author| match author {
-            Author::Human { .. } => SharedString::from(fl!("team-author-human")),
-            Author::Member { member_id } => name(member_id),
-        };
-        self.posts
-            .iter()
-            .map(|(post, statuses)| TeamPost {
-                id: post.post_id.clone(),
-                author: author(&post.author),
-                body: post.body.clone().into(),
-                reply_to_author: post.reply_to.as_ref().and_then(|id| {
-                    self.posts
-                        .iter()
-                        .find(|(other, _)| other.post_id == *id)
-                        .map(|(other, _)| author(&other.author))
-                }),
-                deliveries: statuses
-                    .iter()
-                    .map(|(recipient, status)| {
-                        let state = match status {
-                            RecipientStatus::Pending => DeliveryState::Pending,
-                            RecipientStatus::Acknowledged(_) => DeliveryState::Acknowledged,
-                        };
-                        (recipient.clone(), name(recipient), state)
-                    })
-                    .collect(),
-            })
-            .collect()
-    }
-
-    fn view_tasks(&self, team: &Team) -> Vec<TeamTask> {
-        let name = |id: &str| -> SharedString {
-            roster(team)
-                .find(|member| member.member_id == id)
-                .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
-                .into()
-        };
-        self.tasks
-            .iter()
-            .map(|task| TeamTask {
-                id: task.task_id.clone(),
-                title: task.title.clone().into(),
-                brief: task.brief.clone().into(),
-                assignee: task.assignee.as_deref().map(name),
-                status: task.status,
-                blocker_reason: task.blocker_reason.clone().map(Into::into),
-                result: task.result.clone().map(Into::into),
-            })
-            .collect()
-    }
-
-    fn view_findings(&self, team: &Team) -> Vec<TeamFinding> {
-        let name = |id: &str| -> SharedString {
-            roster(team)
-                .find(|member| member.member_id == id)
-                .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
-                .into()
-        };
-        let author = |author: &Author| match author {
-            Author::Human { .. } => SharedString::from(fl!("team-author-human")),
-            Author::Member { member_id } => name(member_id),
-        };
-        self.findings
-            .iter()
-            .map(|finding| TeamFinding {
-                id: finding.finding_id.clone(),
-                author: author(&finding.author),
-                description: finding.description.clone().into(),
-                evidence: finding.evidence.clone().into(),
-                confidence: finding.confidence,
-                supersedes: finding.supersedes.clone(),
-            })
-            .collect()
-    }
-}
-
-fn human() -> Author {
-    Author::Human {
-        user_id: HUMAN_ID.to_owned(),
-    }
-}
-
-fn roster(team: &Team) -> impl Iterator<Item = &Member> {
-    std::iter::once(&team.supervisor).chain(team.members.iter())
-}
-
-fn member(name: &str, target: SessionTarget) -> Member {
-    Member {
-        member_id: uuid::Uuid::new_v4().to_string(),
-        display_name: name.to_owned(),
-        target,
-    }
-}
-
-fn target(pane: &PaneIdentity) -> Option<SessionTarget> {
-    Some(SessionTarget {
-        host: pane.daemon_id.clone(),
-        session: pane.session_id.clone().filter(|id| !id.trim().is_empty())?,
-        workspace: Some(pane.workspace_id.clone()),
-        pane: Some(pane.pane_id.clone()),
-    })
-}
-
-fn pane_of(member: &Member) -> Option<PaneIdentity> {
-    Some(PaneIdentity {
-        daemon_id: member.target.host.clone(),
-        session_id: Some(member.target.session.clone()),
-        workspace_id: member.target.workspace.clone()?,
-        pane_id: member.target.pane.clone()?,
-    })
-}
-
-fn members(
-    team: &Team,
-    candidates: &[PaneCandidate],
-    team_paused: bool,
-    paused_members: &HashSet<String>,
-) -> Vec<TeamMember> {
-    roster(team)
-        .map(|member| {
-            let pane = pane_of(member);
-            let matched = pane.as_ref().and_then(|pane| {
-                candidates.iter().find(|c| c.identity == *pane).or_else(|| {
-                    candidates
-                        .iter()
-                        .find(|c| c.identity.pane_id == pane.pane_id)
-                })
-            });
-            let live = matched.is_some();
-            let supervisor = member.member_id == team.supervisor.member_id;
-            TeamMember {
-                member_id: member.member_id.clone(),
-                name: member.display_name.clone().into(),
-                role: if supervisor {
-                    fl!("team-role-supervisor")
-                } else {
-                    fl!("team-role-worker")
-                }
-                .into(),
-                agent: matched.map(|c| c.agent.clone()).unwrap_or_default(),
-                pane: matched
-                    .map(|c| c.identity.clone())
-                    .or_else(|| pane.filter(|_| live)),
-                target_pane: pane_of(member),
-                status: matched
-                    .map(|c| c.status.clone())
-                    .unwrap_or_else(|| fl!("team-status-unavailable").into()),
-                supervisor,
-                paused: team_paused || paused_members.contains(&member.member_id),
-            }
-        })
-        .collect()
-}
-
-fn status_label(status: AgentStatus) -> SharedString {
-    match status {
-        AgentStatus::Idle => fl!("team-status-idle").into(),
-        AgentStatus::Working => fl!("team-status-working").into(),
-        AgentStatus::Blocked => fl!("team-status-blocked").into(),
-        AgentStatus::Done => fl!("team-status-done").into(),
-        AgentStatus::Unknown => fl!("team-status-live").into(),
     }
 }
 

@@ -356,10 +356,14 @@ fn prompts_for_scoped_reply(reply: &Reply) -> Vec<(String, String, String)> {
                 .filter(|m| post.mentions.contains(&m.member_id))
                 .filter_map(|m| {
                     let pane_id = m.target.pane.clone()?;
+                    let cli = crate::team::bridge::prompts::team_cli_prefix(
+                        &pane_id,
+                        m.target.workspace.as_deref(),
+                    );
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] @{}: new bulletin from {author_name} in team {team_id} (msg {}): \"{}\". Run `herdr-gpui team bulletin ack {team_id} {}` to acknowledge and `herdr-gpui team bulletin post {team_id} --reply-to {} \"...\"` to reply.",
+                            "[Herdr Team] @{}: new bulletin from {author_name} in team {team_id} (msg {}): \"{}\". Run `{cli} bulletin ack {team_id} {}` to acknowledge and `{cli} bulletin post {team_id} --reply-to {} \"...\"` to reply.",
                             m.display_name, post.post_id, post.body, post.post_id, post.post_id
                         ),
                         format!("{author_name} mentioned @{} ({pane_id})", m.display_name),
@@ -377,10 +381,14 @@ fn prompts_for_scoped_reply(reply: &Reply) -> Vec<(String, String, String)> {
                 .find(|m| m.member_id == assignee_id)
                 .and_then(|m| {
                     let pane_id = m.target.pane.clone()?;
+                    let cli = crate::team::bridge::prompts::team_cli_prefix(
+                        &pane_id,
+                        m.target.workspace.as_deref(),
+                    );
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] Task assigned to {} in team {team_id}: {} (\"{}\"). Claim it with `herdr-gpui team task claim {team_id} {}` and complete it with `herdr-gpui team task complete {team_id} {} --result \"...\"`.",
+                            "[Herdr Team] Task assigned to {} in team {team_id}: {} (\"{}\"). Claim it with `{cli} task claim {team_id} {}` and complete it with `{cli} task complete {team_id} {} --result \"...\"`.",
                             m.display_name, task.task_id, task.title, task.task_id, task.task_id
                         ),
                         format!("Assigned task \"{}\" to {} ({pane_id})", task.title, m.display_name),

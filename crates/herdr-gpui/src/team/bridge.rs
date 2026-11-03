@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod prompts;
+pub(crate) mod prompts;
 
 const REFRESH: Duration = Duration::from_secs(2);
 const TEAM_PAGE: usize = 50;

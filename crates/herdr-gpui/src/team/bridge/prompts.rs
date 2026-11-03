@@ -230,6 +230,26 @@ impl HerdrWindow {
     }
 }
 
+pub(crate) fn team_cli_prefix(pane_id: &str, workspace_id: Option<&str>) -> String {
+    let bin = std::env::current_exe()
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "herdr-gpui".to_owned());
+    match workspace_id.filter(|w| !w.trim().is_empty()) {
+        Some(ws) => format!("{bin} --pane {pane_id} --workspace {ws} team"),
+        None => format!("{bin} --pane {pane_id} team"),
+    }
+}
+
+fn cli_for_member(team: Option<&Team>, pane_id: &str) -> String {
+    let ws = team.and_then(|t| {
+        roster(t)
+            .find(|m| m.target.pane.as_deref() == Some(pane_id))
+            .and_then(|m| m.target.workspace.as_deref())
+    });
+    team_cli_prefix(pane_id, ws)
+}
+
 fn prompts_for_team_action(
     action: &TeamAction,
     team: Option<&Team>,
@@ -237,10 +257,11 @@ fn prompts_for_team_action(
 ) -> Vec<(String, String, String)> {
     match action {
         TeamAction::CreateTeam { name, supervisor } if !name.trim().is_empty() => {
+            let cli = team_cli_prefix(&supervisor.pane_id, Some(&supervisor.workspace_id));
             vec![(
                 supervisor.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You are now the Supervisor of team \"{}\". Run `herdr-gpui team status` to get your TEAM_ID, `herdr-gpui team task list <TEAM_ID>` to check tasks, and `herdr-gpui team bulletin list <TEAM_ID>` to read messages.",
+                    "[Herdr Team] You are the Supervisor of team \"{}\". Strictly supervise: decompose the goal into tasks, assign tasks to workers, review findings, and coordinate via the bulletin rather than doing implementation work yourself. Run `{cli} status` to get your TEAM_ID, `{cli} roster <TEAM_ID>` to inspect workers, `{cli} task list <TEAM_ID>` to manage tasks, and `{cli} bulletin list <TEAM_ID>` to read messages.",
                     name.trim()
                 ),
                 format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
@@ -250,10 +271,11 @@ fn prompts_for_team_action(
             .and_then(supervisor_pane_id)
             .into_iter()
             .map(|pane_id| {
+                let cli = cli_for_member(team, &pane_id);
                 (
                     pane_id.clone(),
                     format!(
-                        "[Herdr Team] Team goal set for {team_id}: \"{}\". Run `herdr-gpui team status {team_id}`, break down work with `herdr-gpui team task create {team_id} --title \"...\"`, and coordinate with teammates via `herdr-gpui team bulletin post {team_id} \"...\"`.",
+                        "[Herdr Team] Team goal set for {team_id}: \"{}\". As Supervisor, do not implement everything yourself — break this goal into concrete tasks with `{cli} task create {team_id} --title \"...\" --assign <worker>`, delegate to workers, and coordinate via `{cli} bulletin post {team_id} \"...\"`.",
                         goal.trim()
                     ),
                     format!("Sent updated goal to supervisor ({pane_id})"),
@@ -265,10 +287,11 @@ fn prompts_for_team_action(
             name,
             pane,
         } if !name.trim().is_empty() => {
+            let cli = team_cli_prefix(&pane.pane_id, Some(&pane.workspace_id));
             vec![(
                 pane.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Run `herdr-gpui team status {team_id}` to view the goal, `herdr-gpui team task list {team_id}` to claim open tasks (`herdr-gpui team task claim {team_id} <TASK_ID>`), and `herdr-gpui team bulletin list {team_id}` to read messages.",
+                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Run `{cli} status {team_id}` to view the goal, `{cli} task list {team_id}` to claim open tasks (`{cli} task claim {team_id} <TASK_ID>`), and `{cli} bulletin list {team_id}` to read messages.",
                     name.trim()
                 ),
                 format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
@@ -283,10 +306,11 @@ fn prompts_for_team_action(
                 .find(|m| m.member_id == *member_id)
                 .and_then(|m| {
                     let pane_id = m.target.pane.clone()?;
+                    let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] Status check for {} in team {team_id}: please run `herdr-gpui team status {team_id}`, `herdr-gpui team task list {team_id}`, and `herdr-gpui team bulletin list {team_id}` to check active tasks and messages.",
+                            "[Herdr Team] Status check for {} in team {team_id}: please run `{cli} status {team_id}`, `{cli} task list {team_id}`, and `{cli} bulletin list {team_id}` to check active tasks and messages.",
                             m.display_name
                         ),
                         format!("Nudged {} ({pane_id})", m.display_name),
@@ -303,10 +327,11 @@ fn prompts_for_team_action(
                 .find(|m| m.member_id == *member_id)
                 .and_then(|m| {
                     let pane_id = m.target.pane.clone()?;
+                    let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Run `herdr-gpui team status {team_id}` and `herdr-gpui team task list {team_id}` to coordinate the team.",
+                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Strictly supervise: delegate tasks to workers, review their findings, and coordinate via the bulletin rather than implementing tasks yourself. Run `{cli} status {team_id}`, `{cli} roster {team_id}`, and `{cli} task list {team_id}`.",
                             m.display_name, team.name
                         ),
                         format!("Promoted {} to supervisor ({pane_id})", m.display_name),
@@ -333,10 +358,11 @@ fn prompts_for_team_action(
             target_pane
                 .into_iter()
                 .map(|pane_id| {
+                    let cli = cli_for_member(team, &pane_id);
                     (
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] New task in team {team_id}: \"{}\"{}. Run `herdr-gpui team task list {team_id}` to inspect it, `herdr-gpui team task claim {team_id} <TASK_ID>` to start working on it, and `herdr-gpui team task complete {team_id} <TASK_ID> --result \"...\"` when finished.",
+                            "[Herdr Team] New task in team {team_id}: \"{}\"{}. Run `{cli} task list {team_id}` to inspect it, `{cli} task claim {team_id} <TASK_ID>` to start working on it, and `{cli} task complete {team_id} <TASK_ID> --result \"...\"` when finished.",
                             title.trim(),
                             brief_part
                         ),
@@ -366,10 +392,11 @@ fn prompts_for_team_action(
             target_pane
                 .into_iter()
                 .map(|pane_id| {
+                    let cli = cli_for_member(Some(team), &pane_id);
                     (
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] Please work on task {} (\"{}\"){} in team {team_id}. Claim it with `herdr-gpui team task claim {team_id} {}` and complete it with `herdr-gpui team task complete {team_id} {} --result \"...\"`.",
+                            "[Herdr Team] Please work on task {} (\"{}\"){} in team {team_id}. Claim it with `{cli} task claim {team_id} {}` and complete it with `{cli} task complete {team_id} {} --result \"...\"`.",
                             task.task_id, task.title, brief_part, task.task_id, task.task_id
                         ),
                         format!("Sent task \"{}\" to {pane_id}", task.title),
@@ -384,16 +411,17 @@ fn prompts_for_team_action(
                 return Vec::new();
             };
             roster(team)
-                .filter_map(|m| m.target.pane.clone())
-                .map(|pane_id| {
-                    (
+                .filter_map(|m| {
+                    let pane_id = m.target.pane.clone()?;
+                    let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
+                    Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] New bulletin message in team {team_id}: \"{}\". Run `herdr-gpui team bulletin list {team_id}` to view and `herdr-gpui team bulletin post {team_id} \"...\"` to reply.",
+                            "[Herdr Team] New bulletin message in team {team_id}: \"{}\". Run `{cli} bulletin list {team_id}` to view and `{cli} bulletin post {team_id} \"...\"` to reply.",
                             body.trim()
                         ),
                         format!("Posted bulletin to team ({pane_id})"),
-                    )
+                    ))
                 })
                 .collect()
         }

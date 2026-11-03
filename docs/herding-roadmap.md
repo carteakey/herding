@@ -65,3 +65,60 @@ plan for completing the full feature.
 
 ### 3.4 Agent Skill & Supervisor Bootstrap
 - Update the managed skill documentation (`docs/cli.md` and `skills/herdr-gpui-browser/SKILL.md`) so supervisor and worker agents know how to discover their team (`herdr-gpui team status`), manage tasks (`team task ...`), exchange bulletin updates (`team bulletin ...`), and record evidence (`team finding ...`).
+
+---
+
+## 4. Phase D: Dual-Sidebar Workspace, Live Control Loop & QoL Upgrades (Completed)
+
+1. **Dual-Sidebar Layout (Left Team Board + Center Terminals + Right Bulletin Sidebar)**:
+   - **Left Sidebar (`ActivityPanel::Team`, ~380px)**: Renders Team Header, Live Status Banner (`X working · Y idle · Z active tasks · W pending` + `Last action:` ticker), Goal card, Agents roster, Task Board, and Findings beside live terminal/chat panes.
+   - **Right Sidebar (`HerdrWindow::with_team_bulletin_panel`, ~340px)**: Dedicated `team-bulletin-sidebar` with post/pending badges, per-recipient delivery status pills (`pending` / `acknowledged`), `@team` / `@supervisor` / `@member` quick-insert mention chips, reply banner, and sticky bottom composer.
+2. **Full Inline Rename, Edit, and Delete**:
+   - Rename or delete teams (`TeamStore::delete_team` cascading cleanup).
+   - Rename workers/supervisors inline (enforcing unique display names per team) and remove workers (`TeamStore::remove_member` unassigning open tasks).
+   - Edit Team Goal and Task title/brief/assignee (`TeamStore::update_task`) inline.
+3. **1-Click Session & Pane Spawning**:
+   - Quick-spawn bar (`+ Claude`, `+ Codex`, `+ Gemini`, `+ OpenCode`, `+ Split pane`) inside **Start a team** and **+ Add worker** so users can launch new ACP agent tabs or split terminal panes directly from the Team sidebar.
+4. **Pause / Resume with Queued Prompt Holding & Flushing**:
+   - Team-level (`TogglePauseTeam`) and per-agent (`TogglePauseMember`) pause controls.
+   - Outgoing prompts targeting paused panes are held in `Bridge::queued_prompts` (`Paused (N queued)`) and flushed automatically on **Resume**.
+5. **Local SQLite Task Engine + GitHub Issue (`#123`) Import**:
+   - `Operation::ImportGithubIssue` fetches issue metadata via `gh issue view` off the UI thread and creates a structured task or sets the Team Goal, keeping sub-millisecond atomic task claims local in SQLite.
+6. **Autonomous CLI-to-Pane Wakeups & Exact Binary/Pane Routing**:
+   - Every injected prompt includes `<current_exe> --pane <pane_id> --workspace <workspace_id> team ...` (`team_cli_prefix`) so both ACP chat sessions (`herdr-acp`) and terminal CLI sessions always invoke the active binary with verified pane/workspace identity.
+   - When a Supervisor or Worker creates/assigns a task or posts a `@mention` via CLI (`notify_team_mutation`), Herdr automatically wakes the assigned or mentioned agent's pane.
+
+---
+
+## 5. Phase E: Predefined Agent Roles & Role-Driven Herding (Next Evolution)
+
+Moving beyond a generic `Supervisor` + `Worker` task board, Herding should treat **Roles as first-class coordination contracts**:
+
+### 5.1 Strict Supervisor Discipline ("Supervisor Strictly Supervises")
+- **Rule**: The **Supervisor** must *never* become a bottleneck by writing implementation code or getting lost in deep file edits itself.
+- **Responsibilities**:
+  1. Decompose the Team Goal (or imported GitHub Issue) into scoped, verifiable tasks.
+  2. Match and assign tasks to specialized teammates (`--assign <member>`).
+  3. Monitor the Bulletin and Findings feed, unblock stuck workers, and request verification/reviews.
+  4. Synthesize findings and declare the goal complete only after Reviewer/QA verification passes.
+
+### 5.2 Predefined Specialized Agent Roles
+Instead of generic "Worker" slots, adding or spawning a teammate should let the user (or Supervisor) assign a **Predefined Role Preset** with tailored kickoff instructions, bulletin expectations, and workflow handoffs:
+
+| Role | Primary Responsibility | Output Artifact |
+| :--- | :--- | :--- |
+| **Supervisor** | Decomposes goals, assigns tasks, unblocks teammates, synthesizes results; does **not** write implementation code directly | Tasks, Assignments, Goal Synthesis |
+| **Architect / Planner** | Explores codebase architecture, identifies edge cases, proposes interfaces, and records design findings | High-confidence Architecture Findings & Sub-tasks |
+| **Implementer** | Claims assigned implementation tasks, writes code + unit tests in its pane/worktree, and reports completion results | Code changes + Task completion result |
+| **Reviewer / QA** | Reviews diffs, runs test suites/linters, verifies claims against evidence, and either approves or files blocker findings | Verification Findings (`high` confidence) or Blocker reports |
+| **Researcher / Explorer** | Investigates external docs, logs, or reproduction steps without modifying source files | Evidence-backed Findings (`--evidence`) |
+| **Debugger / Triager** | Reproduces bugs, isolates root causes, and posts minimal reproduction + fix proposals | Root-cause Finding + Fix Task |
+
+### 5.3 Role-Driven Workflow Pipelines
+- **Automatic Role Handoffs**:
+  - When an **Implementer** completes a task (`team task complete`), Herdr can automatically notify the **Reviewer / QA** role (or **Supervisor**) to verify the result before closing out the parent goal.
+  - When a **Researcher** or **Debugger** records a high-confidence finding (`team finding add`), the **Supervisor** is notified to turn that finding into an actionable implementation task.
+- **Schema & UI Integration**:
+  - Store `role_preset` (`supervisor`, `architect`, `implementer`, `reviewer`, `researcher`, `debugger`) on `team_members`.
+  - Display the role badge on each Agent Card and allow changing a member's role preset inline.
+  - Inject role-specific system instructions whenever an agent is spawned, added, or promoted.

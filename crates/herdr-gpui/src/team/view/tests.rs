@@ -127,3 +127,158 @@ fn expanding_a_finding_shows_the_full_description_below_the_row(cx: &mut TestApp
         "the full description should wrap onto its own lines: {full:?}"
     );
 }
+
+use crate::team::model::TeamPost;
+
+fn post(id: &str, author: &str, body: &str) -> TeamPost {
+    TeamPost {
+        id: id.into(),
+        author: author.into(),
+        body: body.into(),
+        reply_to_author: None,
+        deliveries: Vec::new(),
+    }
+}
+
+struct BulletinView {
+    window: Entity<HerdrWindow>,
+}
+
+impl BulletinView {
+    fn new(window: Entity<HerdrWindow>, cx: &mut Context<Self>) -> Self {
+        let team_view = window.read(cx).team_view.clone();
+        cx.observe(&team_view, |_, _, cx| cx.notify()).detach();
+        Self { window }
+    }
+}
+
+impl Render for BulletinView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window.update(cx, |window, cx| {
+            window.render_team_bulletin_sidebar(cx).into_any_element()
+        })
+    }
+}
+
+fn bulletin_fixture(
+    cx: &mut TestAppContext,
+    posts: Vec<TeamPost>,
+) -> (Entity<HerdrWindow>, &mut VisualTestContext) {
+    let mut herdr_window_entity = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let herdr = cx.new(|cx| {
+            let w = crate::sidebar::layout_tests::fixture_window(window, cx);
+            w.team_view.update(cx, |view, cx| {
+                view.snapshot = TeamSnapshot {
+                    state: TeamLoadState::Ready,
+                    team_id: Some("team-test".into()),
+                    team_name: Some("herding".into()),
+                    posts,
+                    ..TeamSnapshot::default()
+                };
+                cx.notify();
+            });
+            w
+        });
+        herdr_window_entity = Some(herdr.clone());
+        BulletinView::new(herdr, cx)
+    });
+    let window = herdr_window_entity.expect("window entity initialized");
+    (window, cx)
+}
+
+#[gpui::test]
+fn bulletin_clips_older_messages_and_toggles_expansion(cx: &mut TestAppContext) {
+    let posts: Vec<_> = (0..25)
+        .map(|i| post(&format!("p{i}"), "agent", &format!("Message number {i}")))
+        .collect();
+    let (window, cx) = bulletin_fixture(cx, posts);
+    cx.simulate_resize(size(px(600.), px(900.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("bulletin-show-earlier").is_some(),
+        "the 'Show older messages' button should be visible when posts exceed RECENT_POSTS_LIMIT"
+    );
+    assert!(
+        cx.debug_bounds("bulletin-post-0").is_none(),
+        "oldest post should be hidden by default"
+    );
+    assert!(
+        cx.debug_bounds("bulletin-post-24").is_some(),
+        "latest post should be visible"
+    );
+
+    window.update(cx, |this, cx| {
+        this.team_view.update(cx, |view, cx| {
+            view.bulletin_show_all = true;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("bulletin-collapse-earlier").is_some(),
+        "the 'Show recent messages only' button should appear when expanded"
+    );
+    assert!(
+        cx.debug_bounds("bulletin-post-0").is_some(),
+        "oldest post should now be visible"
+    );
+
+    window.update(cx, |this, cx| {
+        this.team_view.update(cx, |view, cx| {
+            view.bulletin_show_all = false;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("bulletin-show-earlier").is_some(),
+        "the 'Show older messages' button should be restored"
+    );
+    assert!(
+        cx.debug_bounds("bulletin-post-0").is_none(),
+        "oldest post should be hidden again"
+    );
+}
+
+#[gpui::test]
+fn bulletin_auto_scroll_following_and_jump_to_latest(cx: &mut TestAppContext) {
+    let posts: Vec<_> = (0..5)
+        .map(|i| post(&format!("p{i}"), "agent", &format!("Message number {i}")))
+        .collect();
+    let (window, cx) = bulletin_fixture(cx, posts);
+    cx.simulate_resize(size(px(600.), px(900.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    window.update(cx, |this, cx| {
+        let view = this.team_view.read(cx);
+        assert!(view.bulletin_following);
+    });
+    assert!(cx.debug_bounds("bulletin-jump-to-latest").is_none());
+
+    window.update(cx, |this, cx| {
+        this.team_view.update(cx, |view, cx| {
+            view.bulletin_following = false;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("bulletin-jump-to-latest").is_some(),
+        "'Jump to latest' button should appear when following is paused"
+    );
+
+    window.update(cx, |this, cx| {
+        this.team_view.update(cx, |view, cx| {
+            view.bulletin_following = true;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.debug_bounds("bulletin-jump-to-latest").is_none());
+}

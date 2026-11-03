@@ -4,6 +4,7 @@ use gpui::{prelude::*, *};
 
 const BULLETIN_WIDTH: f32 = 340.;
 const MIN_TERMINAL_WIDTH: f32 = 260.;
+pub(super) const RECENT_POSTS_LIMIT: usize = 20;
 
 impl HerdrWindow {
     pub(crate) fn push_team_action(&mut self, action: TeamAction, cx: &mut Context<Self>) {
@@ -51,7 +52,7 @@ impl HerdrWindow {
             .into_any_element()
     }
 
-    fn render_team_bulletin_sidebar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(crate) fn render_team_bulletin_sidebar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = &self.theme;
         let view = self.team_view.read(cx);
         let snapshot = &view.snapshot;
@@ -61,6 +62,9 @@ impl HerdrWindow {
         let post_author = snapshot.post_author.clone();
         let posts = snapshot.posts.clone();
         let members = snapshot.members.clone();
+        let bulletin_scroll = view.bulletin_scroll.clone();
+        let is_following = view.bulletin_following;
+        let show_all = view.bulletin_show_all;
 
         let pending_count: usize = posts
             .iter()
@@ -117,13 +121,28 @@ impl HerdrWindow {
 
         let mut feed = div()
             .id("team-bulletin-feed")
+            .track_scroll(&bulletin_scroll)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .p_3()
             .flex()
             .flex_col()
-            .gap_2();
+            .gap_2()
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let dy = match event.delta {
+                    ScrollDelta::Lines(delta) => delta.y,
+                    ScrollDelta::Pixels(delta) => f32::from(delta.y),
+                };
+                if dy > 0. {
+                    this.team_view.update(cx, |view, cx| {
+                        if view.bulletin_following {
+                            view.bulletin_following = false;
+                            cx.notify();
+                        }
+                    });
+                }
+            }));
 
         if posts.is_empty() {
             feed = feed.child(
@@ -136,10 +155,79 @@ impl HerdrWindow {
                     .child(fl!("team-posts-empty")),
             );
         } else {
-            for (idx, post) in posts.iter().take(MAX_VISIBLE_POSTS).enumerate() {
+            if posts.len() > RECENT_POSTS_LIMIT {
+                if !show_all {
+                    let hidden_count = posts.len() - RECENT_POSTS_LIMIT;
+                    feed = feed.child(
+                        div()
+                            .id("bulletin-show-earlier")
+                            .debug_selector(|| "bulletin-show-earlier".into())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .py_1()
+                            .px_2()
+                            .rounded(px(crate::config::corners::CONTROL))
+                            .bg(rgb(theme.surface))
+                            .border_1()
+                            .border_color(rgb(theme.active))
+                            .text_size(px(11.))
+                            .text_color(rgb(theme.muted))
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child(format!("Show older messages ({} earlier)", hidden_count))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.team_view.update(cx, |view, cx| {
+                                    view.bulletin_show_all = true;
+                                    cx.notify();
+                                });
+                            })),
+                    );
+                } else {
+                    feed = feed.child(
+                        div()
+                            .id("bulletin-collapse-earlier")
+                            .debug_selector(|| "bulletin-collapse-earlier".into())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .py_1()
+                            .px_2()
+                            .rounded(px(crate::config::corners::CONTROL))
+                            .bg(rgb(theme.surface))
+                            .border_1()
+                            .border_color(rgb(theme.active))
+                            .text_size(px(11.))
+                            .text_color(rgb(theme.muted))
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child("Show recent messages only")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.team_view.update(cx, |view, cx| {
+                                    view.bulletin_show_all = false;
+                                    cx.notify();
+                                });
+                            })),
+                    );
+                }
+            }
+
+            let (skip_count, visible_posts) = if !show_all && posts.len() > RECENT_POSTS_LIMIT {
+                let skip = posts.len() - RECENT_POSTS_LIMIT;
+                (skip, &posts[skip..])
+            } else {
+                let count = posts.len().min(MAX_VISIBLE_POSTS);
+                (0, &posts[..count])
+            };
+
+            for (i, post) in visible_posts.iter().enumerate() {
+                let idx = skip_count + i;
                 let post_id = post.id.clone();
                 let mut card = div()
                     .id(SharedString::from(format!("bulletin-post-{idx}")))
+                    .debug_selector(move || format!("bulletin-post-{idx}"))
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -275,6 +363,70 @@ impl HerdrWindow {
                     );
                 }
                 feed = feed.child(card);
+            }
+
+            if is_following {
+                let scroll_for_canvas = bulletin_scroll.clone();
+                feed = feed.child(
+                    canvas(
+                        move |_, window, _| {
+                            let max_y = scroll_for_canvas.max_offset().y;
+                            if max_y > px(0.) {
+                                let target = -max_y;
+                                let current = scroll_for_canvas.offset().y;
+                                let diff = target - current;
+                                if diff < px(-1.) {
+                                    if cfg!(test) {
+                                        scroll_for_canvas.set_offset(point(px(0.), target));
+                                    } else {
+                                        let remaining = f32::from(diff);
+                                        let step = (remaining * 0.35).min(-2.0);
+                                        let next =
+                                            (f32::from(current) + step).max(f32::from(target));
+                                        scroll_for_canvas.set_offset(point(px(0.), px(next)));
+                                        if next > f32::from(target) {
+                                            window.request_animation_frame();
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_0(),
+                );
+            } else {
+                feed = feed.child(
+                    div()
+                        .id("bulletin-jump-to-latest")
+                        .debug_selector(|| "bulletin-jump-to-latest".into())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .py_1()
+                        .px_3()
+                        .rounded(px(crate::config::corners::CONTROL))
+                        .bg(rgb(theme.active))
+                        .border_1()
+                        .border_color(rgb(theme.active))
+                        .text_size(px(11.))
+                        .text_color(rgb(theme.foreground))
+                        .cursor_pointer()
+                        .role(Role::Button)
+                        .child("Jump to latest ↓")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.team_view.update(cx, |view, cx| {
+                                view.bulletin_following = true;
+                                view.bulletin_scroll.set_offset(point(
+                                    px(0.),
+                                    -view.bulletin_scroll.max_offset().y,
+                                ));
+                                cx.notify();
+                            });
+                        })),
+                );
             }
         }
 

@@ -236,8 +236,8 @@ pub(crate) fn team_cli_prefix(pane_id: &str, workspace_id: Option<&str>) -> Stri
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "herdr-gpui".to_owned());
     match workspace_id.filter(|w| !w.trim().is_empty()) {
-        Some(ws) => format!("{bin} --pane {pane_id} --workspace {ws} team"),
-        None => format!("{bin} --pane {pane_id} team"),
+        Some(ws) => format!("HERDR_PANE_ID={pane_id} HERDR_WORKSPACE_ID={ws} {bin} team"),
+        None => format!("HERDR_PANE_ID={pane_id} {bin} team"),
     }
 }
 

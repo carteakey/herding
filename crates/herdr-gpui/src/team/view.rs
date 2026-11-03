@@ -144,6 +144,7 @@ pub(crate) struct TeamView {
     pub(super) issue_form_open: bool,
     pub(super) editing_task_id: Option<String>,
     pub(super) finding_form_open: bool,
+    pub(super) confirming_delete_team: bool,
     action_warning: Option<SharedString>,
     font: crate::config::FontConfig,
     pub(super) theme: Theme,
@@ -259,6 +260,7 @@ impl TeamView {
             issue_form_open: false,
             editing_task_id: None,
             finding_form_open: false,
+            confirming_delete_team: false,
             action_warning: None,
             font,
             theme,
@@ -303,6 +305,7 @@ impl TeamView {
             self.editing_member_id = None;
             self.editing_goal = false;
             self.editing_task_id = None;
+            self.confirming_delete_team = false;
             self.action_warning = None;
         } else if let Some(reply_to) = self.reply_to.as_ref()
             && !snapshot.posts.iter().any(|post| post.id == *reply_to)
@@ -594,14 +597,22 @@ impl Render for TeamView {
                                 TeamAction::SwitchTeamView,
                                 cx,
                             ))
-                            .child(self.action_button(
-                                "team-delete",
-                                fl!("team-action-delete-team"),
-                                TeamAction::DeleteTeam {
-                                    team_id: team_id.clone(),
-                                },
-                                cx,
-                            )),
+                            .child(
+                                div()
+                                    .id("team-delete")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(crate::config::corners::CONTROL))
+                                    .bg(rgb(theme.active))
+                                    .text_size(px(12.))
+                                    .cursor_pointer()
+                                    .role(Role::Button)
+                                    .child(fl!("team-action-delete-team"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.confirming_delete_team = !this.confirming_delete_team;
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             );
 
@@ -652,6 +663,74 @@ impl Render for TeamView {
                                 this.editing_team_name = false;
                                 cx.notify();
                             })),
+                    ),
+            );
+        }
+
+        if self.confirming_delete_team {
+            let team_id_del = team_id.clone();
+            let team_name_display = self.snapshot.team_name.clone().unwrap_or_default();
+            header_card = header_card.child(
+                div()
+                    .id("team-delete-confirm-banner")
+                    .p_3()
+                    .rounded(px(crate::config::corners::CONTROL))
+                    .bg(rgb(theme.surface))
+                    .border_1()
+                    .border_color(rgb(theme.active))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(theme.foreground))
+                            .child(fl!(
+                                "team-action-delete-confirm",
+                                team = team_name_display.as_ref()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("team-delete-confirm-btn")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(crate::config::corners::CONTROL))
+                                    .bg(rgb(theme.active))
+                                    .text_size(px(11.))
+                                    .text_color(rgb(theme.foreground))
+                                    .cursor_pointer()
+                                    .role(Role::Button)
+                                    .child(fl!("team-action-delete-permanently"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.confirming_delete_team = false;
+                                        cx.emit(TeamAction::DeleteTeam {
+                                            team_id: team_id_del.clone(),
+                                        });
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("team-delete-cancel-btn")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(crate::config::corners::CONTROL))
+                                    .bg(rgb(theme.background))
+                                    .text_size(px(11.))
+                                    .text_color(rgb(theme.muted))
+                                    .cursor_pointer()
+                                    .role(Role::Button)
+                                    .child(fl!("team-action-cancel"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirming_delete_team = false;
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             );
         }

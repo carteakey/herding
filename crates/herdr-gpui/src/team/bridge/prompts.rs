@@ -434,13 +434,42 @@ fn prompts_for_team_action(
                 })
                 .collect()
         }
-        TeamAction::Post { team_id, body, .. } | TeamAction::Reply { team_id, body, .. }
-            if !body.trim().is_empty() =>
-        {
+        TeamAction::Post {
+            team_id,
+            author,
+            body,
+            ..
+        }
+        | TeamAction::Reply {
+            team_id,
+            author,
+            body,
+            ..
+        } if !body.trim().is_empty() => {
             let Some(team) = team else {
                 return Vec::new();
             };
+            let recipients = match herdr_orchestrator::team_store::resolve_recipients(
+                team,
+                author,
+                &[],
+                body,
+            ) {
+                Ok(recipients) => recipients,
+                Err(_) => return Vec::new(),
+            };
             roster(team)
+                .filter(|m| match &recipients {
+                    herdr_orchestrator::team_store::Recipients::All => match author {
+                        herdr_orchestrator::team_store::Author::Member { member_id } => {
+                            m.member_id != *member_id
+                        }
+                        herdr_orchestrator::team_store::Author::Human { .. } => true,
+                    },
+                    herdr_orchestrator::team_store::Recipients::Explicit(ids) => {
+                        ids.contains(&m.member_id)
+                    }
+                })
                 .filter_map(|m| {
                     let pane_id = m.target.pane.clone()?;
                     let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
@@ -475,4 +504,115 @@ fn resolve_assignee_pane(team: &Team, assignee: Option<&str>) -> Option<String> 
 
 fn supervisor_pane_id(team: &Team) -> Option<String> {
     team.supervisor.target.pane.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use herdr_orchestrator::team_store::{Author, Member, SessionTarget};
+
+    fn test_team() -> Team {
+        Team {
+            team_id: "t1".into(),
+            name: "team1".into(),
+            supervisor: Member {
+                member_id: "m_sup".into(),
+                display_name: "supervisor".into(),
+                target: SessionTarget {
+                    host: "local".into(),
+                    session: "default".into(),
+                    workspace: Some("ws".into()),
+                    pane: Some("p_sup".into()),
+                },
+            },
+            members: vec![
+                Member {
+                    member_id: "m_w1".into(),
+                    display_name: "worker1".into(),
+                    target: SessionTarget {
+                        host: "local".into(),
+                        session: "default".into(),
+                        workspace: Some("ws".into()),
+                        pane: Some("p_w1".into()),
+                    },
+                },
+                Member {
+                    member_id: "m_w2".into(),
+                    display_name: "worker2".into(),
+                    target: SessionTarget {
+                        host: "local".into(),
+                        session: "default".into(),
+                        workspace: Some("ws".into()),
+                        pane: Some("p_w2".into()),
+                    },
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn bulletin_post_targets_only_mentioned_recipient() {
+        let team = test_team();
+        let action = TeamAction::Post {
+            team_id: "t1".into(),
+            author: Author::Human {
+                user_id: "human".into(),
+            },
+            body: "@worker1 please check this".into(),
+        };
+        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].0, "p_w1");
+        assert!(prompts[0].1.contains("@worker1 please check this"));
+    }
+
+    #[test]
+    fn bulletin_post_broadcasts_to_all_when_no_mention() {
+        let team = test_team();
+        let action = TeamAction::Post {
+            team_id: "t1".into(),
+            author: Author::Human {
+                user_id: "human".into(),
+            },
+            body: "Team sync in 5m".into(),
+        };
+        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
+        assert_eq!(prompts.len(), 3);
+        let panes: Vec<_> = prompts.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert!(panes.contains(&"p_sup"));
+        assert!(panes.contains(&"p_w1"));
+        assert!(panes.contains(&"p_w2"));
+    }
+
+    #[test]
+    fn bulletin_post_excludes_member_author_from_all_broadcast() {
+        let team = test_team();
+        let action = TeamAction::Post {
+            team_id: "t1".into(),
+            author: Author::Member {
+                member_id: "m_w1".into(),
+            },
+            body: "General update from w1".into(),
+        };
+        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
+        assert_eq!(prompts.len(), 2);
+        let panes: Vec<_> = prompts.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert!(panes.contains(&"p_sup"));
+        assert!(panes.contains(&"p_w2"));
+        assert!(!panes.contains(&"p_w1"));
+    }
+
+    #[test]
+    fn bulletin_post_with_invalid_mention_dispatches_to_none() {
+        let team = test_team();
+        let action = TeamAction::Post {
+            team_id: "t1".into(),
+            author: Author::Human {
+                user_id: "human".into(),
+            },
+            body: "@nonexistent_person check this".into(),
+        };
+        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
+        assert_eq!(prompts.len(), 0);
+    }
 }

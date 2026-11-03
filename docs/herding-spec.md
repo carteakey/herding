@@ -4,6 +4,9 @@ Status: draft, 2026-10-31. This describes the intended product, not features
 that are already implemented. **Herding** is the working project name;
 **Shepherd** is a proposed name for the supervisor role.
 
+For the full product, workflow, integration, and acceptance requirements, see
+[herding-detailed-spec.md](herding-detailed-spec.md).
+
 ## Purpose
 
 Give one capable agent a goal and let it coordinate a team of existing agents

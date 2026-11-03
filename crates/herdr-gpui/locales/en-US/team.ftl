@@ -1,0 +1,37 @@
+# The Team activity panel. Actions are requests to the app service; their
+# completion is shown only after a prepared snapshot arrives.
+team-error-not-connected = Team service is not connected to this window.
+team-loading = Loading team…
+team-create-title = Create a team
+team-action-load-more = Load more teams
+team-list-limit-reached = Showing the first { $count } teams. The service did not provide another page.
+team-field-name-placeholder = Team name
+team-field-worker-placeholder = Agent name
+team-field-post-placeholder = Write a bulletin post
+team-action-create-supervisor = Create with this supervisor
+team-candidate-no-session = Session identity unavailable; selection is disabled.
+team-candidates-empty = No pane candidates were supplied by the connected session.
+team-action-focus = Focus
+team-action-select-supervisor = Make supervisor
+team-roster-session-unavailable = Session identity unavailable; focus is disabled.
+team-roster-empty = No agents are registered in this team.
+team-action-add-worker = Add worker
+team-action-add = Add
+team-bulletin = Bulletin
+team-posts-empty = No bulletin posts yet.
+team-delivery-unavailable = Delivery status unavailable
+team-delivery-pending = pending
+team-delivery-acknowledged = acknowledged
+team-delivery-recipient-status = { $recipient }: { $status }
+team-reply-to = Reply to { $author }
+team-action-reply = Reply
+team-action-post = Post
+team-action-send-reply = Send reply
+team-posting-as = Posting as { $author }
+team-action-queue-full = Team action queue is full. Wait for it to clear before trying again.
+team-error-id-missing = Team identity is unavailable; actions are disabled.
+team-role-supervisor = Supervisor
+team-role-worker = Worker
+team-status-live = Live session
+team-status-unavailable = Session not attached
+team-author-human = You

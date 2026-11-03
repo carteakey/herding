@@ -68,7 +68,7 @@ Every command accepts:
 | `window detach\|reconnect` | Detach from, or reconnect to, the selected host |
 | `ui sidebar\|statusbar [on\|off\|toggle]` | For this window and session |
 | `ui font-size +\|-\|reset\|POINTS` | The terminal font size for this session |
-| `ui panel workspaces\|overview\|pull-requests\|issues\|security\|automations\|usage` | Show an activity bar section: Workspaces with the sidebar expanded, Overview of what needs you on every host, the focused workspace's pull requests or issues across the window, the vulnerability reports and Dependabot alerts of your repositories, every host's automation scripts and runs, or every host's plan usage |
+| `ui panel workspaces\|overview\|pull-requests\|issues\|security\|automations\|usage\|team` | Show an activity bar section: Workspaces with the sidebar expanded, Overview of what needs you on every host, the focused workspace's pull requests or issues across the window, the vulnerability reports and Dependabot alerts of your repositories, every host's automation scripts and runs, every host's plan usage, or Team |
 | `run COMMAND` | Any app command by its `[keybindings]` name, as the palette runs it |
 | `commands` | The names `run` accepts (no app needed) |
 | `open DIR` | Open a folder as **Open Project** in the palette does, starting the app if needed (below) |
@@ -135,6 +135,11 @@ and builds without embedded pages return exit 8. See [px0](../crates/herdr-gpui/
 | `chat [status]` | The `herdr-acp` chat panes of the window's host, this machine or an SSH host: agent, status, model, context window use, and whether the chat view or the terminal shows |
 | `chat show\|hide\|toggle [--pane ID]` | Show the native chat view over your pane (or ID, else the focused one), or its terminal |
 | `chat new AGENT [--pane ID]` | Open a tab running a `herdr-acp` chat with a built-in agent (`claude`, `codex`, `copilot`, `gemini`, `opencode`, `pi`) in the workspace and folder of your pane (or ID). On an SSH host the tab runs that host's `herdr-acp` (see [Chats on SSH hosts](#chats-on-ssh-hosts)). Exits 8 when `herdr-acp` is missing here, the host cannot be reached, or the agent is not installed on it (`herdr-acp agents` lists those that are) |
+| `team register TEAM_ID --name NAME` | Explicitly register this pane's current agent session with a team created in Herdr UI |
+| `team roster TEAM_ID` | List registered members of a team |
+| `team bulletin list TEAM_ID [--after SEQUENCE]` | Read a page of entries after a sequence cursor; each entry reports this member's delivery state |
+| `team bulletin post TEAM_ID [--reply-to MESSAGE_ID] [--mention MEMBER_ID]... TEXT...` | Post to the whole team or explicitly mention members; replies can point to an earlier entry |
+| `team bulletin ack TEAM_ID MESSAGE_ID` | Acknowledge an entry addressed to this member |
 
 ### Hosts
 

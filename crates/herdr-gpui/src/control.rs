@@ -7,7 +7,7 @@
 //! an SSH host has no path to this machine's socket.
 
 mod client;
-mod server;
+pub(crate) mod server;
 
 use crate::HerdrWindow;
 use crate::browser::Location;

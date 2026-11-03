@@ -28,6 +28,7 @@ pub mod review;
 pub mod service;
 mod ssh_slots;
 pub mod store;
+pub mod team_store;
 
 pub use actions::{Action, DispatchRequest};
 pub use error::{Error, Result};

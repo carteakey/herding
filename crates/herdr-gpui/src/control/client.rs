@@ -13,6 +13,7 @@ mod open;
 mod remote;
 mod settings;
 mod tabs;
+mod team;
 mod work;
 
 use super::{
@@ -443,6 +444,7 @@ pub(crate) fn run(invocation: Invocation) -> ExitCode {
         ControlCommand::Orchestrator(command) => tabs::orchestrator(command, &context),
         ControlCommand::Review => tabs::review(&context),
         ControlCommand::Chat(command) => chat::chat(command, &context),
+        ControlCommand::Team(command) => team::team(command, &context),
         ControlCommand::Px0 => tabs::px0(&context),
         ControlCommand::Notes(command) => work::notes(command, &context),
         ControlCommand::Feedback { wait } => browser::feedback(wait, &context),

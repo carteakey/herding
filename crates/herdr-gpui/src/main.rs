@@ -141,6 +141,7 @@ mod system_load;
 mod tab_layout;
 mod tab_menu;
 mod taskbar;
+mod team;
 mod teleport;
 mod terminal;
 mod terminal_notes;

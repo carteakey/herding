@@ -14,6 +14,7 @@ mod mod_apps;
 mod pulse;
 mod sections;
 mod startup_counts;
+mod team;
 mod toggle;
 
 fn item(native_id: &str, title: &str) -> Item {

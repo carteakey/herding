@@ -13,6 +13,9 @@ mod mods;
 mod remote;
 mod settings;
 mod tabs;
+mod team;
+pub(crate) mod team_service;
+pub(crate) mod team_worker;
 mod work;
 
 use super::{
@@ -116,6 +119,8 @@ fn deadline(wait: Duration, now: Instant) -> Instant {
 struct State {
     waiters: Vec<browser::Waiter>,
     watches: Watches,
+    /// Agent-facing team storage; `None` when the state directory is unusable.
+    team: Option<team_worker::Worker>,
 }
 
 fn not_found(message: impl Into<String>) -> Response {
@@ -246,6 +251,7 @@ fn named_window(request: &Request) -> Option<u64> {
         Request::Events(call) => call.caller.window,
         Request::Link(call) => call.caller.window,
         Request::Chat(call) => call.caller.window,
+        Request::Team(call) => call.caller.window,
         Request::Cloud(call) => call.caller.window,
         Request::Remote(call) => call.caller.window,
         Request::Mod(call) => call.caller.window,
@@ -262,6 +268,7 @@ fn serve(incoming: socket::Incoming, state: &mut State, cx: &mut App) {
             | Request::Events(_)
             | Request::Cloud(_)
             | Request::Remote(_)
+            | Request::Team(_)
     );
     if let Some(id) = named_window(&incoming.request)
         && !main_windows(cx)
@@ -295,9 +302,25 @@ fn serve(incoming: socket::Incoming, state: &mut State, cx: &mut App) {
         Request::Events(call) => events::serve(call, incoming, &mut state.watches, cx),
         Request::Link(call) => incoming.respond(links::serve(call, cx)),
         Request::Chat(call) => incoming.respond(chat::serve(call, cx)),
+        Request::Team(call) => {
+            team::serve(call, incoming, &mut state.watches, state.team.as_ref(), cx)
+        }
         Request::Cloud(call) => cloud::serve(call, incoming, &mut state.watches, cx),
         Request::Remote(call) => remote::serve(call, incoming, &mut state.watches, cx),
         Request::Mod(call) => incoming.respond(mods::serve(call, cx)),
+    }
+}
+
+fn start_team_worker() -> Option<team_worker::Worker> {
+    let path = herdr_client::local_path::state_dir()?
+        .join("team")
+        .join("team.sqlite3");
+    match team_worker::Worker::start(path) {
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            tracing::warn!(%error, "Team storage unavailable");
+            None
+        }
     }
 }
 
@@ -335,7 +358,10 @@ pub(crate) fn install(cx: &mut App) {
     .detach();
     let timer = cx.background_executor().clone();
     cx.spawn(async move |cx| {
-        let mut state = State::default();
+        let mut state = State {
+            team: start_team_worker(),
+            ..Default::default()
+        };
         loop {
             timer.timer(Duration::from_millis(50)).await;
             cx.update(|cx| {

@@ -3,6 +3,8 @@
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Team(#[from] crate::team_store::Error),
     #[error("No state directory is available for orchestrator state")]
     NoDataDirectory,
     #[error(transparent)]

@@ -54,6 +54,7 @@ fn label(panel: ActivityPanel) -> SharedString {
         ActivityPanel::Security => fl!("sidebar-activity-security"),
         ActivityPanel::Automations => fl!("sidebar-activity-automations"),
         ActivityPanel::Usage => fl!("sidebar-activity-usage"),
+        ActivityPanel::Team => fl!("sidebar-activity-team"),
     }
     .into()
 }
@@ -67,6 +68,7 @@ fn icon(panel: ActivityPanel) -> &'static str {
         ActivityPanel::Security => "icons/shield.svg",
         ActivityPanel::Automations => "icons/automations.svg",
         ActivityPanel::Usage => "icons/chart.svg",
+        ActivityPanel::Team => "icons/fan-out.svg",
     }
 }
 
@@ -335,6 +337,7 @@ impl HerdrWindow {
             ActivityPanel::Security => self.render_security_section(window, cx),
             ActivityPanel::Automations => self.render_automations_section(cx),
             ActivityPanel::Usage => self.render_usage_section(cx),
+            ActivityPanel::Team => self.render_team_section(cx),
             ActivityPanel::PullRequests | ActivityPanel::Issues => {
                 return self.render_orchestrator_section();
             }
@@ -719,5 +722,6 @@ fn panel_selector(panel: ActivityPanel) -> &'static str {
         ActivityPanel::Security => "activity-security",
         ActivityPanel::Automations => "activity-automations",
         ActivityPanel::Usage => "activity-usage",
+        ActivityPanel::Team => "activity-team",
     }
 }

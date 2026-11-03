@@ -106,6 +106,8 @@ pub(crate) struct HerdrWindow {
     pub(crate) _poll: Task<()>,
     pub(crate) _prefix_interceptor: Subscription,
     pub(crate) _sidebar_invalidation: Subscription,
+    /// Routes Team view intents to the service queue.
+    pub(crate) _team_events: Subscription,
     /// Clears `chrome_region` when the terminal takes focus back.
     pub(crate) _terminal_focus: Subscription,
     /// Lists again the tabs carried off to a window that closed.
@@ -373,6 +375,14 @@ pub(crate) struct HerdrWindow {
     pub(crate) system_load: crate::system_load::SystemLoad,
     /// A press on a tab that may lift it for reordering.
     pub(crate) tab_drag: Option<tab_drag::TabDrag>,
+    /// A visible warning when a full intent queue could not accept another action.
+    pub(crate) team_action_overflow: bool,
+    pub(crate) team_actions: std::collections::VecDeque<crate::team::TeamAction>,
+    /// Team mutations requested by the view, drained by the service owner.
+    /// Owns the Team service queue and the snapshot prepared from it.
+    pub(crate) team_bridge: crate::team::Bridge,
+    /// The event-driven Team panel and its prepared snapshot.
+    pub(crate) team_view: Entity<crate::team::TeamView>,
     /// A teleport being set up or under way; a move outlives its dialog.
     pub(crate) teleport: Option<crate::teleport::Teleport>,
     /// The workspace a finished teleport keeps steering to until focused.
@@ -585,6 +595,7 @@ impl HerdrWindow {
         self.ring_bell(window);
         self.poll_integrations(cx);
         self.poll_links(window, cx);
+        self.poll_team(cx);
         if self.settings.task.is_none() {
             let mut reload = false;
             for endpoint in &self.endpoints {

@@ -583,7 +583,26 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
     let mark_layer = cx.new(|cx| crate::mark_layer::MarkLayer::new(window, hosts, cx));
     let focus = cx.focus_handle();
     let terminal_focus = HerdrWindow::leave_region_with_terminal(&focus, window, cx);
+    let team_view = cx.new(|cx| {
+        crate::team::TeamView::new(
+            crate::config::Config::default().ui,
+            crate::config::Theme::default(),
+            cx,
+        )
+    });
+    let team_events = cx.subscribe(
+        &team_view,
+        |this, _, event: &crate::team::TeamAction, cx| {
+            if this.team_actions.len() < crate::team::ACTION_QUEUE_CAPACITY {
+                this.team_actions.push_back(event.clone());
+                cx.notify();
+            } else {
+                this.team_action_overflow = true;
+            }
+        },
+    );
     HerdrWindow {
+        _team_events: team_events,
         _terminal_focus: terminal_focus,
         chrome_region: None,
         chats: Default::default(),
@@ -649,6 +668,10 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         git_anchor: Default::default(),
         deliveries: Default::default(),
         terminal_notes: Default::default(),
+        team_action_overflow: false,
+        team_actions: Default::default(),
+        team_bridge: Default::default(),
+        team_view,
         notes_width: crate::panel_resize::NOTES,
         notice_overflow: Default::default(),
         review_files_width: crate::panel_resize::REVIEW_FILES,

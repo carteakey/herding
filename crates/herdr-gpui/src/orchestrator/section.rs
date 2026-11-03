@@ -196,6 +196,7 @@ pub(crate) fn list_of(section: ActivityPanel) -> Option<List> {
         | ActivityPanel::Security
         | ActivityPanel::Automations
         | ActivityPanel::Workspaces
-        | ActivityPanel::Usage => None,
+        | ActivityPanel::Usage
+        | ActivityPanel::Team => None,
     }
 }

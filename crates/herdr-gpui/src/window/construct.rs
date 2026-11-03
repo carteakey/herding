@@ -78,6 +78,8 @@ impl HerdrWindow {
             theme,
             error,
         } = appearance;
+        let team_view =
+            cx.new(|cx| crate::team::TeamView::new(config.ui.clone(), theme.clone(), cx));
         // Effects run here in a fixed order, so the fields below can stay sorted.
         let configured_terminal_size = config.terminal.size;
         let status_bar_visible = config.status_bar.show;
@@ -123,6 +125,23 @@ impl HerdrWindow {
         });
         let window_closed = Self::give_back_torn_tabs(cx);
         let terminal_focus = Self::leave_region_with_terminal(&focus, window, cx);
+        let team_events = cx.subscribe(
+            &team_view,
+            |this, _, event: &crate::team::TeamAction, cx| {
+                if this.team_actions.len() < crate::team::ACTION_QUEUE_CAPACITY {
+                    this.team_actions.push_back(event.clone());
+                } else {
+                    this.team_action_overflow = true;
+                    this.team_view.update(cx, |view, cx| {
+                        view.set_action_warning(
+                            Some(crate::i18n::fl!("team-action-queue-full").into()),
+                            cx,
+                        );
+                    });
+                }
+                cx.notify();
+            },
+        );
         let mut this = Self {
             // keep-sorted start
             _activation: activation,
@@ -133,6 +152,7 @@ impl HerdrWindow {
             _poll: poll,
             _prefix_interceptor: prefix_interceptor,
             _sidebar_invalidation: sidebar_invalidation,
+            _team_events: team_events,
             _terminal_focus: terminal_focus,
             _window_closed: window_closed,
             _worktree_notes: worktree_notes,
@@ -292,6 +312,10 @@ impl HerdrWindow {
             surface_signal,
             system_load: Default::default(),
             tab_drag: None,
+            team_action_overflow: false,
+            team_actions: Default::default(),
+            team_bridge: Default::default(),
+            team_view,
             teleport: None,
             teleport_follow: None,
             teleport_marks,

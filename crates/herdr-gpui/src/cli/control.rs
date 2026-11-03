@@ -12,6 +12,7 @@ mod mods;
 mod remote;
 mod settings;
 mod tabs;
+mod team;
 mod work;
 
 use super::CliError;
@@ -33,6 +34,7 @@ pub use settings::{
 };
 use std::ffi::OsString;
 pub use tabs::{CodeCommand, FileAt, Items, OrchestratorCommand, TabCommand};
+pub use team::TeamCommand;
 pub use work::{CheckpointCommand, FanOut, NotesCommand, WaitFor};
 
 /// What to do, and how the answer is printed.
@@ -67,6 +69,7 @@ pub enum ControlCommand {
     Orchestrator(OrchestratorCommand),
     Review,
     Chat(ChatCommand),
+    Team(TeamCommand),
     Px0,
     Notes(NotesCommand),
     /// Every kind of note the user sent this pane: page, review, terminal.
@@ -173,6 +176,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
         "chat",
         "Native views of herdr-acp chats: start one, list them, show or hide one",
     ),
+    ("team", "Agent team roster and bulletin coordination"),
     ("px0", "Open px0 on the caller's local checkout"),
     ("notes", "Notes kept on worktrees"),
     (
@@ -344,6 +348,7 @@ fn command(family: &'static str, args: &mut Args) -> Result<ControlCommand, CliE
             ControlCommand::Review
         }
         "chat" => ControlCommand::Chat(chat::chat(args)?),
+        "team" => ControlCommand::Team(team::team(args)?),
         "px0" => {
             tabs::open_only(args)?;
             ControlCommand::Px0

@@ -14,6 +14,8 @@ pub enum ActivityPanel {
     Security,
     Automations,
     Usage,
+    /// Team coordination. Appended to preserve the established declaration order.
+    Team,
 }
 
 impl ActivityPanel {
@@ -25,6 +27,7 @@ impl ActivityPanel {
         Self::Security,
         Self::Automations,
         Self::Usage,
+        Self::Team,
     ];
 
     /// The name the CLI and the preferences file use.
@@ -37,6 +40,7 @@ impl ActivityPanel {
             Self::Security => "security",
             Self::Automations => "automations",
             Self::Usage => "usage",
+            Self::Team => "team",
         }
     }
 

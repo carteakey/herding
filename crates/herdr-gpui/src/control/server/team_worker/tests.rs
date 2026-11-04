@@ -173,3 +173,123 @@ fn broadcast_is_resolved_by_the_store_and_excludes_member_author() {
     };
     worker.finish();
 }
+
+#[test]
+fn snapshot_batches_statuses_and_drops_departed_members() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("team").join("teams.sqlite");
+    let mut store = TeamStore::open(&path).unwrap();
+    store.save_team(&team()).unwrap();
+    let human = Author::Human {
+        user_id: "human".into(),
+    };
+    store
+        .add_post_with_recipients(
+            "p1",
+            "team-1",
+            &human,
+            None,
+            "one",
+            &Recipients::Explicit(vec!["member-2".into(), "member-1".into()]),
+        )
+        .unwrap();
+    store
+        .add_post_with_recipients("p2", "team-1", &human, None, "everybody", &Recipients::All)
+        .unwrap();
+    store
+        .add_post_with_recipients(
+            "p3",
+            "team-1",
+            &human,
+            None,
+            "for the departing member",
+            &Recipients::Explicit(vec!["member-2".into()]),
+        )
+        .unwrap();
+    store.acknowledge("p1", "member-1").unwrap();
+    store.acknowledge("p1", "member-2").unwrap();
+
+    store.remove_member("team-1", "member-2").unwrap();
+
+    let reply = execute(
+        &mut store,
+        Operation::Snapshot {
+            team_id: "team-1".into(),
+            limit: 50,
+        },
+    )
+    .unwrap();
+    let Reply::Snapshot { posts, .. } = reply else {
+        panic!("snapshot reply expected");
+    };
+    let statuses_of = |posts: &[PostDelivery], post_id: &str| {
+        posts
+            .iter()
+            .find(|(post, _)| post.post_id == post_id)
+            .map(|(_, statuses)| statuses.clone())
+            .unwrap_or_default()
+    };
+    // The member still in the team keeps its dated receipt, ordered by
+    // recipient id. The departed member's mention and acknowledgement rows
+    // were deleted with it (abb045ee), so the batched read returns none.
+    let p1 = statuses_of(&posts, "p1");
+    assert_eq!(p1.len(), 1, "only the remaining member's receipt");
+    assert_eq!(p1[0].0, "member-1");
+    assert!(
+        matches!(p1[0].1, RecipientStatus::Acknowledged(_)),
+        "the surviving receipt stays dated: {:?}",
+        p1[0].1
+    );
+    // A broadcast from a human mentions every member, so the member still in
+    // the team is still pending on it.
+    let p2 = statuses_of(&posts, "p2");
+    assert_eq!(p2, vec![("member-1".to_owned(), RecipientStatus::Pending)]);
+    // The departed member's only mention was on p3, and it is gone.
+    assert!(statuses_of(&posts, "p3").is_empty());
+}
+
+#[test]
+fn status_reports_pending_mentions_with_one_count_query() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("team").join("teams.sqlite");
+    let mut store = TeamStore::open(&path).unwrap();
+    store.save_team(&team()).unwrap();
+    let human = Author::Human {
+        user_id: "human".into(),
+    };
+    for index in 0..3 {
+        store
+            .add_post_with_recipients(
+                &format!("p{index}"),
+                "team-1",
+                &human,
+                None,
+                "please look",
+                &Recipients::Explicit(vec!["member-2".into()]),
+            )
+            .unwrap();
+    }
+    store.acknowledge("p0", "member-2").unwrap();
+
+    let reply = execute(
+        &mut store,
+        Operation::Scoped {
+            team_id: "team-1".into(),
+            caller: SessionTarget {
+                host: "local".into(),
+                session: "session-2".into(),
+                workspace: Some("workspace-2".into()),
+                pane: Some("pane-2".into()),
+            },
+            action: ScopedAction::Status { team_id: None },
+        },
+    )
+    .unwrap();
+    let Reply::ScopedStatus {
+        pending_mentions, ..
+    } = reply
+    else {
+        panic!("status reply expected");
+    };
+    assert_eq!(pending_mentions, 2, "three mentions, one acknowledged");
+}

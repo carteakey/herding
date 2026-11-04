@@ -370,3 +370,185 @@ fn explicit_duplicate_recipients_fail_and_team_list_is_bounded() {
         })
     ));
 }
+
+fn perf_member(id: &str) -> Member {
+    member(id, &format!("session-{id}"))
+}
+
+#[test]
+fn posts_page_batches_mentions_with_stable_pagination() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("team").join("team.sqlite3");
+    let mut store = TeamStore::open(&path).unwrap();
+    store
+        .save_team(&Team {
+            team_id: "team-a".into(),
+            name: "A team".into(),
+            supervisor: perf_member("lead"),
+            members: vec![perf_member("w1"), perf_member("w2")],
+        })
+        .unwrap();
+    let human = Author::Human {
+        user_id: "human".into(),
+    };
+    // Deterministic mention counts: no mentions, one, two, repeating.
+    for index in 0..250 {
+        let recipients = match index % 3 {
+            0 => Recipients::Explicit(vec![]),
+            1 => Recipients::Explicit(vec!["w1".into()]),
+            _ => Recipients::Explicit(vec!["w2".into(), "w1".into()]),
+        };
+        store
+            .add_post_with_recipients(
+                &format!("p{index:04}"),
+                "team-a",
+                &human,
+                None,
+                "body",
+                &recipients,
+            )
+            .unwrap();
+    }
+
+    // Pagination still counts posts, not join rows.
+    let mut cursor = 0i64;
+    let mut seen = Vec::new();
+    loop {
+        let page = store.posts("team-a", cursor, 100).unwrap();
+        let Some((last, _)) = page.last() else { break };
+        cursor = *last;
+        let full = page.len() == 100;
+        seen.extend(page.into_iter().map(|(_, post)| post));
+        if !full {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 250, "every post appears exactly once");
+    for (index, post) in seen.iter().enumerate() {
+        assert_eq!(post.post_id, format!("p{index:04}"));
+        let expected: Vec<String> = match index % 3 {
+            0 => vec![],
+            1 => vec!["w1".into()],
+            _ => vec!["w1".into(), "w2".into()],
+        };
+        assert_eq!(post.mentions, expected, "mentions sorted per post");
+    }
+
+    // The batched shape survives a reopen from disk.
+    drop(store);
+    let store = TeamStore::open(&path).unwrap();
+    let page = store.posts("team-a", 0, 2).unwrap();
+    assert_eq!(page.len(), 2);
+    assert!(page[0].1.mentions.is_empty());
+    assert_eq!(page[1].1.mentions, vec!["w1".to_owned()]);
+}
+
+#[test]
+fn batched_statuses_match_single_post_statuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("team").join("team.sqlite3");
+    let mut store = TeamStore::open(&path).unwrap();
+    store
+        .save_team(&Team {
+            team_id: "team-b".into(),
+            name: "B team".into(),
+            supervisor: perf_member("lead"),
+            members: vec![perf_member("w1"), perf_member("w2")],
+        })
+        .unwrap();
+    let human = Author::Human {
+        user_id: "human".into(),
+    };
+    for index in 0..600 {
+        store
+            .add_post_with_recipients(
+                &format!("p{index:04}"),
+                "team-b",
+                &human,
+                None,
+                "body",
+                &match index % 3 {
+                    0 => Recipients::Explicit(vec![]),
+                    1 => Recipients::Explicit(vec!["w1".into()]),
+                    _ => Recipients::Explicit(vec!["w1".into(), "w2".into()]),
+                },
+            )
+            .unwrap();
+    }
+    // Acknowledge every third mentionable post for w1.
+    for index in (0..600).step_by(3) {
+        let _ = store.acknowledge(&format!("p{index:04}"), "w1");
+    }
+
+    // 600 ids spans two STATUS_BATCH_CHUNKs.
+    let ids: Vec<String> = (0..600).map(|index| format!("p{index:04}")).collect();
+    let batched = store.recipient_statuses_for_posts(&ids).unwrap();
+    assert_eq!(batched.len(), 600, "every requested post has an entry");
+    for id in &ids {
+        let per_post = store.recipient_statuses(id).unwrap();
+        assert_eq!(&batched[id], &per_post, "parity for {id}");
+    }
+    // An empty request is an empty map, not an error.
+    assert!(store.recipient_statuses_for_posts(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn pending_mention_count_matches_the_old_scan_and_departures() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("team").join("team.sqlite3");
+    let mut store = TeamStore::open(&path).unwrap();
+    store
+        .save_team(&Team {
+            team_id: "team-c".into(),
+            name: "C team".into(),
+            supervisor: perf_member("lead"),
+            members: vec![perf_member("w1"), perf_member("w2")],
+        })
+        .unwrap();
+    let human = Author::Human {
+        user_id: "human".into(),
+    };
+    for index in 0..5 {
+        store
+            .add_post_with_recipients(
+                &format!("a{index}"),
+                "team-c",
+                &human,
+                None,
+                "for w1",
+                &Recipients::Explicit(vec!["w1".into()]),
+            )
+            .unwrap();
+    }
+    for index in 0..3 {
+        store
+            .add_post_with_recipients(
+                &format!("b{index}"),
+                "team-c",
+                &human,
+                None,
+                "for w2",
+                &Recipients::Explicit(vec!["w2".into()]),
+            )
+            .unwrap();
+    }
+    store
+        .add_post_with_recipients(
+            "c0",
+            "team-c",
+            &human,
+            None,
+            "no mentions",
+            &Recipients::Explicit(vec![]),
+        )
+        .unwrap();
+    store.acknowledge("a0", "w1").unwrap();
+    store.acknowledge("a1", "w1").unwrap();
+
+    assert_eq!(store.pending_mention_count("team-c", "w1").unwrap(), 3);
+    assert_eq!(store.pending_mention_count("team-c", "w2").unwrap(), 3);
+    assert_eq!(store.pending_mention_count("team-c", "lead").unwrap(), 0);
+    // Departure removes the mention rows, so the count follows abb045ee.
+    store.remove_member("team-c", "w2").unwrap();
+    assert_eq!(store.pending_mention_count("team-c", "w2").unwrap(), 0);
+}

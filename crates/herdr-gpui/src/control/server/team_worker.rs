@@ -619,11 +619,22 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
         }
     }
     let skip = scanned.len().saturating_sub(limit);
-    let mut posts = Vec::new();
-    for (_, post) in scanned.into_iter().skip(skip) {
-        let statuses = store.recipient_statuses(&post.post_id)?;
-        posts.push((post, statuses));
-    }
+    let returned: Vec<(i64, Post)> = scanned.into_iter().skip(skip).collect();
+    // One query per 500-id chunk instead of one query per post: the single
+    // worker thread served a refresh with up to POST_LIMIT serial round-trips
+    // here before.
+    let ids: Vec<String> = returned
+        .iter()
+        .map(|(_, post)| post.post_id.clone())
+        .collect();
+    let statuses = store.recipient_statuses_for_posts(&ids)?;
+    let posts = returned
+        .into_iter()
+        .map(|(_, post)| {
+            let statuses = statuses.get(&post.post_id).cloned().unwrap_or_default();
+            (post, statuses)
+        })
+        .collect();
     let tasks = store.tasks(team_id, team_store::MAX_PAGE_SIZE)?;
     let findings = store.findings(team_id, team_store::MAX_PAGE_SIZE)?;
     Ok(Reply::Snapshot {
@@ -656,27 +667,9 @@ fn scoped(
             .find_member_team(filter, caller)?
             .ok_or(Error::NotMember)?;
         let goal = store.team_goal(&team.team_id)?;
-        let mut pending_mentions = 0usize;
-        let mut cursor = 0;
-        while let Ok(page) = store.posts(&team.team_id, cursor, team_store::MAX_PAGE_SIZE) {
-            let Some((last, _)) = page.last() else { break };
-            cursor = *last;
-            let full = page.len() == team_store::MAX_PAGE_SIZE;
-            for (_, post) in page {
-                if store
-                    .recipient_statuses(&post.post_id)?
-                    .iter()
-                    .any(|(id, status)| {
-                        id == &member.member_id && *status == RecipientStatus::Pending
-                    })
-                {
-                    pending_mentions = pending_mentions.saturating_add(1);
-                }
-            }
-            if !full {
-                break;
-            }
-        }
+        // One COUNT over the mention table instead of scanning every post
+        // with a statuses query per post.
+        let pending_mentions = store.pending_mention_count(&team.team_id, &member.member_id)?;
         let tasks = store.tasks(&team.team_id, team_store::MAX_PAGE_SIZE)?;
         let open_tasks = tasks
             .iter()
@@ -723,10 +716,15 @@ fn scoped(
             Reply::ScopedGoalUpdated { team, goal }
         }
         ScopedAction::BulletinList { after, limit } => {
+            let page = store.posts(team_id, after, limit)?;
+            let ids: Vec<String> = page.iter().map(|(_, post)| post.post_id.clone()).collect();
+            let statuses = store.recipient_statuses_for_posts(&ids)?;
             let mut entries = Vec::new();
-            for (sequence, post) in store.posts(team_id, after, limit)? {
-                let status = store
-                    .recipient_statuses(&post.post_id)?
+            for (sequence, post) in page {
+                let status = statuses
+                    .get(&post.post_id)
+                    .cloned()
+                    .unwrap_or_default()
                     .into_iter()
                     .find(|(id, _)| *id == member_id)
                     .map(|(_, status)| status);
@@ -857,6 +855,10 @@ fn scoped(
 #[cfg(test)]
 #[path = "team_worker/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "team_worker/query_bounds_tests.rs"]
+mod query_bounds_tests;
 
 #[cfg(test)]
 #[path = "team_worker/scoped_tests.rs"]

@@ -13,7 +13,7 @@ pub use mentions::{extract_at_tokens, resolve_member_ref, resolve_recipients};
 pub use tasks::{Task, TaskStatus};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{CachedStatement, Connection, OptionalExtension, params};
 use std::{collections::HashSet, path::Path};
 
 pub const MAX_ID_BYTES: usize = 128;
@@ -22,6 +22,18 @@ pub const MAX_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_MENTIONS: usize = 64;
 pub const MAX_MEMBERS: usize = 64;
 pub const MAX_PAGE_SIZE: usize = 100;
+/// SQL of [`TeamStore::pending_mention_count`], named so a test can check the
+/// query plan the recipient index is meant to serve.
+const PENDING_MENTIONS_SQL: &str = "SELECT COUNT(*) FROM mentions m
+     JOIN posts p ON p.post_id=m.post_id
+     WHERE p.team_id=?1 AND m.recipient_id=?2
+       AND NOT EXISTS (
+           SELECT 1 FROM acknowledgements a
+           WHERE a.post_id=m.post_id AND a.recipient_id=m.recipient_id
+       )";
+/// Post ids per `IN (...)` chunk in `recipient_statuses_for_posts`; well
+/// under SQLite's variable limit, and one chunk covers a full snapshot page.
+pub const STATUS_BATCH_CHUNK: usize = 500;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -140,6 +152,11 @@ pub enum RecipientStatus {
 
 pub struct TeamStore {
     pub(super) db: Connection,
+    /// Statements prepared through [`TeamStore::prep`], counted only when this
+    /// crate's test fixtures are on: a test can then pin how many queries a
+    /// read path issues instead of trusting a comment about N+1.
+    #[cfg(any(test, feature = "test-support"))]
+    statements: std::cell::Cell<usize>,
 }
 
 impl TeamStore {
@@ -179,6 +196,7 @@ impl TeamStore {
                 post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
                 recipient_id TEXT NOT NULL, PRIMARY KEY(post_id, recipient_id)
             );
+            CREATE INDEX IF NOT EXISTS mentions_recipient_idx ON mentions(recipient_id);
             CREATE TABLE IF NOT EXISTS acknowledgements (
                 post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
                 recipient_id TEXT NOT NULL, acknowledged_at TEXT NOT NULL,
@@ -215,7 +233,31 @@ impl TeamStore {
             );
             CREATE INDEX IF NOT EXISTS findings_team_idx ON findings(team_id, sequence);",
         )?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            #[cfg(any(test, feature = "test-support"))]
+            statements: std::cell::Cell::new(0),
+        })
+    }
+
+    /// Prepare through the store's statement cache, counting the prepare when
+    /// test fixtures are on so a read path's query count is testable.
+    fn prep(&self, sql: &str) -> Result<CachedStatement<'_>> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.statements.set(self.statements.get() + 1);
+        Ok(self.db.prepare_cached(sql)?)
+    }
+
+    /// Statements prepared since the last reset. Test fixtures only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn statement_count(&self) -> usize {
+        self.statements.get()
+    }
+
+    /// Zero the [`Self::statement_count`] baseline. Test fixtures only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn reset_statement_count(&self) {
+        self.statements.set(0);
     }
 
     pub fn save_team(&mut self, team: &Team) -> Result<()> {
@@ -287,7 +329,7 @@ impl TeamStore {
         let Some((name, supervisor_id)) = row else {
             return Ok(None);
         };
-        let mut stmt = self.db.prepare("SELECT member_id,display_name,host,session,workspace,pane FROM members WHERE team_id=?1 ORDER BY member_id")?;
+        let mut stmt = self.prep("SELECT member_id,display_name,host,session,workspace,pane FROM members WHERE team_id=?1 ORDER BY member_id")?;
         let members = stmt
             .query_map([team_id], read_member)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -315,7 +357,7 @@ impl TeamStore {
                 max: MAX_PAGE_SIZE,
             });
         }
-        let mut stmt = self.db.prepare(
+        let mut stmt = self.prep(
             "SELECT team_id FROM teams WHERE (?1 IS NULL OR team_id>?1) ORDER BY team_id LIMIT ?2",
         )?;
         let ids = stmt
@@ -458,6 +500,10 @@ impl TeamStore {
     }
 
     /// Stable forward pagination: the returned sequence is the next cursor.
+    ///
+    /// One statement: the page of posts is selected first (so `limit` counts
+    /// posts, not join rows) and each page's mentions ride along in the same
+    /// query instead of one query per post.
     pub fn posts(&self, team_id: &str, cursor: i64, limit: usize) -> Result<Vec<(i64, Post)>> {
         if limit == 0 || limit > MAX_PAGE_SIZE {
             return Err(Error::Invalid {
@@ -465,7 +511,17 @@ impl TeamStore {
                 max: MAX_PAGE_SIZE,
             });
         }
-        let mut stmt=self.db.prepare("SELECT sequence,post_id,team_id,author_kind,author_id,reply_to,body,created_at FROM posts WHERE team_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3")?;
+        let mut stmt = self.prep(
+            "WITH page AS (
+                SELECT sequence,post_id,team_id,author_kind,author_id,reply_to,body,created_at
+                FROM posts WHERE team_id=?1 AND sequence>?2
+                ORDER BY sequence LIMIT ?3
+            )
+            SELECT page.sequence,page.post_id,page.team_id,page.author_kind,page.author_id,
+                   page.reply_to,page.body,page.created_at,m.recipient_id
+            FROM page LEFT JOIN mentions m ON m.post_id=page.post_id
+            ORDER BY page.sequence,m.recipient_id",
+        )?;
         let rows = stmt.query_map(params![team_id, cursor, limit as i64], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
@@ -476,28 +532,39 @@ impl TeamStore {
                 r.get::<_, Option<String>>(5)?,
                 r.get::<_, String>(6)?,
                 r.get::<_, String>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         })?;
-        let mut out = Vec::new();
+        let mut out: Vec<(i64, Post)> = Vec::new();
         for row in rows {
-            let (seq, post_id, team_id, author_kind, author_id, reply_to, body, at) = row?;
-            out.push((
-                seq,
-                Post {
-                    mentions: self.mentions(&post_id)?,
-                    post_id,
-                    team_id,
-                    author: match author_kind.as_str() {
-                        "human" => Author::Human { user_id: author_id },
-                        _ => Author::Member {
-                            member_id: author_id,
+            let (seq, post_id, team_id, author_kind, author_id, reply_to, body, at, recipient) =
+                row?;
+            match out.last_mut() {
+                Some((last_seq, post)) if *last_seq == seq && post.post_id == post_id => {
+                    if let Some(recipient) = recipient {
+                        post.mentions.push(recipient);
+                    }
+                }
+                _ => out.push((
+                    seq,
+                    Post {
+                        mentions: recipient
+                            .map(|recipient| vec![recipient])
+                            .unwrap_or_default(),
+                        post_id,
+                        team_id,
+                        author: match author_kind.as_str() {
+                            "human" => Author::Human { user_id: author_id },
+                            _ => Author::Member {
+                                member_id: author_id,
+                            },
                         },
+                        reply_to,
+                        body,
+                        created_at: parse_time(at)?,
                     },
-                    reply_to,
-                    body,
-                    created_at: parse_time(at)?,
-                },
-            ));
+                )),
+            }
         }
         Ok(out)
     }
@@ -558,7 +625,7 @@ impl TeamStore {
     }
 
     pub fn acknowledgements(&self, post_id: &str) -> Result<Vec<Acknowledgement>> {
-        let mut stmt=self.db.prepare("SELECT recipient_id,acknowledged_at FROM acknowledgements WHERE post_id=?1 ORDER BY recipient_id")?;
+        let mut stmt=self.prep("SELECT recipient_id,acknowledged_at FROM acknowledgements WHERE post_id=?1 ORDER BY recipient_id")?;
         let rows = stmt.query_map([post_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })?;
@@ -575,7 +642,7 @@ impl TeamStore {
 
     /// One explicit status for each mentioned recipient; absent acknowledgements remain pending.
     pub fn recipient_statuses(&self, post_id: &str) -> Result<Vec<(String, RecipientStatus)>> {
-        let mut stmt = self.db.prepare("SELECT m.recipient_id,a.acknowledged_at FROM mentions m LEFT JOIN acknowledgements a ON a.post_id=m.post_id AND a.recipient_id=m.recipient_id WHERE m.post_id=?1 ORDER BY m.recipient_id")?;
+        let mut stmt = self.prep("SELECT m.recipient_id,a.acknowledged_at FROM mentions m LEFT JOIN acknowledgements a ON a.post_id=m.post_id AND a.recipient_id=m.recipient_id WHERE m.post_id=?1 ORDER BY m.recipient_id")?;
         let rows = stmt.query_map([post_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
         })?;
@@ -592,12 +659,58 @@ impl TeamStore {
         .collect()
     }
 
-    fn mentions(&self, post_id: &str) -> Result<Vec<String>> {
-        let mut s = self
-            .db
-            .prepare("SELECT recipient_id FROM mentions WHERE post_id=?1 ORDER BY recipient_id")?;
-        Ok(s.query_map([post_id], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?)
+    /// [`recipient_statuses`] for many posts, one query per 500-id chunk,
+    /// keyed by post id. Posts without mentions map to an empty vector;
+    /// per-post vectors are ordered by recipient id, matching the
+    /// single-post form.
+    pub fn recipient_statuses_for_posts(
+        &self,
+        post_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<(String, RecipientStatus)>>> {
+        let mut out: std::collections::HashMap<String, Vec<(String, RecipientStatus)>> =
+            std::collections::HashMap::with_capacity(post_ids.len());
+        for post_id in post_ids {
+            out.entry(post_id.clone()).or_default();
+        }
+        for chunk in post_ids.chunks(STATUS_BATCH_CHUNK) {
+            let list = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT m.post_id,m.recipient_id,a.acknowledged_at
+                 FROM mentions m
+                 LEFT JOIN acknowledgements a
+                        ON a.post_id=m.post_id AND a.recipient_id=m.recipient_id
+                 WHERE m.post_id IN ({list})
+                 ORDER BY m.post_id,m.recipient_id"
+            );
+            let mut stmt = self.prep(&sql)?;
+            let params: Vec<&str> = chunk.iter().map(String::as_str).collect();
+            let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (post_id, id, at) = row?;
+                let status = match at {
+                    Some(value) => RecipientStatus::Acknowledged(parse_time(value)?),
+                    None => RecipientStatus::Pending,
+                };
+                if let Some(entries) = out.get_mut(&post_id) {
+                    entries.push((id, status));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Mentioned posts a recipient has not acknowledged, in one query. This
+    /// is the whole history the `team status` command needs, where it used
+    /// to scan every post with a statuses query per post.
+    pub fn pending_mention_count(&self, team_id: &str, recipient_id: &str) -> Result<usize> {
+        let mut stmt = self.prep(PENDING_MENTIONS_SQL)?;
+        Ok(stmt.query_row(params![team_id, recipient_id], |r| r.get::<_, i64>(0))? as usize)
     }
 }
 
@@ -698,6 +811,10 @@ pub(super) fn ensure_author_in_team<'a>(
 #[cfg(test)]
 #[path = "team_store/departure_tests.rs"]
 mod departure_tests;
+
+#[cfg(test)]
+#[path = "team_store/status_tests.rs"]
+mod status_tests;
 
 #[cfg(test)]
 #[path = "team_store/task_lifecycle_tests.rs"]

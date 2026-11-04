@@ -332,7 +332,7 @@ impl TeamStore {
                 max: MAX_PAGE_SIZE,
             });
         }
-        let mut stmt = self.db.prepare(
+        let mut stmt = self.prep(
             "SELECT task_id, team_id, creator_kind, creator_id, title, brief,
                     assignee_id, status, blocker_reason, result, created_at, updated_at
              FROM tasks WHERE team_id = ?1 ORDER BY sequence LIMIT ?2",

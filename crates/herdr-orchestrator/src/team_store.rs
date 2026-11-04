@@ -10,7 +10,7 @@ mod tasks;
 
 pub use findings::{Confidence, Finding};
 pub use mentions::{extract_at_tokens, resolve_member_ref, resolve_recipients};
-pub use tasks::{Task, TaskStatus};
+pub use tasks::{Task, TaskCounts, TaskStatus};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{CachedStatement, Connection, OptionalExtension, params};
@@ -870,6 +870,10 @@ mod status_tests;
 #[cfg(test)]
 #[path = "team_store/task_lifecycle_tests.rs"]
 mod task_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "team_store/task_page_tests.rs"]
+mod task_page_tests;
 
 #[cfg(test)]
 #[path = "team_store/tests.rs"]

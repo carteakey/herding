@@ -2,10 +2,23 @@
 
 use super::{
     Author, Error, MAX_ID_BYTES, MAX_NAME_BYTES, MAX_PAGE_SIZE, MAX_TEXT_BYTES, Result, TeamStore,
-    ensure_author_in_team, is_member, now_stamp, parse_time, validate,
+    Window, ensure_author_in_team, is_member, now_stamp, parse_time, validate,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
+
+const TASK_COUNTS_SQL: &str = "SELECT SUM(CASE WHEN status IN ('open','in_progress','blocked')
+                    THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status IN ('open','in_progress','blocked')
+                             AND assignee_id = ?2 THEN 1 ELSE 0 END)
+             FROM tasks WHERE team_id = ?1";
+const TASKS_LATEST_PAGE_SQL: &str =
+    "SELECT task_id, team_id, creator_kind, creator_id, title, brief,
+                    assignee_id, status, blocker_reason, result, created_at, updated_at, sequence
+             FROM tasks WHERE team_id = ?1 AND sequence < ?2 ORDER BY sequence DESC LIMIT ?3";
+const TASKS_PAGE_SQL: &str = "SELECT task_id, team_id, creator_kind, creator_id, title, brief,
+                    assignee_id, status, blocker_reason, result, created_at, updated_at, sequence
+             FROM tasks WHERE team_id = ?1 AND sequence > ?2 ORDER BY sequence LIMIT ?3";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -52,6 +65,12 @@ pub struct Task {
     pub result: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TaskCounts {
+    pub open: usize,
+    pub assigned: usize,
 }
 
 impl TeamStore {
@@ -325,22 +344,75 @@ impl TeamStore {
         Ok(updated)
     }
 
+    /// How many tasks a team has open, and how many of those are assigned to
+    /// `member_id`.
+    ///
+    /// A status line counts, it does not page: a team with more tasks than one
+    /// page would report the first 100 and call that its open workload.
+    pub fn task_counts(&self, team_id: &str, member_id: &str) -> Result<TaskCounts> {
+        let mut stmt = self.prep(TASK_COUNTS_SQL)?;
+        let counts = stmt.query_row(params![team_id, member_id], |row| {
+            // SUM is NULL when a team has no tasks.
+            let open: Option<i64> = row.get(0)?;
+            let assigned: Option<i64> = row.get(1)?;
+            Ok(TaskCounts {
+                open: open.unwrap_or(0).max(0) as usize,
+                assigned: assigned.unwrap_or(0).max(0) as usize,
+            })
+        })?;
+        Ok(counts)
+    }
+
+    /// The board from its oldest task: the returned list is a page, and
+    /// [`latest_tasks`] is the shape that reaches the newest work.
     pub fn tasks(&self, team_id: &str, limit: usize) -> Result<Vec<Task>> {
+        Ok(self
+            .task_page(Window::After(0), team_id, limit)?
+            .into_iter()
+            .map(|(_, task)| task)
+            .collect())
+    }
+
+    /// The newest `limit` tasks, oldest first within the page, or the page
+    /// older than `before`.
+    ///
+    /// A board shows its current work without reading the team's whole task
+    /// history, which a forward read from sequence 0 does. Pass the first
+    /// sequence already shown as `before` to page further back; that page's
+    /// first sequence is the next cursor.
+    pub fn latest_tasks(
+        &self,
+        team_id: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<(i64, Task)>> {
+        self.task_page(Window::Before(before.unwrap_or(i64::MAX)), team_id, limit)
+    }
+
+    fn task_page(&self, window: Window, team_id: &str, limit: usize) -> Result<Vec<(i64, Task)>> {
         if limit == 0 || limit > MAX_PAGE_SIZE {
             return Err(Error::Invalid {
                 field: "page size",
                 max: MAX_PAGE_SIZE,
             });
         }
-        let mut stmt = self.prep(
-            "SELECT task_id, team_id, creator_kind, creator_id, title, brief,
-                    assignee_id, status, blocker_reason, result, created_at, updated_at
-             FROM tasks WHERE team_id = ?1 ORDER BY sequence LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![team_id, limit as i64], read_task_row)?;
-        let mut out = Vec::new();
+        let (sql, bound, newest_first) = match window {
+            Window::After(cursor) => (TASKS_PAGE_SQL, cursor, false),
+            Window::Before(bound) => (TASKS_LATEST_PAGE_SQL, bound, true),
+        };
+        let mut stmt = self.prep(sql)?;
+        let rows = stmt.query_map(params![team_id, bound, limit as i64], |row| {
+            Ok((row.get::<_, i64>(12)?, read_task_row(row)?))
+        })?;
+        let mut out: Vec<(i64, Task)> = Vec::new();
         for row in rows {
-            out.push(row??);
+            let (sequence, task) = row?;
+            out.push((sequence, task?));
+        }
+        // A DESC page is newest first; cursors and callers both speak ascending
+        // sequence, the same convention `posts` and `latest_posts` use.
+        if newest_first {
+            out.reverse();
         }
         Ok(out)
     }

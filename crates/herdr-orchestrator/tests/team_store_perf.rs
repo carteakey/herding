@@ -448,6 +448,65 @@ fn audit_scale(scale: &Scale) {
     }
     report("tasks page of 100", &lists, "");
 
+    // The same page count from the newest end: same cost, and on a board
+    // bigger than a page it names the tasks a team is actually working on.
+    let mut newest_tasks = Vec::new();
+    let mut newest_start = String::new();
+    for _ in 0..7 {
+        let (page, elapsed) = time_once(|| {
+            store
+                .latest_tasks(&team_id, None, MAX_PAGE_SIZE)
+                .expect("newest tasks")
+        });
+        newest_tasks.push(elapsed);
+        newest_start = page
+            .first()
+            .map(|(_, task)| task.title.clone())
+            .unwrap_or_default();
+    }
+    let oldest_end = store
+        .tasks(&team_id, MAX_PAGE_SIZE)
+        .expect("tasks")
+        .last()
+        .map(|task| task.title.clone())
+        .unwrap_or_default();
+    report(
+        "newest tasks page of 100",
+        &newest_tasks,
+        &format!("starts at {newest_start}; the oldest-first page ended at {oldest_end}"),
+    );
+
+    let mut counts = Vec::new();
+    for _ in 0..7 {
+        let (_, elapsed) =
+            time_once(|| store.task_counts(&team_id, &member_id(1)).expect("counts"));
+        counts.push(elapsed);
+    }
+    report(
+        "task_counts (aggregate, not a page)",
+        &counts,
+        &format!(
+            "{} open of {} tasks",
+            store
+                .task_counts(&team_id, &member_id(1))
+                .expect("counts")
+                .open,
+            scale.tasks
+        ),
+    );
+
+    let mut newest_findings = Vec::new();
+    for _ in 0..7 {
+        let (page, elapsed) = time_once(|| {
+            store
+                .latest_findings(&team_id, None, MAX_PAGE_SIZE)
+                .expect("newest findings")
+        });
+        newest_findings.push(elapsed);
+        let _ = page.last().map(|(_, finding)| finding.description.clone());
+    }
+    report("newest findings page of 100", &newest_findings, "");
+
     // Writes: the serial worker's per-op floor.
     let mut adds = Vec::new();
     for index in 0..20 {

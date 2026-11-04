@@ -1,11 +1,19 @@
 //! Durable team findings, evidence references, confidence levels, and non-destructive supersession.
 
 use super::{
-    Author, Error, MAX_ID_BYTES, MAX_PAGE_SIZE, MAX_TEXT_BYTES, Result, TeamStore,
+    Author, Error, MAX_ID_BYTES, MAX_PAGE_SIZE, MAX_TEXT_BYTES, Result, TeamStore, Window,
     ensure_author_in_team, now_stamp, parse_time, validate,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
+
+const FINDINGS_LATEST_PAGE_SQL: &str =
+    "SELECT finding_id, team_id, author_kind, author_id, task_id,
+                    description, evidence, confidence, supersedes, created_at, sequence
+             FROM findings WHERE team_id = ?1 AND sequence < ?2 ORDER BY sequence DESC LIMIT ?3";
+const FINDINGS_PAGE_SQL: &str = "SELECT finding_id, team_id, author_kind, author_id, task_id,
+                    description, evidence, confidence, supersedes, created_at, sequence
+             FROM findings WHERE team_id = ?1 AND sequence > ?2 ORDER BY sequence LIMIT ?3";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confidence {
@@ -128,22 +136,58 @@ impl TeamStore {
         })
     }
 
+    /// The findings list from its oldest entry; [`latest_findings`] is the
+    /// shape that reaches the newest ones.
     pub fn findings(&self, team_id: &str, limit: usize) -> Result<Vec<Finding>> {
+        Ok(self
+            .finding_page(Window::After(0), team_id, limit)?
+            .into_iter()
+            .map(|(_, finding)| finding)
+            .collect())
+    }
+
+    /// The newest `limit` findings, oldest first within the page, or the page
+    /// older than `before`.
+    ///
+    /// Findings accumulate over a team's life, so a forward read from sequence
+    /// 0 shows the oldest ones and never the current review. Pass the first
+    /// sequence already shown as `before` to page further back.
+    pub fn latest_findings(
+        &self,
+        team_id: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<(i64, Finding)>> {
+        self.finding_page(Window::Before(before.unwrap_or(i64::MAX)), team_id, limit)
+    }
+
+    fn finding_page(
+        &self,
+        window: Window,
+        team_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(i64, Finding)>> {
         if limit == 0 || limit > MAX_PAGE_SIZE {
             return Err(Error::Invalid {
                 field: "page size",
                 max: MAX_PAGE_SIZE,
             });
         }
-        let mut stmt = self.prep(
-            "SELECT finding_id, team_id, author_kind, author_id, task_id,
-                    description, evidence, confidence, supersedes, created_at
-             FROM findings WHERE team_id = ?1 ORDER BY sequence LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![team_id, limit as i64], read_finding_row)?;
-        let mut out = Vec::new();
+        let (sql, bound, newest_first) = match window {
+            Window::After(cursor) => (FINDINGS_PAGE_SQL, cursor, false),
+            Window::Before(bound) => (FINDINGS_LATEST_PAGE_SQL, bound, true),
+        };
+        let mut stmt = self.prep(sql)?;
+        let rows = stmt.query_map(params![team_id, bound, limit as i64], |row| {
+            Ok((row.get::<_, i64>(10)?, read_finding_row(row)?))
+        })?;
+        let mut out: Vec<(i64, Finding)> = Vec::new();
         for row in rows {
-            out.push(row??);
+            let (sequence, finding) = row?;
+            out.push((sequence, finding?));
+        }
+        if newest_first {
+            out.reverse();
         }
         Ok(out)
     }

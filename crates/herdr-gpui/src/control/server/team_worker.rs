@@ -7,7 +7,7 @@
 //! outcome is unknown until it reads the reply.
 use herdr_orchestrator::team_store::{
     self, Acknowledgement, Author, Confidence, Finding, Member, Post, RecipientStatus, Recipients,
-    SessionTarget, Task, TaskStatus, Team, TeamStore,
+    SessionTarget, Task, Team, TeamStore,
 };
 use std::{
     path::PathBuf,
@@ -638,8 +638,16 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
             (post, statuses)
         })
         .collect();
-    let tasks = store.tasks(team_id, team_store::MAX_PAGE_SIZE)?;
-    let findings = store.findings(team_id, team_store::MAX_PAGE_SIZE)?;
+    let tasks = store
+        .latest_tasks(team_id, None, team_store::MAX_PAGE_SIZE)?
+        .into_iter()
+        .map(|(_, task)| task)
+        .collect();
+    let findings = store
+        .latest_findings(team_id, None, team_store::MAX_PAGE_SIZE)?
+        .into_iter()
+        .map(|(_, finding)| finding)
+        .collect();
     Ok(Reply::Snapshot {
         team: Some(team),
         goal,
@@ -673,33 +681,16 @@ fn scoped(
         // One COUNT over the mention table instead of scanning every post
         // with a statuses query per post.
         let pending_mentions = store.pending_mention_count(&team.team_id, &member.member_id)?;
-        let tasks = store.tasks(&team.team_id, team_store::MAX_PAGE_SIZE)?;
-        let open_tasks = tasks
-            .iter()
-            .filter(|t| {
-                matches!(
-                    t.status,
-                    TaskStatus::Open | TaskStatus::InProgress | TaskStatus::Blocked
-                )
-            })
-            .count();
-        let assigned_tasks = tasks
-            .iter()
-            .filter(|t| {
-                t.assignee.as_deref() == Some(member.member_id.as_str())
-                    && matches!(
-                        t.status,
-                        TaskStatus::Open | TaskStatus::InProgress | TaskStatus::Blocked
-                    )
-            })
-            .count();
+        // Counts rather than a page of tasks: a team with more tasks than one
+        // page would report its oldest 100 as its workload.
+        let counts = store.task_counts(&team.team_id, &member.member_id)?;
         return Ok(Reply::ScopedStatus {
             team,
             member,
             goal,
             pending_mentions,
-            open_tasks,
-            assigned_tasks,
+            open_tasks: counts.open,
+            assigned_tasks: counts.assigned,
         });
     }
     let team = store.team(team_id)?.ok_or(Error::NotMember)?;
@@ -760,7 +751,11 @@ fn scoped(
             acknowledgement: store.acknowledge(&message_id, &member_id)?,
         },
         ScopedAction::TaskList => Reply::ScopedTasks {
-            tasks: store.tasks(team_id, team_store::MAX_PAGE_SIZE)?,
+            tasks: store
+                .latest_tasks(team_id, None, team_store::MAX_PAGE_SIZE)?
+                .into_iter()
+                .map(|(_, task)| task)
+                .collect(),
             team,
         },
         ScopedAction::TaskCreate {
@@ -829,7 +824,11 @@ fn scoped(
             }
         }
         ScopedAction::FindingList => Reply::ScopedFindings {
-            findings: store.findings(team_id, team_store::MAX_PAGE_SIZE)?,
+            findings: store
+                .latest_findings(team_id, None, team_store::MAX_PAGE_SIZE)?
+                .into_iter()
+                .map(|(_, finding)| finding)
+                .collect(),
             team,
         },
         ScopedAction::FindingAdd {
@@ -858,6 +857,10 @@ fn scoped(
 #[cfg(test)]
 #[path = "team_worker/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "team_worker/newest_board_tests.rs"]
+mod newest_board_tests;
 
 #[cfg(test)]
 #[path = "team_worker/newest_page_tests.rs"]

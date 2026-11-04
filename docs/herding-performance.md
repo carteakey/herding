@@ -73,6 +73,19 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
     the old window ended at `post00999` while the newest was `post03999`.
   - `TeamStore::posts` keeps its forward cursor, so `herdr-gpui bulletin list
     --after SEQ` still walks forwards from a post.
+- **Board newest-page reads and exact counts (task `7e1f19a7`, finding
+  `271faf33`):**
+  - `TeamStore::latest_tasks(team_id, Some(sequence), limit)` and
+    `TeamStore::latest_findings(...)` read a page backwards from a sequence in
+    the same shape as `latest_posts`; `tasks` and `findings` keep their
+    forward reads and both directions now share one private page function per
+    table, so the `MAX_PAGE_SIZE` bound exists once per table.
+  - The worker snapshot and the CLI list replies take the newest page, so a
+    team with more tasks or findings than `MAX_PAGE_SIZE` shows its current
+    work instead of the oldest 100.
+  - `team status` counts tasks with `TeamStore::task_counts` (one aggregate)
+    instead of materialising 100 rows and counting them in Rust, which counted
+    only the oldest page.
 - **Bridge snapshot projection caching (commit `1fef43d1`):**
   - Built a single-pass `name_map` and author map during `Bridge::snapshot`.
   - Resolved reply-to authors in O(1) via hash map instead of rescanning
@@ -89,12 +102,11 @@ queue 64 prompts, wake ledger 512 signals, `REFRESH` 2s, supervisor fallback 600
 
 ## Known hotspots left open
 
-- **Tasks and findings are still one page:** `TeamStore::tasks` and
-  `TeamStore::findings` take a limit and no cursor, so a team with more than
-  `MAX_PAGE_SIZE` of them shows only the first page in the panel and the CLI
-  (finding `271faf33`). Posts are now read newest-first and page backwards
-  with `TeamStore::latest_posts(team_id, Some(sequence), limit)`; the same
-  cursor shape is what those two reads need.
+- **The board's older pages are not reachable yet:** the store can page
+  tasks and findings backwards, but `herdr-gpui team task list` and
+  `team finding list` take no cursor, and the panel has no show-earlier
+  control, so a person can see the newest `MAX_PAGE_SIZE` of each and nothing
+  older (finding `271faf33`, store and worker half done).
 - **Post-mutation refreshes are unthrottled:** One snapshot is triggered per
   mutation in a burst, bounded by mutation count. Revisit only if mutation
   bursts become common.

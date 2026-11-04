@@ -128,7 +128,15 @@ fn to_op(command: TeamCommand) -> TeamOp {
             team_id,
             message_id,
         },
-        TeamCommand::TaskList { team_id } => TeamOp::TaskList { team_id },
+        TeamCommand::TaskList {
+            team_id,
+            before,
+            limit,
+        } => TeamOp::TaskList {
+            team_id,
+            before,
+            limit,
+        },
         TeamCommand::TaskCreate {
             team_id,
             title,
@@ -169,7 +177,15 @@ fn to_op(command: TeamCommand) -> TeamOp {
             result,
         },
         TeamCommand::TaskCancel { team_id, task_id } => TeamOp::TaskCancel { team_id, task_id },
-        TeamCommand::FindingList { team_id } => TeamOp::FindingList { team_id },
+        TeamCommand::FindingList {
+            team_id,
+            before,
+            limit,
+        } => TeamOp::FindingList {
+            team_id,
+            before,
+            limit,
+        },
         TeamCommand::FindingAdd {
             team_id,
             task_id,
@@ -291,9 +307,9 @@ pub(super) fn team(command: TeamCommand, context: &Context) -> crate::Result<Out
             &serde_json::json!({ "message_id": message_id, "delivery_state": delivery_state }),
         ),
         Response::Team {
-            reply: Reply::Tasks { tasks },
+            reply: Reply::Tasks { tasks, next_before },
         } => {
-            let json = serde_json::json!({ "tasks": tasks });
+            let json = serde_json::json!({ "tasks": tasks, "next_before": next_before });
             if tasks.is_empty() {
                 return Ok(Output::data("No tasks", &json)?.nothing());
             }
@@ -306,9 +322,13 @@ pub(super) fn team(command: TeamCommand, context: &Context) -> crate::Result<Out
             reply: Reply::Task { task },
         } => Output::data(task_line(&task), &serde_json::json!({ "task": task })),
         Response::Team {
-            reply: Reply::Findings { findings },
+            reply:
+                Reply::Findings {
+                    findings,
+                    next_before,
+                },
         } => {
-            let json = serde_json::json!({ "findings": findings });
+            let json = serde_json::json!({ "findings": findings, "next_before": next_before });
             if findings.is_empty() {
                 return Ok(Output::data("No findings", &json)?.nothing());
             }

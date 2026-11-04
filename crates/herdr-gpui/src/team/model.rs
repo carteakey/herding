@@ -109,6 +109,10 @@ pub(crate) struct TeamSnapshot {
     pub(crate) posts: Vec<TeamPost>,
     pub(crate) tasks: Vec<TeamTask>,
     pub(crate) findings: Vec<TeamFinding>,
+    /// Older task and finding pages may exist behind the board's
+    /// show-earlier controls; false when the board is fully loaded.
+    pub(crate) tasks_older: bool,
+    pub(crate) findings_older: bool,
     /// An explicit model identity allowed to author posts. `None` hides the
     /// composer; the view never invents an agent or human author.
     pub(crate) post_author: Option<(Author, SharedString)>,
@@ -132,6 +136,8 @@ impl Default for TeamSnapshot {
             posts: Vec::new(),
             tasks: Vec::new(),
             findings: Vec::new(),
+            tasks_older: false,
+            findings_older: false,
             post_author: None,
             bulletin_open: true,
             paused: false,

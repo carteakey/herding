@@ -78,7 +78,17 @@ fn parses_status_goal_tasks_and_findings() {
     assert_eq!(
         parse(&["task", "list", "team-1"]),
         TeamCommand::TaskList {
-            team_id: "team-1".into()
+            team_id: "team-1".into(),
+            before: None,
+            limit: None,
+        }
+    );
+    assert_eq!(
+        parse(&["task", "list", "team-1", "--before", "12", "--limit", "50"]),
+        TeamCommand::TaskList {
+            team_id: "team-1".into(),
+            before: Some(12),
+            limit: Some(50),
         }
     );
     assert_eq!(
@@ -155,7 +165,17 @@ fn parses_status_goal_tasks_and_findings() {
     assert_eq!(
         parse(&["finding", "list", "team-1"]),
         TeamCommand::FindingList {
-            team_id: "team-1".into()
+            team_id: "team-1".into(),
+            before: None,
+            limit: None,
+        }
+    );
+    assert_eq!(
+        parse(&["finding", "list", "team-1", "--before", "7"]),
+        TeamCommand::FindingList {
+            team_id: "team-1".into(),
+            before: Some(7),
+            limit: None,
         }
     );
     assert_eq!(

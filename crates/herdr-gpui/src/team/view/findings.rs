@@ -164,13 +164,19 @@ impl TeamView {
                         .child(fl!("team-findings-empty")),
                 );
             } else {
+                // The window reads from the newest end so current findings
+                // stay visible; the show-earlier control widens it toward
+                // older rows.
+                let total = self.snapshot.findings.len();
+                let visible = (MAX_VISIBLE_FINDINGS + self.earlier_findings_rows).min(total);
+                let window = &self.snapshot.findings[total - visible..];
                 let limit = if self.findings_show_all {
-                    MAX_VISIBLE_FINDINGS
+                    window.len()
                 } else {
                     RECENT_FINDINGS_LIMIT
                 };
-                let count = findings_count.min(limit);
-                for finding in self.snapshot.findings.iter().take(count) {
+                let count = window.len().min(limit);
+                for finding in window.iter().take(count) {
                     let confidence_label = match finding.confidence {
                         Confidence::Low => fl!("team-confidence-low"),
                         Confidence::Medium => fl!("team-confidence-medium"),
@@ -329,6 +335,34 @@ impl TeamView {
                             .child(label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.findings_show_all = show_all;
+                                cx.notify();
+                            })),
+                    );
+                }
+
+                if total > MAX_VISIBLE_FINDINGS + self.earlier_findings_rows
+                    || self.snapshot.findings_older
+                {
+                    section = section.child(
+                        div()
+                            .id("team-findings-load-earlier")
+                            .debug_selector(|| "team-findings-load-earlier".into())
+                            .px_2()
+                            .py_1()
+                            .rounded(px(crate::config::corners::CONTROL))
+                            .bg(rgb(theme.surface))
+                            .border_1()
+                            .border_color(rgb(theme.active))
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .child("Load earlier findings")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.earlier_findings_rows += MAX_VISIBLE_FINDINGS;
+                                if this.snapshot.findings_older {
+                                    cx.emit(TeamAction::LoadEarlierFindings);
+                                }
                                 cx.notify();
                             })),
                     );

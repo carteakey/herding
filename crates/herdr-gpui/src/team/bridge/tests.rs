@@ -32,6 +32,8 @@ fn stale_snapshot_does_not_clear_or_replace_newer_request() {
             posts: Vec::new(),
             tasks: Vec::new(),
             findings: Vec::new(),
+            task_older: None,
+            finding_older: None,
         }),
     });
     assert_eq!(bridge.snapshot_in_flight, Some(2));
@@ -462,4 +464,113 @@ fn wake_ledger_is_bounded() {
     let ledger = &bridge.supervisor_wakes["t1"];
     assert_eq!(ledger.len(), WAKE_LEDGER_CAPACITY);
     assert_eq!(ledger.front().map(String::as_str), Some("task16|done|0"));
+}
+
+fn store_task(id: &str) -> Task {
+    Task {
+        task_id: id.into(),
+        team_id: "team".into(),
+        creator: Author::Human {
+            user_id: "human".into(),
+        },
+        title: id.into(),
+        brief: String::new(),
+        assignee: None,
+        status: TaskStatus::Open,
+        blocker_reason: None,
+        result: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+#[test]
+fn an_older_task_page_prepends_and_advances_the_cursor() {
+    let mut bridge = Bridge {
+        selected: Some("team".into()),
+        tasks_older: Some(31),
+        ..Bridge::default()
+    };
+    bridge.pending.insert(
+        7,
+        Pending::EarlierTasks {
+            team_id: "team".into(),
+            before: 31,
+        },
+    );
+    bridge.complete(Completion {
+        request_id: 7,
+        result: Ok(Reply::TaskPage {
+            tasks: vec![(1, store_task("task-0000")), (2, store_task("task-0001"))],
+            older: Some(3),
+        }),
+    });
+    assert_eq!(bridge.tasks.len(), 2);
+    assert_eq!(
+        bridge.tasks[0].task_id, "task-0000",
+        "older rows land first"
+    );
+    assert_eq!(bridge.tasks_older, Some(3));
+}
+
+#[test]
+fn an_older_page_for_another_team_is_dropped() {
+    let mut bridge = Bridge {
+        selected: Some("team".into()),
+        tasks_older: Some(31),
+        ..Bridge::default()
+    };
+    bridge.pending.insert(
+        7,
+        Pending::EarlierTasks {
+            team_id: "other".into(),
+            before: 31,
+        },
+    );
+    bridge.complete(Completion {
+        request_id: 7,
+        result: Ok(Reply::TaskPage {
+            tasks: vec![(1, store_task("task-0000"))],
+            older: Some(3),
+        }),
+    });
+    assert!(bridge.tasks.is_empty(), "a stale page never merges");
+    assert_eq!(bridge.tasks_older, Some(31));
+}
+
+#[test]
+fn a_failed_older_page_restores_the_cursor() {
+    let mut bridge = Bridge {
+        selected: Some("team".into()),
+        ..Bridge::default()
+    };
+    bridge.pending.insert(
+        7,
+        Pending::EarlierTasks {
+            team_id: "team".into(),
+            before: 31,
+        },
+    );
+    bridge.complete(Completion {
+        request_id: 7,
+        result: Err(std::sync::Arc::new(
+            crate::control::server::team_worker::Error::External("store went away".into()),
+        )),
+    });
+    assert_eq!(
+        bridge.tasks_older,
+        Some(31),
+        "the show-earlier control survives a failed fetch"
+    );
+}
+
+#[test]
+fn load_earlier_without_a_service_keeps_the_cursor_available() {
+    let mut bridge = Bridge {
+        selected: Some("team".into()),
+        tasks_older: Some(31),
+        ..Bridge::default()
+    };
+    bridge.act(TeamAction::LoadEarlierTasks, &[]);
+    assert_eq!(bridge.tasks_older, Some(31));
 }

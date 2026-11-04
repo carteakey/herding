@@ -136,6 +136,8 @@ fn task_finding_and_status_wire_forms_round_trip() {
         },
         TeamOp::TaskList {
             team_id: "team-1".into(),
+            before: None,
+            limit: None,
         },
         TeamOp::TaskCreate {
             team_id: "team-1".into(),
@@ -168,6 +170,8 @@ fn task_finding_and_status_wire_forms_round_trip() {
         },
         TeamOp::FindingList {
             team_id: "team-1".into(),
+            before: Some(12),
+            limit: Some(50),
         },
         TeamOp::FindingAdd {
             team_id: "team-1".into(),
@@ -231,12 +235,14 @@ fn task_finding_and_status_wire_forms_round_trip() {
         },
         Reply::Tasks {
             tasks: vec![task.clone()],
+            next_before: Some(12),
         },
         Reply::Task {
             task: Box::new(task),
         },
         Reply::Findings {
             findings: vec![finding.clone()],
+            next_before: None,
         },
         Reply::Finding {
             finding: Box::new(finding),

@@ -25,16 +25,30 @@ mod projection;
 
 use dispatch::notify_team_mutation;
 pub(crate) use identity::prove_pane_session_at;
-use identity::{current_identity, pane_agents};
+use identity::{PeerBindings, check_peer, current_identity, pane_agents};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
 
 const WATCH_SECONDS: u64 = 20;
+
+/// The UI process's own user, so a peer credential can be classified as a
+/// same-user caller or the tunnel's sshd; platforms without a user id
+/// never classify.
+#[cfg(unix)]
+fn local_uid() -> Option<u32> {
+    Some(nix::unistd::geteuid().as_raw())
+}
+
+#[cfg(not(unix))]
+fn local_uid() -> Option<u32> {
+    None
+}
 
 pub(super) fn serve(
     call: Call<team::TeamOp>,
     incoming: socket::Incoming,
     watches: &mut Watches,
     worker: Option<&Worker>,
+    peers: &mut PeerBindings,
     cx: &mut App,
 ) {
     let Some(worker) = worker else {
@@ -45,12 +59,31 @@ pub(super) fn serve(
         return;
     };
     let Call { caller, op } = call;
+    let peer = incoming.peer;
+    let peer_auth = incoming.peer_auth;
     let mut incoming = Some(incoming);
+    let registering = matches!(op, team::TeamOp::Register { .. });
     let response = in_window(&caller, cx, |view, _, window_cx| {
         let (target, endpoint) = match current_identity(view, &caller) {
             Ok(identity) => identity,
             Err(response) => return response,
         };
+        // The registering process records its identity for every later
+        // request; every other call must hold the identity its member
+        // registered with, on top of the proof above.
+        if registering {
+            if peer_auth && peer.is_none() {
+                return Response::error(
+                    ErrorCode::Unsupported,
+                    "The connecting process's credentials could not be read; team registration needs a Unix socket",
+                );
+            }
+            if let Some(credentials) = peer {
+                peers.insert(target.clone(), credentials);
+            }
+        } else if let Err(response) = check_peer(peers, &target, peer, peer_auth, local_uid()) {
+            return response;
+        }
         let pane_agents = pane_agents(view, endpoint);
         let (team_id, action) = match op {
             team::TeamOp::Status { team_id } => {

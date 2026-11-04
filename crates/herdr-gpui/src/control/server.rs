@@ -29,7 +29,9 @@ use crate::{
 };
 use browser::{feedback, notes, open_browser, reload, serve_waiters};
 use gpui::{App, Context, Window, WindowHandle};
+use herdr_orchestrator::team_store::SessionTarget;
 use std::{
+    collections::HashMap,
     path::Path,
     time::{Duration, Instant},
 };
@@ -121,6 +123,10 @@ struct State {
     watches: Watches,
     /// Agent-facing team storage; `None` when the state directory is unusable.
     team: Option<team_worker::Worker>,
+    /// The process identity each team member registered from, keyed by the
+    /// proven session target. In memory only: a UI restart clears it, and a
+    /// member registers again.
+    team_peers: HashMap<SessionTarget, socket::PeerCredentials>,
 }
 
 fn not_found(message: impl Into<String>) -> Response {
@@ -302,9 +308,14 @@ fn serve(incoming: socket::Incoming, state: &mut State, cx: &mut App) {
         Request::Events(call) => events::serve(call, incoming, &mut state.watches, cx),
         Request::Link(call) => incoming.respond(links::serve(call, cx)),
         Request::Chat(call) => incoming.respond(chat::serve(call, cx)),
-        Request::Team(call) => {
-            team::serve(call, incoming, &mut state.watches, state.team.as_ref(), cx)
-        }
+        Request::Team(call) => team::serve(
+            call,
+            incoming,
+            &mut state.watches,
+            state.team.as_ref(),
+            &mut state.team_peers,
+            cx,
+        ),
         Request::Cloud(call) => cloud::serve(call, incoming, &mut state.watches, cx),
         Request::Remote(call) => remote::serve(call, incoming, &mut state.watches, cx),
         Request::Mod(call) => incoming.respond(mods::serve(call, cx)),

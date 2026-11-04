@@ -5,6 +5,7 @@
 use crate::control::protocol::{ErrorCode, Response};
 use crate::{HerdrWindow, state::LiveState};
 use herdr_client::protocol::AgentStatus;
+use herdr_control_protocol::socket::PeerCredentials;
 use herdr_orchestrator::team_store::SessionTarget;
 use std::collections::HashMap;
 
@@ -202,4 +203,65 @@ pub(super) fn current_identity(
         },
         found.index,
     ))
+}
+
+/// The process identity each member registered from, keyed by the session
+/// target the member is proved by. In memory only: a UI restart clears it,
+/// and a member registers again.
+pub(crate) type PeerBindings = HashMap<SessionTarget, PeerCredentials>;
+
+/// Whether a proven caller holds the process identity its member registered
+/// with, on top of the snapshot proof [`current_identity`] ran. Same-user
+/// callers are matched against the binding their registration recorded;
+/// root-peer callers arrive through the control tunnel, whose forwarded
+/// connection terminates at sshd, so their credentials name the tunnel and
+/// the snapshot proofs apply as documented in `docs/control-tunnel.md`;
+/// anything else is refused, though the mode-0600 socket makes it
+/// unreachable in practice.
+pub(crate) fn check_peer(
+    peers: &PeerBindings,
+    proven: &SessionTarget,
+    peer: Option<PeerCredentials>,
+    peer_auth: bool,
+    local_uid: Option<u32>,
+) -> Result<(), Response> {
+    // The Windows pipe cannot prove a process identity; its DACL keeps it
+    // to the one user, the same trust the socket model documents.
+    if !peer_auth {
+        return Ok(());
+    }
+    let Some(cred) = peer else {
+        return Err(Response::error(
+            ErrorCode::Unsupported,
+            "The connecting process's credentials could not be read; team calls need a Unix socket",
+        ));
+    };
+    if Some(cred.uid) != local_uid {
+        if cred.uid == 0 {
+            // The tunnel's sshd forwards the request; the remote agent is
+            // proved by its pane snapshot, as the tunnel docs record.
+            return Ok(());
+        }
+        return Err(Response::error(
+            ErrorCode::Unsupported,
+            "Team calls come from your own user's processes",
+        ));
+    }
+    match peers.get(proven) {
+        None => Err(Response::error(
+            ErrorCode::Unsupported,
+            "No process binding is recorded for this member; run the team register command again from the agent's pane",
+        )),
+        Some(recorded) => {
+            // A recorded pid of None is macOS, which cannot prove one; the
+            // uid and gid already matched.
+            if recorded.pid.is_some() && recorded.pid != cred.pid {
+                return Err(Response::error(
+                    ErrorCode::Unsupported,
+                    "This pane's member is registered to another process; run the team register command from the agent's own pane",
+                ));
+            }
+            Ok(())
+        }
+    }
 }

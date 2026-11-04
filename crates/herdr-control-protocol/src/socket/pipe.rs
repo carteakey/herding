@@ -130,6 +130,10 @@ impl Listener {
 /// Nothing to remove: a pipe goes away with its last handle.
 pub(super) fn release(_: &Path) {}
 
+/// This transport cannot prove the connecting process's identity; the
+/// named pipe's DACL keeps it to the one user instead.
+pub(super) const PEER_AUTH: bool = false;
+
 pub(super) struct Connection {
     pub(super) pipe: Pipe,
     read_timeout: Duration,
@@ -137,6 +141,15 @@ pub(super) struct Connection {
 
 impl Connection {
     /// Bounds reads. Writes have no timeout on a pipe; see the module.
+    /// The Windows pipe carries no peer credentials; callers see
+    /// `Incoming::peer_auth == false` and fall back to the pipe's DACL.
+    pub(super) fn peer_credentials(_stream: &Connection) -> io::Result<super::PeerCredentials> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "peer credentials are not provided on this platform",
+        ))
+    }
+
     pub(super) fn prepare(&mut self, timeout: Duration) -> io::Result<()> {
         self.read_timeout = timeout;
         Ok(())

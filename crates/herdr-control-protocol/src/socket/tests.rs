@@ -182,3 +182,16 @@ fn a_missing_server_is_reported_as_unavailable() {
         Err(crate::Error::Unavailable { .. })
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_unix_connection_proves_the_calling_process() {
+    let (_address, server, _client) = pair();
+    let credentials = transport::peer_credentials(&server).unwrap();
+    // The caller is this test process: the kernel vouches for the same user,
+    // and on Linux for the exact process.
+    assert_eq!(credentials.uid, nix::unistd::getuid().as_raw());
+    if cfg!(target_os = "linux") {
+        assert_eq!(credentials.pid, Some(std::process::id()));
+    }
+}

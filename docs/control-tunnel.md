@@ -33,6 +33,21 @@ The remote `herdr-gpui` binary resolves its default socket path
 nothing on the remote host needs configuring. A per-host tunnel is one
 script instance; run several side by side for a fleet.
 
+## What the tunnel proves about a caller
+
+Peer credentials at the UI's end of the tunnel name sshd, not the remote
+agent: the forwarded connection terminates at sshd here, and the remote
+agent's process identity does not survive the hop. The tunnel caller is
+recognized honestly by that credential (the sshd process runs as root
+here, while a local caller runs as you), and it is not required to hold a
+per-process binding. What stands in for it: the forwarded socket path is
+mode 0600 and owned by the host's user, so the remote side is bounded by
+the same local-user trust the main socket model documents, and every
+request is still proved against the daemon snapshot here (pane, workspace,
+agent session). This is the documented downgrade for tunneled callers; a
+session-token handshake over the tunnel would bind the remote agent's own
+process and remains open if the fleet needs it.
+
 ## How it works
 
 One ssh connection, no extra tools:

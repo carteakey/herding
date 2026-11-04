@@ -47,9 +47,26 @@ fn answer_timeout(request: &Request) -> Duration {
     ANSWER_TIMEOUT + Duration::from_secs(request.wait_seconds())
 }
 
+/// The process identity at the other end of a connection, as the kernel
+/// proves it for a Unix socket: Linux's SO_PEERCRED carries uid, gid, and
+/// pid; macOS's getpeereid carries only uid and gid, so the pid is
+/// unavailable there. The Windows pipe cannot prove a process identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerCredentials {
+    pub uid: u32,
+    pub gid: u32,
+    pub pid: Option<u32>,
+}
+
 /// A request waiting for the UI's answer.
 pub struct Incoming {
     pub request: Request,
+    /// The connecting process's credentials on a transport that can prove
+    /// them; `None` on Windows, or when a capture failed on Unix.
+    pub peer: Option<PeerCredentials>,
+    /// Whether the transport is expected to prove peer credentials, so a
+    /// `None` peer means capture failed rather than platform limits.
+    pub peer_auth: bool,
     reply: Arc<Mutex<Reply>>,
 }
 
@@ -202,6 +219,8 @@ fn answer(request: Request, queue: &SyncSender<Event>, stream: &Connection) -> R
     let (sender, answer) = mpsc::sync_channel(1);
     let reply = Arc::new(Mutex::new(Reply { live: true, sender }));
     match queue.try_send(Event::Request(Incoming {
+        peer: transport::peer_credentials(stream).ok(),
+        peer_auth: transport::PEER_AUTH,
         request,
         reply: reply.clone(),
     })) {

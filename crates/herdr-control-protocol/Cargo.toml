@@ -22,6 +22,10 @@ tracing.workspace      = true
 
 # The pipe is created with a DACL; `herdr_client::private_endpoint` reads the
 # user and the pipe owner it is checked against.
+[target.'cfg(unix)'.dependencies]
+# Peer credentials: Linux SO_PEERCRED, macOS getpeereid (as daemon.rs uses).
+nix.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 interprocess.workspace = true
 

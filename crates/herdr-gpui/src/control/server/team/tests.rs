@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use super::dispatch::prompts_for_scoped_reply;
+use super::identity::{PeerBindings, check_peer};
 use super::*;
 use crate::{
     HerdrWindow,
@@ -11,6 +12,7 @@ use crate::{
     state::{ConnectionStatus, LiveState},
 };
 use herdr_client::{ConnectTarget, protocol::ClientShellSnapshot};
+use herdr_control_protocol::socket::PeerCredentials;
 use herdr_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskStatus, Team};
 use std::sync::Arc;
 
@@ -185,16 +187,15 @@ fn refuses_a_disconnected_caller_host_even_when_the_window_is_connected(
     });
 }
 
-/// Finding c2686543, pinned: nothing in a control request proves which
-/// process sent it. The caller asserts `HERDR_PANE_ID` and
-/// `HERDR_WORKSPACE_ID`, the proof shows the named pane exists and runs an
-/// agent, and no field anywhere ties the request to that agent's process,
-/// so a bystander process that learns a live pane id is proved as that
-/// pane's member. If hardening ever binds a request to the agent's own
-/// process (peer credentials, per-pane authentication), this test is where
-/// the change becomes visible.
+/// The hardening of finding c2686543: the snapshot proof still relies on
+/// the asserted pane id, so a bystander process that names a live pane
+/// passes `current_identity`; what pins it to the agent's own process is
+/// the peer-credential binding recorded at registration, checked by
+/// `check_peer` on top of the proof. The old baseline
+/// (`a_caller_naming_a_live_pane_is_treated_as_that_pane`) pinned the
+/// pre-hardening behavior; this pins the new one, per side.
 #[gpui::test]
-fn a_caller_naming_a_live_pane_is_treated_as_that_pane(cx: &mut gpui::TestAppContext) {
+fn a_caller_naming_a_live_pane_needs_its_process_identity(cx: &mut gpui::TestAppContext) {
     with_window(cx, |view| {
         view.live.status = ConnectionStatus::Connected;
         view.live.snapshot = Some(Arc::new(snapshot(
@@ -205,9 +206,8 @@ fn a_caller_naming_a_live_pane_is_treated_as_that_pane(cx: &mut gpui::TestAppCon
         )));
         view.endpoints[0].live = view.live.clone();
 
-        // The agent's own pane environment asserts exactly these two ids; a
-        // bystander process that learned them asserts the same ones, and
-        // `Caller` has no further field that could tell the two apart.
+        // The proof itself is unchanged: the asserted pane id is all the
+        // snapshot sees.
         let bystander = Caller {
             pane_id: Some("w0:p1".into()),
             workspace_id: Some("w0".into()),
@@ -215,11 +215,54 @@ fn a_caller_naming_a_live_pane_is_treated_as_that_pane(cx: &mut gpui::TestAppCon
         };
         let (target, endpoint) = current_identity(view, &bystander)
             .expect("the proof relies on the asserted pane id alone, by design");
-
         assert_eq!(endpoint, 0);
-        assert_eq!(target.session, "agent:codex:w0:w0:p1");
-        assert_eq!(target.workspace.as_deref(), Some("w0"));
         assert_eq!(target.pane.as_deref(), Some("w0:p1"));
+
+        let uid = nix::unistd::geteuid().as_raw();
+        let gid = nix::unistd::getgid().as_raw();
+        let agent = PeerCredentials {
+            uid,
+            gid,
+            pid: Some(424242),
+        };
+        let bystander_cred = PeerCredentials {
+            uid,
+            gid,
+            pid: Some(999999),
+        };
+        let bindings = [(target.clone(), agent)]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        // A same-user bystander without the agent's process identity is
+        // refused where it used to be treated as the pane's member.
+        assert!(check_peer(&bindings, &target, Some(bystander_cred), true, Some(uid)).is_err());
+        // No binding at all (a UI restart clears them) is refused with
+        // register-again guidance.
+        let empty = PeerBindings::default();
+        let refused = check_peer(&empty, &target, Some(agent), true, Some(uid)).unwrap_err();
+        let Response::Error { message, .. } = &refused else {
+            panic!("an error response is expected");
+        };
+        assert!(message.contains("register"), "{message}");
+        // The registered agent process is allowed.
+        assert!(check_peer(&bindings, &target, Some(agent), true, Some(uid)).is_ok());
+        // The tunnel's sshd peer (root) is the documented downgrade.
+        let tunnel = PeerCredentials {
+            uid: 0,
+            gid: 0,
+            pid: Some(1),
+        };
+        assert!(check_peer(&empty, &target, Some(tunnel), true, Some(uid)).is_ok());
+        // Another local user is refused, and the Windows transport, which
+        // cannot prove a process identity, degrades to its pipe DACL.
+        let other = PeerCredentials {
+            uid: uid + 1,
+            gid,
+            pid: Some(2),
+        };
+        assert!(check_peer(&empty, &target, Some(other), true, Some(uid)).is_err());
+        assert!(check_peer(&empty, &target, None, false, None).is_ok());
     });
 }
 

@@ -197,6 +197,25 @@ pub fn session_socket(config_dir: &Path, name: &str) -> Result<PathBuf> {
     .join("herdr-client.sock"))
 }
 
+/// The session a client socket path names, the way both ends derive it: the
+/// directory between `sessions` and the socket file, or the configuration
+/// root's own socket when there is none. A caller on another machine can
+/// name its daemon this way without the UI knowing that machine's state
+/// root, so this parses the path's shape and never touches the filesystem.
+pub fn session_from_socket_path(path: &str) -> Option<&str> {
+    let path = Path::new(path);
+    if path.file_name()? != "herdr-client.sock" {
+        return None;
+    }
+    let parent = path.parent()?;
+    let nearest = parent.file_name()?.to_str()?;
+    let above = parent.parent()?.file_name()?.to_str()?;
+    if above == "sessions" {
+        return valid_session_name(nearest).then_some(nearest);
+    }
+    (nearest == "herdr" || nearest == "herdr-dev").then_some("default")
+}
+
 impl ConnectTarget {
     /// Whether the daemon runs on another machine, on a cloud provider's
     /// machine, or inside a WSL distribution, so its paths, processes, and files are not
@@ -218,6 +237,23 @@ impl ConnectTarget {
             Self::Cloud { session, .. } => Some(session),
             _ => None,
         }
+    }
+
+    /// Whether this target is the daemon a caller names by its client socket
+    /// path. Local targets compare the path exactly, so another session's
+    /// workspace of the same ID never matches. A remote daemon has no local
+    /// socket path; both ends derive its socket from the session name, so
+    /// the session component of the caller's own socket path identifies it
+    /// without this machine knowing the remote user's state root.
+    pub fn matches_daemon_socket(&self, daemon_socket: &Path) -> bool {
+        if self.socket_path().ok().as_deref() == Some(daemon_socket) {
+            return true;
+        }
+        self.is_remote()
+            && daemon_socket
+                .to_str()
+                .and_then(session_from_socket_path)
+                .is_some_and(|session| self.remote_session() == Some(session))
     }
 
     pub fn socket_path(&self) -> Result<PathBuf> {

@@ -42,8 +42,9 @@ fn scoped_action_keeps_the_team(action: &ScopedAction) -> bool {
         ScopedAction::Status { .. }
         | ScopedAction::Roster
         | ScopedAction::BulletinList { .. }
-        | ScopedAction::TaskList
-        | ScopedAction::FindingList => true,
+        | ScopedAction::TaskList { .. }
+        | ScopedAction::FindingList { .. }
+        | ScopedAction::Heartbeat { .. } => true,
         ScopedAction::Register { .. }
         | ScopedAction::GoalSet { .. }
         | ScopedAction::BulletinPost { .. }
@@ -80,7 +81,10 @@ fn cli_actions() -> Vec<ScopedAction> {
             text: "working on it".into(),
             mentions: vec!["lead".into()],
         },
-        ScopedAction::TaskList,
+        ScopedAction::TaskList {
+            before: None,
+            limit: 20,
+        },
         ScopedAction::TaskCreate {
             task_id: task_id.clone(),
             title: "Write report".into(),
@@ -102,7 +106,10 @@ fn cli_actions() -> Vec<ScopedAction> {
             task_id,
             result: "report written".into(),
         },
-        ScopedAction::FindingList,
+        ScopedAction::FindingList {
+            before: None,
+            limit: 20,
+        },
         ScopedAction::FindingAdd {
             finding_id: uuid::Uuid::new_v4().to_string(),
             task_id: None,

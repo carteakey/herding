@@ -6,7 +6,7 @@ use super::*;
 use crate::config::{FontConfig, Theme};
 use crate::team::model::{PaneIdentity, TeamFinding, TeamLoadState, TeamMember, TeamSnapshot};
 use gpui::{FontWeight, px, size};
-use herdr_orchestrator::team_store::Confidence;
+use herdr_orchestrator::team_store::{Author, Confidence};
 
 use core::prelude::v1::test;
 
@@ -367,4 +367,31 @@ fn dense_ui_icon_toolbars_layout_properly(cx: &mut TestAppContext) {
             "member action button {id} should be a compact icon button: {b:?}"
         );
     }
+}
+
+#[gpui::test]
+fn bulletin_composer_renders_input_wrapper_and_submit(cx: &mut TestAppContext) {
+    let (window, cx) = bulletin_fixture(cx, vec![post("p1", "agent", "Hello")]);
+    window.update(cx, |this, cx| {
+        this.team_view.update(cx, |view, cx| {
+            view.snapshot.post_author = Some((
+                Author::Human {
+                    user_id: "human".into(),
+                },
+                "human".into(),
+            ));
+            cx.notify();
+        });
+    });
+    cx.simulate_resize(size(px(600.), px(900.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("bulletin-composer-input").is_some(),
+        "the bulletin composer input container with key handling should be laid out"
+    );
+    assert!(
+        cx.debug_bounds("team-post-submit").is_some(),
+        "the bulletin post submit button should be laid out"
+    );
 }

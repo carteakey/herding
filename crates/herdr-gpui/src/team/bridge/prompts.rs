@@ -320,7 +320,7 @@ fn prompts_for_team_action(
             vec![(
                 supervisor.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You are the Supervisor of team \"{}\". Strictly supervise: decompose the goal into tasks, assign tasks to workers, review findings, and coordinate via the bulletin rather than doing implementation work yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status` to get your TEAM_ID, `{cli} roster <TEAM_ID>` to inspect workers, `{cli} task list <TEAM_ID>` to manage tasks, and `{cli} bulletin list <TEAM_ID>` to read messages.",
+                    "[Herdr Team] You are the Supervisor of team \"{}\". Strictly supervise: decompose the goal into tasks, assign tasks to workers, review findings, and coordinate via the bulletin rather than doing implementation work yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status` to get your TEAM_ID, `{cli} roster <TEAM_ID>` to inspect workers, `{cli} task list <TEAM_ID>` to manage tasks, and `{cli} bulletin list <TEAM_ID>` to read messages (run `{cli} bulletin ack <TEAM_ID> <MESSAGE_ID>` to acknowledge).",
                     name.trim()
                 ),
                 format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
@@ -350,7 +350,7 @@ fn prompts_for_team_action(
             vec![(
                 pane.pane_id.clone(),
                 format!(
-                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}` to view the goal, `{cli} task list {team_id}` to claim open tasks (`{cli} task claim {team_id} <TASK_ID>`), and `{cli} bulletin list {team_id}` to read messages.",
+                    "[Herdr Team] You joined team {team_id} as Worker \"{}\". Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}` to view the goal, `{cli} task list {team_id}` to claim open tasks (`{cli} task claim {team_id} <TASK_ID>`), and `{cli} bulletin list {team_id}` to read messages (run `{cli} bulletin ack {team_id} <MESSAGE_ID>` to acknowledge).",
                     name.trim()
                 ),
                 format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
@@ -369,7 +369,7 @@ fn prompts_for_team_action(
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] Status check for {} in team {team_id}: please run `{cli} status {team_id}`, `{cli} task list {team_id}`, and `{cli} bulletin list {team_id}` to check active tasks and messages.",
+                            "[Herdr Team] Status check for {} in team {team_id}: please run `{cli} status {team_id}`, `{cli} task list {team_id}`, and `{cli} bulletin list {team_id}` to check active tasks and acknowledge messages with `{cli} bulletin ack {team_id} <MESSAGE_ID>`.",
                             m.display_name
                         ),
                         format!("Nudged {} ({pane_id})", m.display_name),
@@ -390,7 +390,7 @@ fn prompts_for_team_action(
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Strictly supervise: delegate tasks to workers, review their findings, and coordinate via the bulletin rather than implementing tasks yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}`, `{cli} roster {team_id}`, and `{cli} task list {team_id}`.",
+                            "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Strictly supervise: delegate tasks to workers, review their findings, and coordinate via the bulletin rather than implementing tasks yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}`, `{cli} roster {team_id}`, `{cli} task list {team_id}`, and `{cli} bulletin list {team_id}` (run `{cli} bulletin ack {team_id} <MESSAGE_ID>` to acknowledge).",
                             m.display_name, team.name
                         ),
                         format!("Promoted {} to supervisor ({pane_id})", m.display_name),
@@ -535,7 +535,7 @@ fn prompts_for_team_action(
                     Some((
                         pane_id.clone(),
                         format!(
-                            "[Herdr Team] New bulletin message in team {team_id}: \"{}\". Run `{cli} bulletin list {team_id}` to view and `{cli} bulletin post {team_id} \"...\"` to reply.",
+                            "[Herdr Team] New bulletin message in team {team_id}: \"{}\". Run `{cli} bulletin list {team_id}` to view, `{cli} bulletin ack {team_id} <MESSAGE_ID>` to acknowledge, and `{cli} bulletin post {team_id} \"...\"` to reply.",
                             body.trim()
                         ),
                         format!("Posted bulletin to team ({pane_id})"),
@@ -660,6 +660,33 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].0, "p_w1");
         assert!(prompts[0].1.contains("@worker1 please check this"));
+    }
+
+    #[test]
+    fn bulletin_prompts_instruct_explicit_ack() {
+        let team = test_team();
+        let post_action = TeamAction::Post {
+            team_id: "t1".into(),
+            author: Author::Human {
+                user_id: "human".into(),
+            },
+            body: "@worker1 please check this".into(),
+        };
+        let prompts = prompts_for_team_action(&post_action, Some(&team), &[]);
+        assert!(prompts[0].1.contains("bulletin ack t1"));
+
+        let worker_action = TeamAction::AddWorker {
+            team_id: "t1".into(),
+            name: "worker3".into(),
+            pane: PaneIdentity {
+                daemon_id: "d1".into(),
+                session_id: Some("s1".into()),
+                workspace_id: "ws".into(),
+                pane_id: "p_w3".into(),
+            },
+        };
+        let worker_prompts = prompts_for_team_action(&worker_action, Some(&team), &[]);
+        assert!(worker_prompts[0].1.contains("bulletin ack t1"));
     }
 
     #[test]

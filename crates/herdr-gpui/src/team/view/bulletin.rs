@@ -526,6 +526,52 @@ impl HerdrWindow {
             }
 
             let post_body_submit = post_body.clone();
+            let submit_action = {
+                let team_id = team_id.clone();
+                let author = author.clone();
+                let post_body = post_body_submit.clone();
+                move |this: &mut HerdrWindow, cx: &mut Context<HerdrWindow>| {
+                    let body = post_body.read(cx).text().trim().to_owned();
+                    if body.is_empty() {
+                        return;
+                    }
+                    let current_reply = this.team_view.read(cx).reply_to.clone();
+                    let action = match current_reply {
+                        Some(reply_to) => TeamAction::Reply {
+                            team_id: team_id.clone(),
+                            author: author.clone(),
+                            reply_to,
+                            body,
+                        },
+                        None => TeamAction::Post {
+                            team_id: team_id.clone(),
+                            author: author.clone(),
+                            body,
+                        },
+                    };
+                    this.team_view.update(cx, |view, cx| {
+                        view.reply_to = None;
+                        view.post_body.update(cx, |input, cx| input.clear(cx));
+                    });
+                    this.push_team_action(action, cx);
+                }
+            };
+
+            let submit_for_enter = submit_action.clone();
+            let input_container = div()
+                .id("bulletin-composer-input")
+                .debug_selector(|| "bulletin-composer-input".into())
+                .w_full()
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key.as_str() == "enter" {
+                        cx.stop_propagation();
+                        if !event.keystroke.modifiers.shift {
+                            submit_for_enter(this, cx);
+                        }
+                    }
+                }))
+                .child(post_body);
+
             composer = composer
                 .child(
                     div()
@@ -533,10 +579,11 @@ impl HerdrWindow {
                         .text_color(rgb(theme.muted))
                         .child(fl!("team-posting-as", author = author_label.as_ref())),
                 )
-                .child(post_body)
+                .child(input_container)
                 .child(
                     div()
                         .id("team-post-submit")
+                        .debug_selector(|| "team-post-submit".into())
                         .px_3()
                         .py_1()
                         .rounded(px(crate::config::corners::CONTROL))
@@ -549,29 +596,7 @@ impl HerdrWindow {
                             fl!("team-action-post")
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            let body = post_body_submit.read(cx).text().trim().to_owned();
-                            if body.is_empty() {
-                                return;
-                            }
-                            let current_reply = this.team_view.read(cx).reply_to.clone();
-                            let action = match current_reply {
-                                Some(reply_to) => TeamAction::Reply {
-                                    team_id: team_id.clone(),
-                                    author: author.clone(),
-                                    reply_to,
-                                    body,
-                                },
-                                None => TeamAction::Post {
-                                    team_id: team_id.clone(),
-                                    author: author.clone(),
-                                    body,
-                                },
-                            };
-                            this.team_view.update(cx, |view, cx| {
-                                view.reply_to = None;
-                                view.post_body.update(cx, |input, cx| input.clear(cx));
-                            });
-                            this.push_team_action(action, cx);
+                            submit_action(this, cx);
                         })),
                 );
             column = column.child(composer);

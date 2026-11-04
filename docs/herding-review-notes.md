@@ -44,7 +44,7 @@ and the existing work plan is in [herding-roadmap.md](herding-roadmap.md).
   session at action and delivery time; show a stale or unavailable state when
   proof is missing. Test endpoint switching, reconnect, and pane reuse.
 
-- [ ] **[P1] Deliver only to the resolved recipients.**
+- [x] **[P1] Deliver only to the resolved recipients.**
   `prompts_for_team_action` sent the full text of a UI bulletin post or reply to
   every roster pane, even when `resolve_recipients` restricted the stored post
   to mentioned members. Deliver or notify only the fixed, persisted recipient
@@ -70,7 +70,7 @@ and the existing work plan is in [herding-roadmap.md](herding-roadmap.md).
   and uncertain states and do not blindly retry an ambiguous submission. Test
   long-running, blocked, unknown, disconnected, and permission-prompt states.
 
-- [ ] **[P1] Make the agent bootstrap instructions executable.**
+- [x] **[P1] Make the agent bootstrap instructions executable.**
   `team/bridge/prompts.rs` instructed agents to run `herdr team ...`, including
   `inbox`, `post`, and `task done`. The documented implementation exposes
   `herdr-gpui team ...`, `bulletin list`, `bulletin post`, and `task complete`,
@@ -80,7 +80,7 @@ and the existing work plan is in [herding-roadmap.md](herding-roadmap.md).
 
 ### Durable state and bounded work
 
-- [ ] **[P1] Confirm permanent team deletion.**
+- [x] **[P1] Confirm permanent team deletion.**
   The Team header's Delete button immediately called `TeamStore::delete_team`,
   whose foreign-key cascades remove the team's messages, acknowledgements,
   tasks, and findings. Require a confirmation that describes the data being
@@ -151,3 +151,36 @@ desktop is available. Finally, exercise a supervisor and at least two real
 heterogeneous workers in isolated sessions, including messages sent while a
 worker is busy, and verify evidence, session identity, and delivery states.
 Do not use personal sessions as fixtures or modify Herdr itself.
+
+## Audit executive summary (@ HEAD db160671)
+
+Re-audit completed against this document at commit `db160671` (past `2d16092e`).
+
+| Finding | Verdict | Details |
+| --- | --- | --- |
+| **[P1] Validate request authority (HERDR_PANE_ID auth)** | **PARTIAL** | Session proof 3-tier (ACP transcript / CLI binding with PID+ticks / active agent session) at `control/server/team.rs:502-615`; exact-member match at `team_worker.rs:712`; homegrown JSON-RPC token still caller-controlled &rarr; any local process with socket access can spoof `HERDR_PANE_ID`. |
+| **[P1] Session not pane identity** | **PARTIAL** | Endpoint-aware proof on caller's host not selected endpoint; panes on non-selected endpoint still proved only by `agent:kind:workspace:pane` (same-KIND replacement inherits identity); 4 headless tests exist. |
+| **[P1] Fence prompts/rosters to session** | **PARTIAL** | Server: exact `member.target == caller` match &#10003;. UI: routers fallback to pane-only match `bridge/views.rs:60-65`; dispatch targets pane-id only, no host/session/workspace revalidation. |
+| **[P1] Persist before notifying** | **PARTIAL** | Server: `notify_team_mutation` only on `Ok(reply)` after store write (`team.rs:290-301`) &#10003;; UI side still dispatches same-tick as async `SaveTeam` before `complete()` confirms (`prompts.rs:95-101`) &mdash; silent-drop-on-failed-write retained. |
+| **[P1] Deliver only to resolved recipients** | **FIXED** | `resolve_recipients` &rarr; Explicit list only; targeted `@mention` excludes non-listed; invalid mention &rarr; no prompts; commits `8078b559`, tests `prompts.rs:649-712`. |
+| **[P1] Never inject into busy/blocked** | **PARTIAL** | Busy = Working \| Blocked held 120s via `agent_notes.rs:175,493` ("pasted anyway" on timeout = inject after hold); Unknown fails closed; ACP path `chats.pane_mut().send()` has no readiness check. |
+| **[P1] Bootstrap instructions executable** | **FIXED** | `skills/herdr-team/SKILL.md`, `docs/cli.md`, `parse_finding` (`--description` accepted, `--confidence` default medium); verified live (`team finding add --help`). |
+| **[P1] Confirm permanent deletion** | **FIXED** | Confirm banner `view.rs:690+`, `DeleteTeam` only on explicit Confirm; deletion only drops store rows, never kills Herdr sessions. |
+| **[P2] Stale roster saves** | **PARTIAL** | `MemberTargetChanged` rejects target-repointing at `team_store.rs:260` &#10003;; but `save_team` still full-snapshot upsert, no revision counter &rarr; stale snapshot can revert name/supervisor or resurrect a removed member (no interleaving tests). |
+| **[P2] Status queries bounded + propagate errors** | **OPEN** | `team_worker.rs:661` `while let Ok(page)` still treats page-read error as EOF (partial count), scans ALL history + per-post `recipient_statuses` on serialized worker; capped by `MAX_PAGE_SIZE=100` task count but post scan unbounded. |
+| **[P2] Later posts/tasks/findings reachable** | **PARTIAL** | Snapshot scans first `MAX_SCANNED_POSTS = 1000` (`team_worker.rs:594-636`); beyond 1000 posts never loaded; UI live-stream paginates only within loaded 200 (`POST_LIMIT`) `bulletin.rs:221`; CLI bulletin paging exists (`--after`), tasks/findings still first 100 only, no cursor. |
+
+### Residual next steps
+
+Logged as finding `bacfa7ee-914c-4f07-8035-c8c55d3554e4`:
+1. Run queued-session teardown: bind caller identity to socket-authenticated client (`HERDR_PANE_ID` alone insufficient &mdash; spoofable by any local process).
+2. Revalidate saved `SessionTarget` on every delivery (`host + session + workspace + pane`), drop UI pane-fallback `bridge/views.rs:60-65`.
+3. Delay UI prompt dispatch until `Pending::Write` completes, never optimistically same-tick.
+4. Index/timer per-recipient status aggregate for status; propagate page errors (don't swallow `Ok(page)`).
+5. Beyond-1000 posts + first-100 task/finding cursor pagination; ACP delivery readiness check.
+
+### Audit environment
+
+- **Agent / Runner:** Crouton Alpha Free
+- **Duration:** 21.0s
+- **Throughput:** 55.4 tok/s

@@ -18,6 +18,7 @@ team-roster-empty = No agents are registered in this team.
 team-action-add-worker = Add worker
 team-action-add = Add
 team-bulletin = Bulletin
+team-bulletin-summary = { $posts } · { $unacknowledged } unacknowledged
 team-posts-empty = No bulletin posts yet.
 team-delivery-unavailable = Delivery status unavailable
 team-delivery-pending = pending

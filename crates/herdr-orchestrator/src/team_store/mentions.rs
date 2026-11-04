@@ -95,6 +95,21 @@ impl TeamStore {
                 member_id: member_id.to_owned(),
             });
         }
+        // Delivery receipts belong to the member, not the post history, and
+        // the row must go even though posts remain. Scope by team because
+        // member IDs are only unique inside a team.
+        tx.execute(
+            "DELETE FROM acknowledgements
+             WHERE recipient_id = ?1
+               AND post_id IN (SELECT post_id FROM posts WHERE team_id = ?2)",
+            params![member_id, team_id],
+        )?;
+        tx.execute(
+            "DELETE FROM mentions
+             WHERE recipient_id = ?1
+               AND post_id IN (SELECT post_id FROM posts WHERE team_id = ?2)",
+            params![member_id, team_id],
+        )?;
         tx.commit()?;
         Ok(())
     }

@@ -100,7 +100,11 @@ impl HerdrWindow {
                             .bg(rgb(theme.surface))
                             .text_size(px(11.))
                             .text_color(rgb(theme.muted))
-                            .child(format!("{} · {} pending", posts.len(), pending_count)),
+                            .child(fl!(
+                                "team-bulletin-summary",
+                                posts = posts.len(),
+                                unacknowledged = pending_count
+                            )),
                     ),
             )
             .child(

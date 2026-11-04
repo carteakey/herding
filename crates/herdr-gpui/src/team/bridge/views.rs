@@ -102,6 +102,9 @@ pub(crate) fn view_posts(
             .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
             .into()
     };
+    let roster_ids: HashSet<&str> = roster(team)
+        .map(|member| member.member_id.as_str())
+        .collect();
     let author = |author: &Author| match author {
         Author::Human { .. } => SharedString::from(fl!("team-author-human")),
         Author::Member { member_id } => name(member_id),
@@ -118,8 +121,12 @@ pub(crate) fn view_posts(
                     .find(|(other, _)| other.post_id == *id)
                     .map(|(other, _)| author(&other.author))
             }),
+            // A removed member keeps no delivery pill and cannot keep a post
+            // counted as unacknowledged, even if their mention row predates
+            // the cleanup in `remove_member`.
             deliveries: statuses
                 .iter()
+                .filter(|(recipient, _)| roster_ids.contains(recipient.as_str()))
                 .map(|(recipient, status)| {
                     let state = match status {
                         RecipientStatus::Pending => DeliveryState::Pending,

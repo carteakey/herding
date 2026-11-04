@@ -873,3 +873,7 @@ mod query_bounds_tests;
 #[cfg(test)]
 #[path = "team_worker/scoped_tests.rs"]
 mod scoped_tests;
+
+#[cfg(test)]
+#[path = "team_worker/delete_gate_tests.rs"]
+mod delete_gate_tests;

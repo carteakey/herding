@@ -305,4 +305,7 @@ pub enum Reply {
 }
 
 #[cfg(test)]
+mod delete_gate;
+
+#[cfg(test)]
 mod tests;

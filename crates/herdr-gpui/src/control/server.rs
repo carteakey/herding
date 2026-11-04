@@ -29,9 +29,8 @@ use crate::{
 };
 use browser::{feedback, notes, open_browser, reload, serve_waiters};
 use gpui::{App, Context, Window, WindowHandle};
-use herdr_orchestrator::team_store::SessionTarget;
+
 use std::{
-    collections::HashMap,
     path::Path,
     time::{Duration, Instant},
 };
@@ -126,7 +125,7 @@ struct State {
     /// The process identity each team member registered from, keyed by the
     /// proven session target. In memory only: a UI restart clears it, and a
     /// member registers again.
-    team_peers: HashMap<SessionTarget, socket::PeerCredentials>,
+    team_peers: team::PeerBindings,
 }
 
 fn not_found(message: impl Into<String>) -> Response {

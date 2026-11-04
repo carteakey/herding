@@ -14,9 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `herdr-gpui v20261104.2 (05b1a580)`. The build embeds the calendar version
   from the newest reachable release tag plus the short rev, with `-dirty`
   appended for uncommitted trees; per-part fallbacks keep a bare clone honest.
-- Team calls from your own user are bound to the process that registered
-  the member (Unix peer credentials: `SO_PEERCRED` on Linux, `getpeereid`
-  on macOS); the control tunnel's callers are recognized by their sshd
+- Team calls from your own user are bound to the pane's agent process
+  (issue #3): registration anchors the ancestor carrying the agent's name
+  with its `/proc` start time, and later calls are accepted when the
+  calling process descends from that exact process - every CLI invocation
+  is a fresh child of the agent, so shells work, while a bystander naming
+  the pane descends from its own tree and is refused. Peer credentials:
+  `SO_PEERCRED` on Linux; `getpeereid` on macOS degrades to the user
+  check; the control tunnel's callers are recognized by their sshd
   credential and proved by snapshot as before (`docs/control-tunnel.md`).
 - Task assignment wakes the assignee's own session with the task card:
   dispatched only after the store write confirms, deduped per assignment

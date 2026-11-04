@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use super::dispatch::prompts_for_scoped_reply;
-use super::identity::{PeerBindings, check_peer};
+use super::identity::{AgentProcess, MemberBinding, PeerBindings, check_peer, proc_stat};
 use super::*;
 use crate::{
     HerdrWindow,
@@ -230,9 +230,15 @@ fn a_caller_naming_a_live_pane_needs_its_process_identity(cx: &mut gpui::TestApp
             gid,
             pid: Some(999999),
         };
-        let bindings = [(target.clone(), agent)]
-            .into_iter()
-            .collect::<std::collections::HashMap<_, _>>();
+        let bindings = [(
+            target.clone(),
+            MemberBinding {
+                credentials: agent,
+                agent: None,
+            },
+        )]
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
 
         // A same-user bystander without the agent's process identity is
         // refused where it used to be treated as the pane's member.
@@ -264,6 +270,179 @@ fn a_caller_naming_a_live_pane_needs_its_process_identity(cx: &mut gpui::TestApp
         assert!(check_peer(&empty, &target, Some(other), true, Some(uid)).is_err());
         assert!(check_peer(&empty, &target, None, false, None).is_ok());
     });
+}
+
+/// The agent-lineage contract (issue #3): registration anchors the pane's
+/// agent process, and a caller is accepted when it descends from that exact
+/// process, start time included. Linux only: peer credentials carry no pid on
+/// macOS, which keeps the user check, and `/proc` does not exist there.
+#[cfg(target_os = "linux")]
+mod lineage {
+    use super::*;
+    use std::time::Duration;
+
+    fn target_fixture() -> SessionTarget {
+        SessionTarget {
+            host: "boot".into(),
+            session: "agent:codex:w0:w0:p1".into(),
+            workspace: Some("w0".into()),
+            pane: Some("w0:p1".into()),
+        }
+    }
+
+    fn binding_for(agent: AgentProcess) -> MemberBinding {
+        MemberBinding {
+            credentials: PeerCredentials {
+                uid: nix::unistd::geteuid().as_raw(),
+                gid: nix::unistd::getgid().as_raw(),
+                pid: None,
+            },
+            agent: Some(agent),
+        }
+    }
+
+    fn caller(pid: u32) -> Option<PeerCredentials> {
+        Some(PeerCredentials {
+            uid: nix::unistd::geteuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+            pid: Some(pid),
+        })
+    }
+
+    fn local_uid() -> Option<u32> {
+        Some(nix::unistd::geteuid().as_raw())
+    }
+
+    /// Waits until `pid` no longer descends from this test process: a
+    /// `sh -c 'sleep 5 &'` orphan is still a child of the short-lived shell
+    /// for a few ticks, which would make the bystander look like a
+    /// descendant of the agent. Re-parenting lands on a systemd user
+    /// subreaper rather than init, so the parent pid alone cannot be checked.
+    fn wait_detached_from_test(pid: u32) {
+        let self_pid = std::process::id();
+        for _ in 0..40 {
+            let mut current = pid;
+            let mut reaches_test = false;
+            for _ in 0..16 {
+                if current == self_pid {
+                    reaches_test = true;
+                    break;
+                }
+                let Some((parent, _)) = proc_stat(current) else {
+                    break;
+                };
+                if parent <= 1 {
+                    break;
+                }
+                current = parent;
+            }
+            if !reaches_test {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the orphan process still descends from this test process");
+    }
+
+    #[test]
+    fn the_agent_process_itself_is_accepted() {
+        let pid = std::process::id();
+        let started = proc_stat(pid)
+            .expect("this test's own process is readable")
+            .1;
+        let bindings = [(target_fixture(), binding_for(AgentProcess { pid, started }))]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(check_peer(&bindings, &target_fixture(), caller(pid), true, local_uid()).is_ok());
+    }
+
+    #[test]
+    fn a_descendant_of_the_agent_is_accepted() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("a child process spawns");
+        let pid = std::process::id();
+        let (_, started) = proc_stat(pid).expect("this test's own process is readable");
+        let bindings = [(target_fixture(), binding_for(AgentProcess { pid, started }))]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(
+            check_peer(
+                &bindings,
+                &target_fixture(),
+                caller(child.id()),
+                true,
+                local_uid()
+            )
+            .is_ok()
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_bystander_outside_the_lineage_is_refused() {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5 & echo $!")
+            .output()
+            .expect("an orphan process spawns");
+        let pid: u32 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .expect("the orphan prints its pid");
+        wait_detached_from_test(pid);
+
+        let pid_self = std::process::id();
+        let (_, started) = proc_stat(pid_self).expect("this test's own process is readable");
+        let bindings = [(
+            target_fixture(),
+            binding_for(AgentProcess {
+                pid: pid_self,
+                started,
+            }),
+        )]
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+        let refused = check_peer(&bindings, &target_fixture(), caller(pid), true, local_uid())
+            .expect_err("a re-parented bystander is not a descendant of the agent");
+        let Response::Error { message, .. } = &refused else {
+            panic!("an error response is expected");
+        };
+        assert!(message.contains("descend"), "{message}");
+    }
+
+    #[test]
+    fn a_reused_pid_with_a_different_start_time_is_refused() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("a child process spawns");
+        // The child's pid with a start time that belongs to no real process:
+        // exactly what a reused pid looks like to the check.
+        let bindings = [(
+            target_fixture(),
+            binding_for(AgentProcess {
+                pid: child.id(),
+                started: 1,
+            }),
+        )]
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+        assert!(
+            check_peer(
+                &bindings,
+                &target_fixture(),
+                caller(child.id()),
+                true,
+                local_uid()
+            )
+            .is_err()
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {

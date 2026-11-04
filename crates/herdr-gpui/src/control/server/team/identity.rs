@@ -208,7 +208,102 @@ pub(super) fn current_identity(
 /// The process identity each member registered from, keyed by the session
 /// target the member is proved by. In memory only: a UI restart clears it,
 /// and a member registers again.
-pub(crate) type PeerBindings = HashMap<SessionTarget, PeerCredentials>;
+pub(crate) type PeerBindings = HashMap<SessionTarget, MemberBinding>;
+
+/// What registration recorded for one member: the registering process's own
+/// credentials, and, when the proof was an agent-session proof on Linux, the
+/// pane's agent process ([`AgentProcess`]) the CLI invocation descended from.
+#[derive(Clone, Debug)]
+pub(crate) struct MemberBinding {
+    pub(crate) credentials: PeerCredentials,
+    pub(crate) agent: Option<AgentProcess>,
+}
+
+/// The pane's agent process, anchored at registration: the ancestor of the
+/// registering CLI whose command line carries the agent kind, with its
+/// `/proc` start time so a reused pid never matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AgentProcess {
+    pub(crate) pid: u32,
+    pub(crate) started: u64,
+}
+
+/// How far a `/proc` lineage walk follows parents before giving up; deep
+/// enough for any agent nesting, shallow enough to fail fast.
+const LINEAGE_CAP: usize = 16;
+
+/// `/proc/PID/stat`'s parent pid and start time. The start time is the stat
+/// line's 22nd field; the command name in parentheses may contain spaces and
+/// parentheses, so everything before its last `)` is skipped. Mirrors the
+/// herdr-acp observer's parsing.
+#[cfg(target_os = "linux")]
+pub(crate) fn proc_stat(pid: u32) -> Option<(u32, u64)> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = text.rsplit_once(')')?.1;
+    let mut fields = rest.split_whitespace();
+    let _state = fields.next()?;
+    let ppid = fields.next()?.parse::<u32>().ok()?;
+    let started = fields.nth(17)?.parse::<u64>().ok()?;
+    Some((ppid, started))
+}
+
+/// `/proc/PID/cmdline`, arguments joined into one lowercased line.
+#[cfg(target_os = "linux")]
+fn proc_cmdline(pid: u32) -> Option<String> {
+    let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let line = String::from_utf8_lossy(&bytes).replace('\0', " ");
+    (!line.trim().is_empty()).then(|| line.to_lowercase())
+}
+
+/// Anchors the agent process for a registering CLI on Linux: walks the
+/// caller's ancestry and returns the first ancestor whose command line
+/// carries the agent `kind`. Shells in between carry the CLI's own command
+/// line, not the agent's name, so the first match is the agent; a reused pid
+/// is excluded by the start time recorded alongside.
+#[cfg(target_os = "linux")]
+pub(crate) fn agent_lineage(pid: u32, kind: &str) -> Option<AgentProcess> {
+    let kind = kind.to_lowercase();
+    let mut current = pid;
+    for _ in 0..LINEAGE_CAP {
+        if let Some(line) = proc_cmdline(current)
+            && line.contains(&kind)
+            && let Some((_, started)) = proc_stat(current)
+        {
+            return Some(AgentProcess {
+                pid: current,
+                started,
+            });
+        }
+        let (parent, _) = proc_stat(current)?;
+        if parent <= 1 {
+            return None;
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Whether `pid` descends from `agent`: its ancestry holds a process that is
+/// still that exact agent process, start time included.
+#[cfg(target_os = "linux")]
+fn descends_from(pid: u32, agent: AgentProcess) -> bool {
+    let mut current = pid;
+    for _ in 0..LINEAGE_CAP {
+        if current == agent.pid
+            && proc_stat(current).is_some_and(|(_, started)| started == agent.started)
+        {
+            return true;
+        }
+        let Some((parent, _)) = proc_stat(current) else {
+            return false;
+        };
+        if parent <= 1 {
+            return false;
+        }
+        current = parent;
+    }
+    false
+}
 
 /// Whether a proven caller holds the process identity its member registered
 /// with, on top of the snapshot proof [`current_identity`] ran. Same-user
@@ -218,6 +313,13 @@ pub(crate) type PeerBindings = HashMap<SessionTarget, PeerCredentials>;
 /// the snapshot proofs apply as documented in `docs/control-tunnel.md`;
 /// anything else is refused, though the mode-0600 socket makes it
 /// unreachable in practice.
+///
+/// On Linux a member registered through an agent-session proof additionally
+/// recorded its agent process, and a caller is accepted only when it descends
+/// from that exact process, start time included: every CLI invocation is a
+/// fresh child of the agent, so exact-pid equality would refuse them all,
+/// while a bystander naming the pane descends from its own process tree and
+/// matches nothing.
 pub(crate) fn check_peer(
     peers: &PeerBindings,
     proven: &SessionTarget,
@@ -252,7 +354,18 @@ pub(crate) fn check_peer(
             ErrorCode::Unsupported,
             "No process binding is recorded for this member; run the team register command again from the agent's pane",
         )),
-        Some(recorded) => {
+        Some(binding) => {
+            let recorded = &binding.credentials;
+            #[cfg(target_os = "linux")]
+            if let (Some(caller), Some(agent)) = (cred.pid, binding.agent) {
+                if descends_from(caller, agent) {
+                    return Ok(());
+                }
+                return Err(Response::error(
+                    ErrorCode::Unsupported,
+                    "This caller does not descend from the pane's registered agent process; run the team register command from the agent's own pane",
+                ));
+            }
             // A recorded pid of None is macOS, which cannot prove one; the
             // uid and gid already matched.
             if recorded.pid.is_some() && recorded.pid != cred.pid {

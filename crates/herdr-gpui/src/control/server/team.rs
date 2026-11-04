@@ -24,8 +24,9 @@ mod identity;
 mod projection;
 
 use dispatch::notify_team_mutation;
+pub(crate) use identity::PeerBindings;
 pub(crate) use identity::prove_pane_session_at;
-use identity::{PeerBindings, check_peer, current_identity, pane_agents};
+use identity::{check_peer, current_identity, pane_agents};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
 
 const WATCH_SECONDS: u64 = 20;
@@ -70,7 +71,12 @@ pub(super) fn serve(
         };
         // The registering process records its identity for every later
         // request; every other call must hold the identity its member
-        // registered with, on top of the proof above.
+        // registered with, on top of the proof above. When the proof is an
+        // agent-session proof on Linux, registration anchors the pane's
+        // agent process (the ancestor carrying the agent kind, start time
+        // included): every CLI invocation is a fresh child of that agent, so
+        // later callers are accepted as its descendants instead of having to
+        // be the registering process itself.
         if registering {
             if peer_auth && peer.is_none() {
                 return Response::error(
@@ -79,7 +85,21 @@ pub(super) fn serve(
                 );
             }
             if let Some(credentials) = peer {
-                peers.insert(target.clone(), credentials);
+                #[cfg(target_os = "linux")]
+                let agent = match (credentials.pid, target.session.strip_prefix("agent:")) {
+                    (Some(pid), Some(rest)) => rest
+                        .split(':')
+                        .next()
+                        .filter(|kind| !kind.is_empty())
+                        .and_then(|kind| identity::agent_lineage(pid, kind)),
+                    _ => None,
+                };
+                #[cfg(not(target_os = "linux"))]
+                let agent = None;
+                peers.insert(
+                    target.clone(),
+                    identity::MemberBinding { credentials, agent },
+                );
             }
         } else if let Err(response) = check_peer(peers, &target, peer, peer_auth, local_uid()) {
             return response;

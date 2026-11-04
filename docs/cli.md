@@ -174,17 +174,22 @@ Since the per-process hardening, the Unix socket also proves the process.
 The kernel reports the connecting process's credentials (Linux through
 `SO_PEERCRED`, which carries the PID; macOS through `getpeereid`, which
 carries the user and group but no PID). Registering a member records those
-credentials for the proven session target, and every later call from your
-own user must hold them: a process without the recorded identity is
-refused, with a hint to run `team register` again. The bindings live in
-the UI's memory, so after a UI restart a member registers again. On macOS
-the missing PID means the process check degrades to the user check there.
-Callers arriving through the control tunnel terminate at sshd, so their
-credentials name the tunnel process, not the remote agent; the snapshot
-proofs above apply to them, as `docs/control-tunnel.md` records. The
-Windows pipe proves no process identity and keeps its DACL trust. The
-behavior is pinned by an impersonation regression test in
-`control/server/team`.
+credentials for the proven session target. On Linux, a member proved by its
+agent session also anchors its agent process at registration: the ancestor
+of the registering command whose command line carries the agent's name,
+with the `/proc` start time so a reused PID can never stand in for it.
+Later calls are accepted when the calling process descends from that exact
+agent process - every `team` command is a fresh child of the agent, so
+ordinary shells work, while a bystander naming the pane descends from its
+own process tree and is refused. If the agent restarts, register again; a
+stale anchor refuses until then. The bindings live in the UI's memory, so
+after a UI restart a member registers again. On macOS the missing PID means
+the process check degrades to the user check there. Callers arriving through
+the control tunnel terminate at sshd, so their credentials name the tunnel
+process, not the remote agent; the snapshot proofs above apply to them, as
+`docs/control-tunnel.md` records. The Windows pipe proves no process
+identity and keeps its DACL trust. The behavior is pinned by impersonation
+regression tests in `control/server/team`.
 
 The trust is still local-user trust, the same trust `sudo`, your shell
 history, and your sockets already carry: an agent teammate is trusted

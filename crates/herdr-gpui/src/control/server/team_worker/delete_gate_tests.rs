@@ -4,7 +4,7 @@
 //! keeps the team and its members.
 #![allow(clippy::unwrap_used)]
 use super::*;
-use herdr_orchestrator::team_store::{Confidence, Member, SessionTarget};
+use herdr_orchestrator::team_store::{Confidence, MAX_PAGE_SIZE, Member, SessionTarget};
 
 fn target(n: u8) -> SessionTarget {
     SessionTarget {
@@ -42,8 +42,9 @@ fn scoped_action_keeps_the_team(action: &ScopedAction) -> bool {
         ScopedAction::Status { .. }
         | ScopedAction::Roster
         | ScopedAction::BulletinList { .. }
-        | ScopedAction::TaskList
-        | ScopedAction::FindingList => true,
+        | ScopedAction::TaskList { .. }
+        | ScopedAction::FindingList { .. }
+        | ScopedAction::Heartbeat { .. } => true,
         ScopedAction::Register { .. }
         | ScopedAction::GoalSet { .. }
         | ScopedAction::BulletinPost { .. }
@@ -80,7 +81,10 @@ fn cli_actions() -> Vec<ScopedAction> {
             text: "working on it".into(),
             mentions: vec!["lead".into()],
         },
-        ScopedAction::TaskList,
+        ScopedAction::TaskList {
+            before: None,
+            limit: MAX_PAGE_SIZE,
+        },
         ScopedAction::TaskCreate {
             task_id: task_id.clone(),
             title: "Write report".into(),
@@ -102,7 +106,10 @@ fn cli_actions() -> Vec<ScopedAction> {
             task_id,
             result: "report written".into(),
         },
-        ScopedAction::FindingList,
+        ScopedAction::FindingList {
+            before: None,
+            limit: MAX_PAGE_SIZE,
+        },
         ScopedAction::FindingAdd {
             finding_id: uuid::Uuid::new_v4().to_string(),
             task_id: None,
@@ -111,6 +118,7 @@ fn cli_actions() -> Vec<ScopedAction> {
             confidence: Confidence::High,
             supersedes: None,
         },
+        ScopedAction::Heartbeat { member_id: None },
     ]
     .into_iter()
     .collect()

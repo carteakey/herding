@@ -167,6 +167,8 @@ fn a_reply_the_bridge_ignores_withdraws_the_prompts_waiting_on_it() {
             posts: Vec::new(),
             tasks: Vec::new(),
             findings: Vec::new(),
+            task_older: None,
+            finding_older: None,
         }),
     });
 

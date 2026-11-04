@@ -101,7 +101,6 @@ team-action-resume = Resume
 team-action-hide-bulletin = Hide bulletin
 team-status-paused = Paused
 team-status-pto = PTO (Rate Limited)
-team-status-crashed = Crashed
 team-action-import-issue = Import #issue
 team-action-import-issue-task = Import as task
 team-action-import-issue-goal = Set as goal

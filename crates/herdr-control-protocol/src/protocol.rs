@@ -146,7 +146,9 @@ pub struct Caller {
     #[serde(default)]
     pub workspace_id: Option<String>,
     /// The client socket of the caller's daemon, which tells two local
-    /// sessions' identical workspace IDs apart.
+    /// sessions' identical workspace IDs apart. A caller on a remote daemon
+    /// names it by its own socket path on that machine, whose `sessions`
+    /// component identifies the attached session.
     #[serde(default)]
     pub daemon_socket: Option<String>,
     /// The window to act in, by the ID `window list` reports.

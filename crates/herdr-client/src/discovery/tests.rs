@@ -156,3 +156,63 @@ fn sessions_are_contained_and_default_is_not_nested() {
         PathBuf::from("/tmp/explicit.sock")
     );
 }
+
+#[test]
+fn socket_paths_name_their_session() {
+    assert_eq!(
+        session_from_socket_path("/state/herdr/herdr-client.sock"),
+        Some("default")
+    );
+    assert_eq!(
+        session_from_socket_path("/state/herdr-dev/herdr-client.sock"),
+        Some("default")
+    );
+    assert_eq!(
+        session_from_socket_path("/state/herdr/sessions/work/herdr-client.sock"),
+        Some("work")
+    );
+    assert_eq!(
+        session_from_socket_path("/home/u/.local/state/herdr/sessions/team-1/herdr-client.sock"),
+        Some("team-1")
+    );
+    // A path neither the release nor the development root derives is not a
+    // session, and neither is a file that is not the client socket.
+    assert_eq!(
+        session_from_socket_path("/tmp/other/herdr-client.sock"),
+        None
+    );
+    assert_eq!(session_from_socket_path("/state/herdr/other.sock"), None);
+    assert_eq!(session_from_socket_path("not a path"), None);
+    assert_eq!(
+        session_from_socket_path("/state/herdr/sessions/bad name/herdr-client.sock"),
+        None
+    );
+}
+
+#[test]
+fn remote_daemons_match_by_the_session_their_socket_path_names() {
+    let ssh = ConnectTarget::Ssh {
+        target: "box".into(),
+        session: "fleet-1".into(),
+    };
+    assert!(ssh.matches_daemon_socket(Path::new(
+        "/home/u/.local/state/herdr/sessions/fleet-1/herdr-client.sock",
+    )));
+    assert!(
+        ssh.matches_daemon_socket(Path::new("/state/herdr/sessions/fleet-1/herdr-client.sock",))
+    );
+    assert!(!ssh.matches_daemon_socket(Path::new(
+        "/home/u/.local/state/herdr/sessions/other/herdr-client.sock",
+    )));
+    assert!(!ssh.matches_daemon_socket(Path::new("/home/u/.local/state/herdr/herdr-client.sock",)));
+
+    // Local targets still compare their socket path exactly; a session name
+    // a path merely carries never stands in for it.
+    let socket = ConnectTarget::Socket(PathBuf::from("/state/herdr/herdr-client.sock"));
+    assert!(socket.matches_daemon_socket(Path::new("/state/herdr/herdr-client.sock")));
+    assert!(!socket.matches_daemon_socket(Path::new("/other/herdr-client.sock")));
+    assert!(
+        !socket
+            .matches_daemon_socket(Path::new("/state/herdr/sessions/fleet-1/herdr-client.sock",))
+    );
+}

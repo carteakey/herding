@@ -25,7 +25,8 @@ fn team_op_keeps_the_team(op: &TeamOp) -> bool {
         | TeamOp::Roster { .. }
         | TeamOp::TaskList { .. }
         | TeamOp::FindingList { .. }
-        | TeamOp::BulletinList { .. } => true,
+        | TeamOp::BulletinList { .. }
+        | TeamOp::Heartbeat { .. } => true,
         TeamOp::Register { .. }
         | TeamOp::GoalSet { .. }
         | TeamOp::BulletinPost { .. }
@@ -73,6 +74,8 @@ fn no_team_operation_deletes_a_team() {
         },
         TeamOp::TaskList {
             team_id: "team-1".into(),
+            before: None,
+            limit: None,
         },
         TeamOp::TaskCreate {
             team_id: "team-1".into(),
@@ -105,6 +108,8 @@ fn no_team_operation_deletes_a_team() {
         },
         TeamOp::FindingList {
             team_id: "team-1".into(),
+            before: None,
+            limit: None,
         },
         TeamOp::FindingAdd {
             team_id: "team-1".into(),
@@ -113,6 +118,11 @@ fn no_team_operation_deletes_a_team() {
             evidence: "A probe showed it.".into(),
             supersedes: None,
             description: "A gap".into(),
+        },
+        TeamOp::Heartbeat {
+            team_id: "team-1".into(),
+            member_id: None,
+            ping: false,
         },
     ];
     for op in &ops {

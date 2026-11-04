@@ -21,50 +21,89 @@ impl HerdrWindow {
         target: &Target<'_>,
         strict: bool,
     ) -> Option<(usize, String)> {
-        self.endpoints
-            .iter()
-            .enumerate()
-            .find_map(|(index, endpoint)| {
-                if strict {
-                    let matches = match target.daemon {
-                        Some(daemon) => {
+        // The endpoints that may hold the caller's workspace, strictest
+        // first: a caller that names its daemon is matched on that daemon
+        // only, by exact socket path first, then by the session a remote
+        // daemon's socket path names, so another session's workspace of the
+        // same ID never resolves for it.
+        let candidates: Vec<usize> = if strict {
+            match target.daemon {
+                Some(daemon) => {
+                    let exact: Vec<usize> = self
+                        .endpoints
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, endpoint)| {
                             endpoint.connection.target.socket_path().ok().as_deref() == Some(daemon)
+                        })
+                        .map(|(index, _)| index)
+                        .collect();
+                    if !exact.is_empty() {
+                        exact
+                    } else {
+                        // A remote daemon has no local socket path; its
+                        // session name is the component its own socket path
+                        // carries, which both ends derive the same way.
+                        let remote: Vec<usize> = self
+                            .endpoints
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, endpoint)| {
+                                endpoint.connection.target.matches_daemon_socket(daemon)
+                            })
+                            .map(|(index, _)| index)
+                            .collect();
+                        // Several shown hosts sharing one session name are
+                        // indistinguishable to the caller: refuse, never
+                        // guess.
+                        if remote.len() == 1 {
+                            remote
+                        } else {
+                            Vec::new()
                         }
-                        None => index == self.selected_endpoint,
-                    };
-                    if !matches {
-                        return None;
                     }
-                } else if target.workspace.is_none() {
-                    return None;
                 }
-                let live = if index == self.selected_endpoint {
-                    &self.live
-                } else {
-                    &endpoint.live
-                };
-                let snapshot = live.snapshot.as_ref()?;
-                let workspace = match target.workspace {
-                    Some(id) => id,
-                    None => snapshot.focused_workspace_id.as_deref()?,
-                };
-                snapshot
-                    .workspaces
-                    .iter()
-                    .any(|candidate| candidate.workspace_id == workspace)
-                    .then(|| (index, workspace.to_owned()))
-            })
+                None => {
+                    if self.selected_endpoint < self.endpoints.len() {
+                        vec![self.selected_endpoint]
+                    } else {
+                        Vec::new()
+                    }
+                }
+            }
+        } else if target.workspace.is_some() {
+            (0..self.endpoints.len()).collect()
+        } else {
+            return None;
+        };
+        candidates.into_iter().find_map(|index| {
+            let endpoint = &self.endpoints[index];
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            let snapshot = live.snapshot.as_ref()?;
+            let workspace = match target.workspace {
+                Some(id) => id,
+                None => snapshot.focused_workspace_id.as_deref()?,
+            };
+            snapshot
+                .workspaces
+                .iter()
+                .any(|candidate| candidate.workspace_id == workspace)
+                .then(|| (index, workspace.to_owned()))
+        })
     }
 
     /// Whether the host this window shows is the daemon at `daemon`, listing
     /// workspaces or not, connected or not. Window-wide commands act on the
-    /// shown host, so only that one may stand for the caller's daemon.
+    /// shown host, so only that one may stand for the caller's daemon. A
+    /// remote daemon matches by the session its caller's socket path names.
     pub(crate) fn shows_daemon(&self, daemon: &std::path::Path) -> bool {
         self.endpoints
             .get(self.selected_endpoint)
-            .is_some_and(|endpoint| {
-                endpoint.connection.target.socket_path().ok().as_deref() == Some(daemon)
-            })
+            .is_some_and(|endpoint| endpoint.connection.target.matches_daemon_socket(daemon))
     }
 
     /// Opens the tab a control request asks for, if this window shows its

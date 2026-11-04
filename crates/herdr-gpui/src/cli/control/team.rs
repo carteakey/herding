@@ -79,6 +79,11 @@ pub enum TeamCommand {
         supersedes: Option<String>,
         description: String,
     },
+    Heartbeat {
+        team_id: String,
+        member_id: Option<String>,
+        ping: bool,
+    },
 }
 
 fn bounded(value: String, field: &'static str, limit: usize) -> Result<String, CliError> {
@@ -158,6 +163,16 @@ pub(super) fn team(args: &mut Args) -> Result<TeamCommand, CliError> {
         Some("bulletin") => parse_bulletin(args),
         Some("task") => parse_task(args),
         Some("finding") => parse_finding(args),
+        Some("heartbeat") => {
+            let ping = args.flag("--ping");
+            let member_id = args.text_option("--member")?.map(member_id).transpose()?;
+            let team_id = team_id(args)?;
+            Ok(TeamCommand::Heartbeat {
+                team_id,
+                member_id,
+                ping,
+            })
+        }
         _ => Err(unknown("team", verb)),
     }
 }

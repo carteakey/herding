@@ -35,9 +35,30 @@ impl HerdrWindow {
                 } else {
                     format!("{base_label} ({agent_kind})")
                 };
-                let status = agent_entry
-                    .map(|a| status_label(a.agent_status))
-                    .unwrap_or_else(|| fl!("team-status-live").into());
+                let status = if let Some(agent) = agent_entry {
+                    if let Some(state_text) = agent.state_labels.iter().find_map(|(k, v)| {
+                        if k == "working" || k == "idle" || k == "blocked" {
+                            let lower = v.to_lowercase();
+                            if lower.contains("429")
+                                || lower.contains("rate limit")
+                                || lower.contains("quota")
+                                || lower.contains("usage")
+                            {
+                                Some(fl!("team-status-pto"))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }) {
+                        state_text.into()
+                    } else {
+                        status_label(agent.agent_status)
+                    }
+                } else {
+                    fl!("team-status-live").into()
+                };
                 Some(PaneCandidate {
                     identity: PaneIdentity {
                         daemon_id: snapshot.boot_id.clone(),

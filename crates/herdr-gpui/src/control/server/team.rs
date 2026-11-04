@@ -28,6 +28,9 @@ use std::{collections::HashMap, sync::mpsc, time::Duration};
 
 const WATCH_SECONDS: u64 = 20;
 
+mod heartbeat;
+use heartbeat::heartbeat_response;
+
 pub(super) fn serve(
     call: Call<team::TeamOp>,
     incoming: socket::Incoming,
@@ -264,6 +267,20 @@ pub(super) fn serve(
                         supersedes,
                     },
                 )
+            }
+            team::TeamOp::Heartbeat {
+                team_id,
+                member_id,
+                ping: _,
+            } => {
+                if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES)
+                    || member_id
+                        .as_deref()
+                        .is_some_and(|id| !valid_id(id, team::MAX_MEMBER_ID_BYTES))
+                {
+                    return invalid("Invalid team or member ID limit");
+                }
+                (team_id, ScopedAction::Heartbeat { member_id })
             }
         };
         let is_mutation = matches!(
@@ -963,6 +980,10 @@ fn reply_response(reply: Reply, pane_agents: &HashMap<String, String>) -> Respon
                 finding: Box::new(finding_info(finding, &team)),
             },
         },
+        Reply::ScopedHeartbeat {
+            team,
+            target_member_id,
+        } => heartbeat_response(&team, target_member_id.as_deref(), pane_agents),
         _ => Response::error(ErrorCode::Failed, "Unexpected team worker reply"),
     }
 }

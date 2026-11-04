@@ -185,6 +185,15 @@ fn to_op(command: TeamCommand) -> TeamOp {
             supersedes,
             description,
         },
+        TeamCommand::Heartbeat {
+            team_id,
+            member_id,
+            ping,
+        } => TeamOp::Heartbeat {
+            team_id,
+            member_id,
+            ping,
+        },
     }
 }
 
@@ -327,6 +336,32 @@ pub(super) fn team(command: TeamCommand, context: &Context) -> crate::Result<Out
             finding_line(&finding),
             &serde_json::json!({ "finding": finding }),
         ),
+        Response::Team {
+            reply: Reply::Heartbeat { team_id, members },
+        } => {
+            let json = serde_json::json!({ "team_id": team_id, "members": members });
+            let lines = members
+                .iter()
+                .map(|m| {
+                    let rtt_str = m.rtt_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
+                    let detail_str = if m.details.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", m.details)
+                    };
+                    format!(
+                        "{:<14} [{}] {:<8} {:<10}{}{}",
+                        m.name, m.health, m.status, m.agent, rtt_str, detail_str
+                    )
+                })
+                .collect::<Vec<_>>();
+            let text = if lines.is_empty() {
+                format!("{team_id}: no members to inspect")
+            } else {
+                lines.join("\n")
+            };
+            Output::data(text, &json)
+        }
         response => Err(unexpected(response)),
     }
 }

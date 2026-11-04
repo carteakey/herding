@@ -156,6 +156,17 @@ pub enum TeamOp {
         /// Finding description, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
         description: String,
     },
+    /// Inspect team member liveliness and PTO rate limit status.
+    Heartbeat {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// Optional specific member ID to inspect.
+        #[serde(default)]
+        member_id: Option<String>,
+        /// Whether to send a liveliness ping.
+        #[serde(default)]
+        ping: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +268,21 @@ pub struct FindingInfo {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeartbeatInfo {
+    pub member_id: String,
+    pub name: String,
+    pub role: String,
+    pub agent: String,
+    pub pane_id: Option<String>,
+    pub status: String,
+    pub health: String,
+    pub details: String,
+    #[serde(default)]
+    pub rtt_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reply {
     Status {
@@ -301,6 +327,10 @@ pub enum Reply {
     },
     Finding {
         finding: Box<FindingInfo>,
+    },
+    Heartbeat {
+        team_id: String,
+        members: Vec<HeartbeatInfo>,
     },
 }
 

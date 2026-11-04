@@ -162,6 +162,9 @@ pub(crate) enum ScopedAction {
         confidence: Confidence,
         supersedes: Option<String>,
     },
+    Heartbeat {
+        member_id: Option<String>,
+    },
 }
 
 /// A post with each recipient's delivery state.
@@ -222,6 +225,10 @@ pub(crate) enum Reply {
     ScopedFinding {
         team: Team,
         finding: Finding,
+    },
+    ScopedHeartbeat {
+        team: Team,
+        target_member_id: Option<String>,
     },
     Saved,
     Teams(Vec<Team>),
@@ -851,6 +858,10 @@ fn scoped(
             )?;
             Reply::ScopedFinding { team, finding }
         }
+        ScopedAction::Heartbeat { member_id } => Reply::ScopedHeartbeat {
+            team,
+            target_member_id: member_id,
+        },
     })
 }
 

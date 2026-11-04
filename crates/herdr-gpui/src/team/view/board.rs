@@ -319,11 +319,13 @@ impl TeamView {
                     .child(fl!("team-tasks-empty")),
             );
         } else {
-            let (active_tasks, completed_tasks): (Vec<_>, Vec<_>) = self
-                .snapshot
-                .tasks
+            // The window reads from the newest end so current work stays
+            // visible; the show-earlier control widens it toward older rows.
+            let total = self.snapshot.tasks.len();
+            let visible = (MAX_VISIBLE_TASKS + self.earlier_tasks_rows).min(total);
+            let (active_tasks, completed_tasks): (Vec<_>, Vec<_>) = self.snapshot.tasks
+                [total - visible..]
                 .iter()
-                .take(MAX_VISIBLE_TASKS)
                 .partition(|t| !matches!(t.status, TaskStatus::Done | TaskStatus::Cancelled));
 
             let active_total = active_tasks.len();
@@ -415,6 +417,32 @@ impl TeamView {
                         );
                     }
                 }
+            }
+
+            if total > MAX_VISIBLE_TASKS + self.earlier_tasks_rows || self.snapshot.tasks_older {
+                section = section.child(
+                    div()
+                        .id("team-tasks-load-earlier")
+                        .debug_selector(|| "team-tasks-load-earlier".into())
+                        .px_2()
+                        .py_1()
+                        .rounded(px(crate::config::corners::CONTROL))
+                        .bg(rgb(theme.surface))
+                        .border_1()
+                        .border_color(rgb(theme.active))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .cursor_pointer()
+                        .role(Role::Button)
+                        .child("Load earlier tasks")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.earlier_tasks_rows += MAX_VISIBLE_TASKS;
+                            if this.snapshot.tasks_older {
+                                cx.emit(TeamAction::LoadEarlierTasks);
+                            }
+                            cx.notify();
+                        })),
+                );
             }
         }
         section

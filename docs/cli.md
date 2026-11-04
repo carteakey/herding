@@ -142,8 +142,8 @@ and builds without embedded pages return exit 8. See [px0](../crates/herdr-gpui/
 | `team bulletin list TEAM_ID [--after SEQUENCE]` | Read a page of entries after a sequence cursor; each entry reports this member's delivery state |
 | `team bulletin post TEAM_ID [--reply-to MESSAGE_ID] [--mention MEMBER]... TEXT...` | Post to the whole team or explicitly mention members (`@supervisor`, `@team`, `@name`, or member ID); replies can point to an earlier entry |
 | `team bulletin ack TEAM_ID MESSAGE_ID` | Acknowledge an entry addressed to this member |
-| `team task list\|create\|assign\|claim\|block\|complete\|cancel ...` | Manage the team's durable task board |
-| `team finding list\|add ...` | Record and inspect structured findings with supporting evidence and confidence levels. `add TEAM_ID --evidence TEXT [--description TEXT]\|DESCRIPTION... [--confidence low\|medium\|high]`; confidence defaults to medium |
+| `team task list\|create\|assign\|claim\|block\|complete\|cancel ...` | Manage the team's durable task board. `list TEAM_ID [--before SEQUENCE] [--limit N]` returns the newest page (oldest first, up to 100); `--before` pages further back and `--limit` caps the page. The `next_before` JSON field carries the next cursor while older tasks remain |
+| `team finding list\|add ...` | Record and inspect structured findings with supporting evidence and confidence levels. `add TEAM_ID --evidence TEXT [--description TEXT]\|DESCRIPTION... [--confidence low\|medium\|high]`; confidence defaults to medium. `list TEAM_ID [--before SEQUENCE] [--limit N]` pages backward from the newest end like task list, with `next_before` in the JSON output |
 
 ### Hosts
 

@@ -43,6 +43,15 @@ enum Pending {
     Snapshot {
         team_id: String,
     },
+    /// An older task page in flight; `before` restores the cursor on failure.
+    EarlierTasks {
+        team_id: String,
+        before: i64,
+    },
+    EarlierFindings {
+        team_id: String,
+        before: i64,
+    },
     /// A write; the team is read again once it completes.
     Write {
         team_id: String,
@@ -66,6 +75,9 @@ pub(crate) struct Bridge {
     posts: Vec<PostDelivery>,
     tasks: Vec<Task>,
     findings: Vec<Finding>,
+    /// Show-earlier cursors from the last full page; `None` when fully loaded.
+    tasks_older: Option<i64>,
+    findings_older: Option<i64>,
     teams: Vec<TeamChoice>,
     teams_after: Option<String>,
     failure: Option<SharedString>,
@@ -334,6 +346,12 @@ impl Bridge {
             return;
         }
         self.dirty = true;
+        // Hand the show-earlier cursor back; a successful merge replaces it.
+        match &pending {
+            Pending::EarlierTasks { before, .. } => self.tasks_older = Some(*before),
+            Pending::EarlierFindings { before, .. } => self.findings_older = Some(*before),
+            _ => {}
+        }
         let reply = match completion.result {
             Ok(reply) => reply,
             Err(error)
@@ -383,6 +401,8 @@ impl Bridge {
                     posts,
                     tasks,
                     findings,
+                    task_older,
+                    finding_older,
                 },
             ) => {
                 if self.snapshot_in_flight == Some(request_id) {
@@ -395,7 +415,12 @@ impl Bridge {
                     self.posts = posts;
                     self.tasks = tasks;
                     self.findings = findings;
+                    self.tasks_older = task_older;
+                    self.findings_older = finding_older;
                 }
+            }
+            (pending @ (Pending::EarlierTasks { .. } | Pending::EarlierFindings { .. }), reply) => {
+                self.merge_page_reply(pending, reply)
             }
             (Pending::Write { team_id }, _) => {
                 self.refresh(&team_id);
@@ -431,6 +456,7 @@ impl Bridge {
                 self.posts.clear();
                 self.tasks.clear();
                 self.findings.clear();
+                self.clear_board_cursors();
                 self.snapshot_in_flight = None;
                 self.warning = None;
                 self.dirty = true;
@@ -449,10 +475,13 @@ impl Bridge {
                 self.posts.clear();
                 self.tasks.clear();
                 self.findings.clear();
+                self.clear_board_cursors();
                 self.snapshot_in_flight = None;
                 self.warning = None;
                 self.refresh(&team_id);
             }
+            TeamAction::LoadEarlierTasks => self.load_earlier_tasks(),
+            TeamAction::LoadEarlierFindings => self.load_earlier_findings(),
             TeamAction::LoadMoreTeams { after } => {
                 self.submit(
                     Operation::ListTeams {
@@ -916,6 +945,8 @@ impl Bridge {
             posts,
             tasks,
             findings,
+            tasks_older: self.team.is_some() && self.tasks_older.is_some(),
+            findings_older: self.team.is_some() && self.findings_older.is_some(),
             post_author: self
                 .team
                 .as_ref()

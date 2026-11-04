@@ -95,6 +95,20 @@ pub(crate) enum Operation {
         team_id: String,
         limit: usize,
     },
+    /// The Team view's older task page, behind the board's show-earlier
+    /// control. A plain operation because the view has no agent session to
+    /// prove; the board cursor is the store's `latest_tasks` shape.
+    TaskPage {
+        team_id: String,
+        before: i64,
+        limit: usize,
+    },
+    /// The Team view's older finding page, same shape as [`Operation::TaskPage`].
+    FindingPage {
+        team_id: String,
+        before: i64,
+        limit: usize,
+    },
     /// An agent call. The caller's freshly proven target must equal a stored
     /// member's target; the worker never trusts a member ID from the wire.
     Scoped {
@@ -128,7 +142,11 @@ pub(crate) enum ScopedAction {
     BulletinAck {
         message_id: String,
     },
-    TaskList,
+    TaskList {
+        /// Sequence to page back from; `None` starts at the newest page.
+        before: Option<i64>,
+        limit: usize,
+    },
     TaskCreate {
         task_id: String,
         title: String,
@@ -153,7 +171,11 @@ pub(crate) enum ScopedAction {
     TaskCancel {
         task_id: String,
     },
-    FindingList,
+    FindingList {
+        /// Sequence to page back from; `None` starts at the newest page.
+        before: Option<i64>,
+        limit: usize,
+    },
     FindingAdd {
         finding_id: String,
         task_id: Option<String>,
@@ -177,6 +199,10 @@ pub(crate) enum Reply {
         posts: Vec<PostDelivery>,
         tasks: Vec<Task>,
         findings: Vec<Finding>,
+        /// The board sequence to page back from when the task and finding
+        /// pages came back full; `None` means the board is fully loaded.
+        task_older: Option<i64>,
+        finding_older: Option<i64>,
     },
     ScopedStatus {
         team: Team,
@@ -211,7 +237,11 @@ pub(crate) enum Reply {
     },
     ScopedTasks {
         team: Team,
-        tasks: Vec<Task>,
+        /// The requested page, oldest first, each with its board sequence;
+        /// the first entry is the caller's next `before` cursor.
+        tasks: Vec<(i64, Task)>,
+        /// The page to request next when this one came back full.
+        older: Option<i64>,
     },
     ScopedTask {
         team: Team,
@@ -220,7 +250,11 @@ pub(crate) enum Reply {
     },
     ScopedFindings {
         team: Team,
-        findings: Vec<Finding>,
+        /// The requested page, oldest first, each with its sequence;
+        /// the first entry is the caller's next `before` cursor.
+        findings: Vec<(i64, Finding)>,
+        /// The page to request next when this one came back full.
+        older: Option<i64>,
     },
     ScopedFinding {
         team: Team,
@@ -232,6 +266,14 @@ pub(crate) enum Reply {
     },
     Saved,
     Teams(Vec<Team>),
+    TaskPage {
+        tasks: Vec<(i64, Task)>,
+        older: Option<i64>,
+    },
+    FindingPage {
+        findings: Vec<(i64, Finding)>,
+        older: Option<i64>,
+    },
 }
 
 #[derive(Debug, ThisError)]
@@ -519,6 +561,27 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             Reply::Saved
         }
         Operation::Snapshot { team_id, limit } => snapshot(store, &team_id, limit)?,
+        Operation::TaskPage {
+            team_id,
+            before,
+            limit,
+        } => {
+            let page = store.latest_tasks(&team_id, Some(before), limit)?;
+            let older = page_cursor(&page, limit);
+            Reply::TaskPage { tasks: page, older }
+        }
+        Operation::FindingPage {
+            team_id,
+            before,
+            limit,
+        } => {
+            let page = store.latest_findings(&team_id, Some(before), limit)?;
+            let older = page_cursor(&page, limit);
+            Reply::FindingPage {
+                findings: page,
+                older,
+            }
+        }
         Operation::Scoped {
             team_id,
             caller,
@@ -609,6 +672,8 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
             posts: Vec::new(),
             tasks: Vec::new(),
             findings: Vec::new(),
+            task_older: None,
+            finding_older: None,
         });
     };
     let goal = store.team_goal(team_id)?;
@@ -645,13 +710,12 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
             (post, statuses)
         })
         .collect();
-    let tasks = store
-        .latest_tasks(team_id, None, team_store::MAX_PAGE_SIZE)?
-        .into_iter()
-        .map(|(_, task)| task)
-        .collect();
-    let findings = store
-        .latest_findings(team_id, None, team_store::MAX_PAGE_SIZE)?
+    let task_page = store.latest_tasks(team_id, None, team_store::MAX_PAGE_SIZE)?;
+    let task_older = page_cursor(&task_page, team_store::MAX_PAGE_SIZE);
+    let tasks = task_page.into_iter().map(|(_, task)| task).collect();
+    let finding_page = store.latest_findings(team_id, None, team_store::MAX_PAGE_SIZE)?;
+    let finding_older = page_cursor(&finding_page, team_store::MAX_PAGE_SIZE);
+    let findings = finding_page
         .into_iter()
         .map(|(_, finding)| finding)
         .collect();
@@ -661,7 +725,18 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
         posts,
         tasks,
         findings,
+        task_older,
+        finding_older,
     })
+}
+
+/// The `before` cursor for the next older page: the page's first sequence
+/// when the page came back full, `None` when the store ran out first.
+fn page_cursor(page: &[(i64, impl Sized)], limit: usize) -> Option<i64> {
+    if page.len() < limit {
+        return None;
+    }
+    page.first().map(|(sequence, _)| *sequence)
 }
 
 fn scoped(
@@ -757,14 +832,15 @@ fn scoped(
         ScopedAction::BulletinAck { message_id } => Reply::ScopedAcknowledged {
             acknowledgement: store.acknowledge(&message_id, &member_id)?,
         },
-        ScopedAction::TaskList => Reply::ScopedTasks {
-            tasks: store
-                .latest_tasks(team_id, None, team_store::MAX_PAGE_SIZE)?
-                .into_iter()
-                .map(|(_, task)| task)
-                .collect(),
-            team,
-        },
+        ScopedAction::TaskList { before, limit } => {
+            let page = store.latest_tasks(team_id, before, limit)?;
+            let older = page_cursor(&page, limit);
+            Reply::ScopedTasks {
+                team,
+                tasks: page,
+                older,
+            }
+        }
         ScopedAction::TaskCreate {
             task_id,
             title,
@@ -830,14 +906,15 @@ fn scoped(
                 actor: actor.clone(),
             }
         }
-        ScopedAction::FindingList => Reply::ScopedFindings {
-            findings: store
-                .latest_findings(team_id, None, team_store::MAX_PAGE_SIZE)?
-                .into_iter()
-                .map(|(_, finding)| finding)
-                .collect(),
-            team,
-        },
+        ScopedAction::FindingList { before, limit } => {
+            let page = store.latest_findings(team_id, before, limit)?;
+            let older = page_cursor(&page, limit);
+            Reply::ScopedFindings {
+                team,
+                findings: page,
+                older,
+            }
+        }
         ScopedAction::FindingAdd {
             finding_id,
             task_id,

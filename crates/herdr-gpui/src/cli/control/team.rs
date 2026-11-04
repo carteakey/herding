@@ -2,7 +2,7 @@
 use super::{Args, CliError, unknown};
 use herdr_control_protocol::protocol::team::{
     ConfidenceLevel, MAX_BULLETIN_TEXT_BYTES, MAX_FINDING_ID_BYTES, MAX_MEMBER_ID_BYTES,
-    MAX_MEMBER_NAME_BYTES, MAX_MENTIONS, MAX_MESSAGE_ID_BYTES, MAX_TASK_ID_BYTES,
+    MAX_MEMBER_NAME_BYTES, MAX_MENTIONS, MAX_MESSAGE_ID_BYTES, MAX_PAGE_SIZE, MAX_TASK_ID_BYTES,
     MAX_TASK_TITLE_BYTES, MAX_TEAM_ID_BYTES,
 };
 
@@ -38,6 +38,8 @@ pub enum TeamCommand {
     },
     TaskList {
         team_id: String,
+        before: Option<i64>,
+        limit: Option<usize>,
     },
     TaskCreate {
         team_id: String,
@@ -70,6 +72,8 @@ pub enum TeamCommand {
     },
     FindingList {
         team_id: String,
+        before: Option<i64>,
+        limit: Option<usize>,
     },
     FindingAdd {
         team_id: String,
@@ -232,9 +236,18 @@ fn parse_task(args: &mut Args) -> Result<TeamCommand, CliError> {
         what: "list|create|assign|claim|block|complete|cancel",
     })?;
     match action.to_str() {
-        Some("list") => Ok(TeamCommand::TaskList {
-            team_id: team_id(args)?,
-        }),
+        Some("list") => {
+            let before = args.number("--before", 1..=i64::MAX)?;
+            let limit = args
+                .number("--limit", 1..=(MAX_PAGE_SIZE as i64))?
+                .map(|limit| limit as usize);
+            let team_id = team_id(args)?;
+            Ok(TeamCommand::TaskList {
+                team_id,
+                before,
+                limit,
+            })
+        }
         Some("create") => {
             let title = bounded(
                 args.text_option("--title")?
@@ -319,9 +332,18 @@ fn parse_finding(args: &mut Args) -> Result<TeamCommand, CliError> {
         what: "list|add",
     })?;
     match action.to_str() {
-        Some("list") => Ok(TeamCommand::FindingList {
-            team_id: team_id(args)?,
-        }),
+        Some("list") => {
+            let before = args.number("--before", 1..=i64::MAX)?;
+            let limit = args
+                .number("--limit", 1..=(MAX_PAGE_SIZE as i64))?
+                .map(|limit| limit as usize);
+            let team_id = team_id(args)?;
+            Ok(TeamCommand::FindingList {
+                team_id,
+                before,
+                limit,
+            })
+        }
         Some("add") => {
             let task_id = args.text_option("--task")?.map(task_id).transpose()?;
             let confidence = match args.text_option("--confidence")? {

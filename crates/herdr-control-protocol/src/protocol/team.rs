@@ -75,10 +75,18 @@ pub enum TeamOp {
         /// Opaque message identifier, at most [`MAX_MESSAGE_ID_BYTES`] bytes.
         message_id: String,
     },
-    /// List tasks on the team board.
+    /// List tasks on the team board, newest page first.
     TaskList {
         /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
         team_id: String,
+        /// First sequence already shown; the page older than this value is
+        /// returned. Absent means the newest page.
+        #[serde(default)]
+        before: Option<i64>,
+        /// Page size between 1 and [`MAX_PAGE_SIZE`]; absent means
+        /// [`MAX_PAGE_SIZE`].
+        #[serde(default)]
+        limit: Option<usize>,
     },
     /// Create a new task on the team board.
     TaskCreate {
@@ -134,10 +142,18 @@ pub enum TeamOp {
         /// Opaque task identifier, at most [`MAX_TASK_ID_BYTES`] bytes.
         task_id: String,
     },
-    /// List durable findings recorded by the team.
+    /// List durable findings recorded by the team, newest page first.
     FindingList {
         /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
         team_id: String,
+        /// First sequence already shown; the page older than this value is
+        /// returned. Absent means the newest page.
+        #[serde(default)]
+        before: Option<i64>,
+        /// Page size between 1 and [`MAX_PAGE_SIZE`]; absent means
+        /// [`MAX_PAGE_SIZE`].
+        #[serde(default)]
+        limit: Option<usize>,
     },
     /// Record a durable finding with evidence and confidence.
     FindingAdd {
@@ -318,12 +334,20 @@ pub enum Reply {
     },
     Tasks {
         tasks: Vec<TaskInfo>,
+        /// Oldest sequence in this page when a full page came back; pass as
+        /// `before` to page further back. Absent means there is nothing older.
+        #[serde(default)]
+        next_before: Option<i64>,
     },
     Task {
         task: Box<TaskInfo>,
     },
     Findings {
         findings: Vec<FindingInfo>,
+        /// Oldest sequence in this page when a full page came back; pass as
+        /// `before` to page further back. Absent means there is nothing older.
+        #[serde(default)]
+        next_before: Option<i64>,
     },
     Finding {
         finding: Box<FindingInfo>,

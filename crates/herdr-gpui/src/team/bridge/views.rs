@@ -2,8 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::SharedString;
 use herdr_client::protocol::AgentStatus;
-use herdr_orchestrator::team_store::{Author, Member, RecipientStatus, SessionTarget, Task, Team};
+use herdr_orchestrator::team_store::{
+    self, Author, Member, RecipientStatus, SessionTarget, Task, Team,
+};
 
+use super::Pending;
+use crate::control::server::team_worker::{Operation, Reply};
 use crate::i18n::fl;
 use crate::team::model::{
     DeliveryState, PaneCandidate, PaneIdentity, TeamFinding, TeamMember, TeamPost, TeamTask,
@@ -116,10 +120,7 @@ pub(crate) fn members(
 
 pub(crate) fn view_posts(
     team: &Team,
-    posts: &[(
-        herdr_orchestrator::team_store::Post,
-        Vec<(String, RecipientStatus)>,
-    )],
+    posts: &[(team_store::Post, Vec<(String, RecipientStatus)>)],
 ) -> Vec<TeamPost> {
     let names = name_map(team);
     let name = |id: &str| display_name(&names, id);
@@ -180,10 +181,7 @@ pub(crate) fn view_tasks(team: &Team, tasks: &[Task]) -> Vec<TeamTask> {
         .collect()
 }
 
-pub(crate) fn view_findings(
-    team: &Team,
-    findings: &[herdr_orchestrator::team_store::Finding],
-) -> Vec<TeamFinding> {
+pub(crate) fn view_findings(team: &Team, findings: &[team_store::Finding]) -> Vec<TeamFinding> {
     let names = name_map(team);
     findings
         .iter()
@@ -208,5 +206,114 @@ pub(crate) fn status_label(status: AgentStatus) -> SharedString {
         AgentStatus::Blocked => fl!("team-status-blocked").into(),
         AgentStatus::Done => fl!("team-status-done").into(),
         AgentStatus::Unknown => fl!("team-status-live").into(),
+    }
+}
+
+impl super::Bridge {
+    /// Drops the show-earlier cursors when the selected team changes.
+    pub(super) fn clear_board_cursors(&mut self) {
+        self.tasks_older = None;
+        self.findings_older = None;
+    }
+
+    /// Asks for the next older task page behind the board's show-earlier
+    /// control, consuming the cursor while the fetch is in flight so a second
+    /// click cannot request the same page twice.
+    pub(super) fn load_earlier_tasks(&mut self) {
+        let (Some(team_id), Some(before)) = (self.selected.clone(), self.tasks_older.take()) else {
+            return;
+        };
+        let pending = Pending::EarlierTasks {
+            team_id: team_id.clone(),
+            before,
+        };
+        if self
+            .submit(
+                Operation::TaskPage {
+                    team_id,
+                    before,
+                    limit: team_store::MAX_PAGE_SIZE,
+                },
+                pending,
+            )
+            .is_none()
+        {
+            self.tasks_older = Some(before);
+        }
+    }
+
+    /// Asks for the next older finding page, same shape as
+    /// [`super::Bridge::load_earlier_tasks`].
+    pub(super) fn load_earlier_findings(&mut self) {
+        let (Some(team_id), Some(before)) = (self.selected.clone(), self.findings_older.take())
+        else {
+            return;
+        };
+        let pending = Pending::EarlierFindings {
+            team_id: team_id.clone(),
+            before,
+        };
+        if self
+            .submit(
+                Operation::FindingPage {
+                    team_id,
+                    before,
+                    limit: team_store::MAX_PAGE_SIZE,
+                },
+                pending,
+            )
+            .is_none()
+        {
+            self.findings_older = Some(before);
+        }
+    }
+
+    /// Merges an older task or finding page into the board; other pending
+    /// and reply pairs never meet this helper.
+    pub(super) fn merge_page_reply(&mut self, pending: Pending, reply: Reply) {
+        match (pending, reply) {
+            (Pending::EarlierTasks { team_id, .. }, Reply::TaskPage { tasks, older }) => {
+                self.merge_task_page(&team_id, tasks, older);
+            }
+            (
+                Pending::EarlierFindings { team_id, .. },
+                Reply::FindingPage {
+                    findings, older, ..
+                },
+            ) => self.merge_finding_page(&team_id, findings, older),
+            _ => {}
+        }
+    }
+
+    /// Prepends an older task page under the same stale guard as snapshots:
+    /// a reply for a team that is no longer selected is dropped.
+    pub(super) fn merge_task_page(
+        &mut self,
+        team_id: &str,
+        tasks: Vec<(i64, Task)>,
+        older: Option<i64>,
+    ) {
+        if self.selected.as_deref() != Some(team_id) {
+            return;
+        }
+        self.tasks
+            .splice(..0, tasks.into_iter().map(|(_, task)| task));
+        self.tasks_older = older;
+    }
+
+    /// Prepends an older finding page, same shape as
+    /// [`super::Bridge::merge_task_page`].
+    pub(super) fn merge_finding_page(
+        &mut self,
+        team_id: &str,
+        findings: Vec<(i64, team_store::Finding)>,
+        older: Option<i64>,
+    ) {
+        if self.selected.as_deref() != Some(team_id) {
+            return;
+        }
+        self.findings
+            .splice(..0, findings.into_iter().map(|(_, finding)| finding));
+        self.findings_older = older;
     }
 }

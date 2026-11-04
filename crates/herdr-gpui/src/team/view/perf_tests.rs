@@ -253,3 +253,59 @@ fn board_disclosure_toggles_reach_older_rows(cx: &mut TestAppContext) {
         "oldest finding should become visible when expanded"
     );
 }
+
+#[gpui::test]
+fn load_earlier_controls_track_the_board_paging_state(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| TeamView::new(font(), Theme::default(), cx));
+
+    // A fully loaded short board offers no show-earlier control.
+    view.update(cx, |view, cx| {
+        view.snapshot = board_snapshot(8);
+        cx.notify();
+    });
+    cx.simulate_resize(size(px(600.), px(900.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("team-tasks-load-earlier").is_none(),
+        "a fully loaded board offers no show-earlier control"
+    );
+    assert!(
+        cx.debug_bounds("team-findings-load-earlier").is_none(),
+        "a fully loaded findings list offers no show-earlier control"
+    );
+
+    // An older page behind the board renders both controls.
+    view.update(cx, |view, cx| {
+        view.snapshot = board_snapshot(40);
+        view.snapshot.tasks_older = true;
+        view.snapshot.findings_older = true;
+        cx.notify();
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("team-tasks-load-earlier").is_some(),
+        "an older task page offers the show-earlier control"
+    );
+    assert!(
+        cx.debug_bounds("team-findings-load-earlier").is_some(),
+        "an older finding page offers its show-earlier control"
+    );
+
+    // Revealing every loaded row hides the controls again.
+    view.update(cx, |view, cx| {
+        view.earlier_tasks_rows = MAX_VISIBLE_TASKS;
+        view.earlier_findings_rows = MAX_VISIBLE_FINDINGS;
+        view.snapshot.tasks_older = false;
+        view.snapshot.findings_older = false;
+        cx.notify();
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("team-tasks-load-earlier").is_none(),
+        "a fully revealed board hides the control again"
+    );
+    assert!(
+        cx.debug_bounds("team-findings-load-earlier").is_none(),
+        "a fully revealed findings list hides the control again"
+    );
+}

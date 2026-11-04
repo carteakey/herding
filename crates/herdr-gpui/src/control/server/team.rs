@@ -139,11 +139,18 @@ pub(super) fn serve(
                 }
                 (team_id, ScopedAction::BulletinAck { message_id })
             }
-            team::TeamOp::TaskList { team_id } => {
+            team::TeamOp::TaskList {
+                team_id,
+                before,
+                limit,
+            } => {
                 if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES) {
                     return invalid("team ID must be nonempty and at most 128 UTF-8 bytes");
                 }
-                (team_id, ScopedAction::TaskList)
+                let Some(limit) = page_limit(limit) else {
+                    return invalid("task list limit must be between 1 and 100");
+                };
+                (team_id, ScopedAction::TaskList { before, limit })
             }
             team::TeamOp::TaskCreate {
                 team_id,
@@ -225,11 +232,18 @@ pub(super) fn serve(
                 }
                 (team_id, ScopedAction::TaskCancel { task_id })
             }
-            team::TeamOp::FindingList { team_id } => {
+            team::TeamOp::FindingList {
+                team_id,
+                before,
+                limit,
+            } => {
                 if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES) {
                     return invalid("team ID must be nonempty and at most 128 UTF-8 bytes");
                 }
-                (team_id, ScopedAction::FindingList)
+                let Some(limit) = page_limit(limit) else {
+                    return invalid("finding list limit must be between 1 and 100");
+                };
+                (team_id, ScopedAction::FindingList { before, limit })
             }
             team::TeamOp::FindingAdd {
                 team_id,
@@ -799,6 +813,14 @@ fn author_parts(team: &Team, author: &Author) -> (String, String) {
     }
 }
 
+/// The wire's optional page size as a store limit; absent means a full page.
+fn page_limit(limit: Option<usize>) -> Option<usize> {
+    let size = limit.unwrap_or(team_store::MAX_PAGE_SIZE);
+    (1..=team_store::MAX_PAGE_SIZE)
+        .contains(&size)
+        .then_some(size)
+}
+
 fn task_info(task: Task, team: &Team) -> TaskInfo {
     let (_, creator) = author_parts(team, &task.creator);
     let assignee = task
@@ -954,12 +976,13 @@ fn reply_response(reply: Reply, pane_agents: &HashMap<String, String>) -> Respon
                 delivery_state: DeliveryState::Acknowledged,
             },
         },
-        Reply::ScopedTasks { team, tasks } => Response::Team {
+        Reply::ScopedTasks { team, tasks, older } => Response::Team {
             reply: WireReply::Tasks {
                 tasks: tasks
                     .into_iter()
-                    .map(|task| task_info(task, &team))
+                    .map(|(_, task)| task_info(task, &team))
                     .collect(),
+                next_before: older,
             },
         },
         Reply::ScopedTask { team, task, .. } => Response::Team {
@@ -967,12 +990,17 @@ fn reply_response(reply: Reply, pane_agents: &HashMap<String, String>) -> Respon
                 task: Box::new(task_info(task, &team)),
             },
         },
-        Reply::ScopedFindings { team, findings } => Response::Team {
+        Reply::ScopedFindings {
+            team,
+            findings,
+            older,
+        } => Response::Team {
             reply: WireReply::Findings {
                 findings: findings
                     .into_iter()
-                    .map(|finding| finding_info(finding, &team))
+                    .map(|(_, finding)| finding_info(finding, &team))
                     .collect(),
+                next_before: older,
             },
         },
         Reply::ScopedFinding { team, finding } => Response::Team {

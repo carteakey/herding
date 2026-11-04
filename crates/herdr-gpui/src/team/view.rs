@@ -46,6 +46,11 @@ pub(crate) enum TeamAction {
     LoadMoreTeams {
         after: String,
     },
+    /// Fetch the board's next older task page behind the show-earlier control.
+    LoadEarlierTasks,
+    /// Fetch the board's next older finding page behind its show-earlier
+    /// control.
+    LoadEarlierFindings,
     CreateTeam {
         name: String,
         supervisor: PaneIdentity,
@@ -180,6 +185,10 @@ pub(crate) struct TeamView {
     pub(super) active_tasks_show_all: bool,
     pub(super) completed_tasks_show_all: bool,
     pub(super) findings_show_all: bool,
+    /// Older board rows revealed beyond the default window by the
+    /// show-earlier controls; grows by a page per use.
+    pub(super) earlier_tasks_rows: usize,
+    pub(super) earlier_findings_rows: usize,
     action_warning: Option<SharedString>,
     font: crate::config::FontConfig,
     pub(super) theme: Theme,
@@ -308,6 +317,8 @@ impl TeamView {
             active_tasks_show_all: false,
             completed_tasks_show_all: false,
             findings_show_all: false,
+            earlier_tasks_rows: 0,
+            earlier_findings_rows: 0,
             action_warning: None,
             font,
             theme,
@@ -357,6 +368,8 @@ impl TeamView {
             self.active_tasks_show_all = false;
             self.completed_tasks_show_all = false;
             self.findings_show_all = false;
+            self.earlier_tasks_rows = 0;
+            self.earlier_findings_rows = 0;
             self.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
         } else if let Some(reply_to) = self.reply_to.as_ref()
             && !snapshot.posts.iter().any(|post| post.id == *reply_to)

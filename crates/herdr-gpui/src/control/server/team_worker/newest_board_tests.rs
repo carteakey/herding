@@ -191,3 +191,102 @@ fn a_snapshot_issues_the_same_queries_whatever_the_board_holds() {
         "the board pays for a page, not for the team's history: {few_queries} vs {many_queries}"
     );
 }
+
+/// A scoped task list is a cursor page: the newest page reports the sequence
+/// to page back from, the page behind it holds only older work, and an
+/// exhausted board reports no further cursor.
+#[test]
+fn scoped_task_and_finding_lists_page_behind_a_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = seeded(dir.path(), 130, 130);
+    let caller = target(2);
+    let page = team_store::MAX_PAGE_SIZE;
+
+    let Reply::ScopedTasks { tasks, older, .. } = scoped(
+        &mut store,
+        "t",
+        &caller,
+        ScopedAction::TaskList {
+            before: None,
+            limit: page,
+        },
+    )
+    .unwrap() else {
+        panic!("tasks reply expected");
+    };
+    assert_eq!(tasks.len(), page);
+    let Some(before) = older else {
+        panic!("a full page has an older cursor");
+    };
+    assert_eq!(before, tasks.first().unwrap().0);
+
+    let Reply::ScopedTasks { tasks, older, .. } = scoped(
+        &mut store,
+        "t",
+        &caller,
+        ScopedAction::TaskList {
+            before: Some(before),
+            limit: page,
+        },
+    )
+    .unwrap() else {
+        panic!("tasks reply expected");
+    };
+    assert_eq!(tasks.len(), 30, "130 tasks minus the newest page");
+    assert_eq!(older, None, "the board is exhausted");
+    assert_eq!(
+        tasks.last().unwrap().0,
+        before - 1,
+        "the cursor is exclusive, so the pages tile the board without a gap"
+    );
+
+    let Reply::ScopedFindings {
+        findings, older, ..
+    } = scoped(
+        &mut store,
+        "t",
+        &caller,
+        ScopedAction::FindingList {
+            before: None,
+            limit: page,
+        },
+    )
+    .unwrap()
+    else {
+        panic!("findings reply expected");
+    };
+    assert_eq!(findings.len(), page);
+    assert_eq!(older, Some(findings.first().unwrap().0));
+}
+
+/// The snapshot tells the board whether older pages exist behind the
+/// show-earlier controls: a full page carries the cursor, a short board
+/// reports none.
+#[test]
+fn a_snapshot_carries_the_board_paging_cursors() {
+    let full_dir = tempfile::tempdir().unwrap();
+    let mut full = seeded(full_dir.path(), 130, 5);
+    let Reply::Snapshot {
+        task_older,
+        finding_older,
+        ..
+    } = snapshot(&mut full, "t", 200).unwrap()
+    else {
+        panic!("snapshot reply expected");
+    };
+    assert!(task_older.is_some(), "130 tasks fill the page");
+    assert_eq!(finding_older, None, "5 findings leave the page short");
+
+    let short_dir = tempfile::tempdir().unwrap();
+    let mut short = seeded(short_dir.path(), 12, 3);
+    let Reply::Snapshot {
+        task_older,
+        finding_older,
+        ..
+    } = snapshot(&mut short, "t", 200).unwrap()
+    else {
+        panic!("snapshot reply expected");
+    };
+    assert_eq!(task_older, None);
+    assert_eq!(finding_older, None);
+}

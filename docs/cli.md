@@ -173,24 +173,30 @@ IDs are display and routing aids, not authentication, as the design spec
 Since the per-process hardening, the Unix socket also proves the process.
 The kernel reports the connecting process's credentials (Linux through
 `SO_PEERCRED`, which carries the PID; macOS through `getpeereid`, which
-carries the user and group but no PID). Registering a member records those
-credentials for the proven session target, and every later call from your
-own user must hold them: a process without the recorded identity is
-refused, with a hint to run `team register` again. The bindings live in
-the UI's memory, so after a UI restart a member registers again. On macOS
-the missing PID means the process check degrades to the user check there.
-Callers arriving through the control tunnel terminate at sshd, so their
-credentials name the tunnel process, not the remote agent; the snapshot
-proofs above apply to them, as `docs/control-tunnel.md` records. The
-Windows pipe proves no process identity and keeps its DACL trust. The
-behavior is pinned by an impersonation regression test in
+carries the user and group but no PID). Registering a member records the
+pane's agent process - the long-lived process that spawns the team CLI
+calls, which the UI's discovered process bindings name - not the transient
+CLI process, because every CLI invocation is a fresh process. A later call
+from your own user passes when the connecting process is the registered
+agent process or one of its descendants (a bounded `/proc` parent walk,
+with the kernel's start time for the recorded pid compared so a recycled
+PID is never mistaken for the original); a bystander process naming the
+pane is neither and is refused, with a hint to register again. A pane
+whose agent process could not be pinned binds to the user identity alone.
+The bindings live in the UI's memory, so after a UI restart a member
+registers again. Callers arriving through the control tunnel terminate at
+sshd, so their credentials name the tunnel process, not the remote agent;
+the snapshot proofs above apply to them, as `docs/control-tunnel.md`
+records. The Windows pipe proves no process identity and keeps its DACL
+trust. The behavior is pinned by an impersonation regression test in
 `control/server/team`.
 
 The trust is still local-user trust, the same trust `sudo`, your shell
 history, and your sockets already carry: an agent teammate is trusted
 because your user started it, and no privilege boundary is crossed. What
 changed is that a bystander process running as your user can no longer
-borrow a live pane's identity by asserting its IDs.
+borrow a live pane's identity by asserting its IDs, wherever the pane's
+agent process is knowable.
 
 `scripts/control-tunnel.sh` extends the same trust across SSH: the remote
 host's user, and only that user, reaches this socket through a mode-0600

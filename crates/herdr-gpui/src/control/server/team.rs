@@ -24,8 +24,8 @@ mod identity;
 mod projection;
 
 use dispatch::notify_team_mutation;
-pub(crate) use identity::prove_pane_session_at;
-use identity::{PeerBindings, check_peer, current_identity, pane_agents};
+use identity::{PeerBindings, check_peer, current_identity, pane_agents, process_info};
+pub(crate) use identity::{ProcessIdentity, prove_pane_session_at};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
 
 const WATCH_SECONDS: u64 = 20;
@@ -68,9 +68,11 @@ pub(super) fn serve(
             Ok(identity) => identity,
             Err(response) => return response,
         };
-        // The registering process records its identity for every later
-        // request; every other call must hold the identity its member
-        // registered with, on top of the proof above.
+        // Registration records the pane's agent process for every later
+        // request: the CLI call itself is a fresh process each time, so the
+        // binding anchors on the agent that spawns those calls, which the
+        // pane's discovered process bindings already name. Every other call
+        // must come from that process tree, on top of the proof above.
         if registering {
             if peer_auth && peer.is_none() {
                 return Response::error(
@@ -78,10 +80,20 @@ pub(super) fn serve(
                     "The connecting process's credentials could not be read; team registration needs a Unix socket",
                 );
             }
-            if let Some(credentials) = peer {
-                peers.insert(target.clone(), credentials);
-            }
-        } else if let Err(response) = check_peer(peers, &target, peer, peer_auth, local_uid()) {
+            let agent = view
+                .chats
+                .existing
+                .bindings()
+                .iter()
+                .find(|binding| binding.pane_id == caller.pane_id.as_deref().unwrap_or_default())
+                .map(|binding| ProcessIdentity {
+                    pid: binding.pid,
+                    started_ticks: Some(binding.started_ticks),
+                });
+            peers.insert(target.clone(), agent);
+        } else if let Err(response) =
+            check_peer(peers, &target, peer, peer_auth, local_uid(), &process_info)
+        {
             return response;
         }
         let pane_agents = pane_agents(view, endpoint);

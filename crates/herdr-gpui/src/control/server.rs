@@ -35,6 +35,7 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
+use team::ProcessIdentity;
 
 /// Requests parked at once, besides feedback waiters; the socket's own
 /// connection bound keeps the real number lower.
@@ -126,7 +127,7 @@ struct State {
     /// The process identity each team member registered from, keyed by the
     /// proven session target. In memory only: a UI restart clears it, and a
     /// member registers again.
-    team_peers: HashMap<SessionTarget, socket::PeerCredentials>,
+    team_peers: HashMap<SessionTarget, Option<ProcessIdentity>>,
 }
 
 fn not_found(message: impl Into<String>) -> Response {

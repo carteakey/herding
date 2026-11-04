@@ -205,10 +205,21 @@ pub(super) fn current_identity(
     ))
 }
 
-/// The process identity each member registered from, keyed by the session
-/// target the member is proved by. In memory only: a UI restart clears it,
-/// and a member registers again.
-pub(crate) type PeerBindings = HashMap<SessionTarget, PeerCredentials>;
+/// The pane's agent process a member registered from, keyed by the session
+/// target the member is proved by. `None` records a pane whose agent
+/// process could not be pinned (no discovered binding, or a platform
+/// without a process table walk): its callers pass on the user identity
+/// alone. In memory only: a UI restart clears it, and a member registers
+/// again.
+pub(crate) type PeerBindings = HashMap<SessionTarget, Option<ProcessIdentity>>;
+
+/// A process, named by its pid and the kernel's start time for it, so a
+/// recycled pid is never mistaken for the original.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProcessIdentity {
+    pub pid: u32,
+    pub started_ticks: Option<u64>,
+}
 
 /// Whether a proven caller holds the process identity its member registered
 /// with, on top of the snapshot proof [`current_identity`] ran. Same-user
@@ -224,6 +235,7 @@ pub(crate) fn check_peer(
     peer: Option<PeerCredentials>,
     peer_auth: bool,
     local_uid: Option<u32>,
+    process_info: &dyn Fn(u32) -> Option<(u32, u64)>,
 ) -> Result<(), Response> {
     // The Windows pipe cannot prove a process identity; its DACL keeps it
     // to the one user, the same trust the socket model documents.
@@ -248,20 +260,63 @@ pub(crate) fn check_peer(
         ));
     }
     match peers.get(proven) {
-        None => Err(Response::error(
-            ErrorCode::Unsupported,
-            "No process binding is recorded for this member; run the team register command again from the agent's pane",
-        )),
-        Some(recorded) => {
-            // A recorded pid of None is macOS, which cannot prove one; the
-            // uid and gid already matched.
-            if recorded.pid.is_some() && recorded.pid != cred.pid {
-                return Err(Response::error(
-                    ErrorCode::Unsupported,
-                    "This pane's member is registered to another process; run the team register command from the agent's own pane",
-                ));
+        // The pane's agent process could not be pinned at registration, so
+        // the user identity is all this member binds to.
+        None | Some(None) => Ok(()),
+        Some(Some(recorded)) => {
+            // Every CLI call is a fresh process, so the caller passes when
+            // it is the registered agent process or one of its descendants:
+            // a bystander naming the pane is neither. The bound walk stops
+            // at init; the start-time comparison defeats a recycled pid.
+            let mut current = cred.pid;
+            for _ in 0..48 {
+                let Some(pid) = current else {
+                    return Err(process_refused());
+                };
+                if pid == recorded.pid {
+                    let still_same = recorded.started_ticks.is_none_or(|recorded_ticks| {
+                        process_info(recorded.pid)
+                            .is_some_and(|(_, started)| started == recorded_ticks)
+                    });
+                    if !still_same {
+                        return Err(process_refused());
+                    }
+                    return Ok(());
+                }
+                match process_info(pid) {
+                    Some((ppid, _)) if ppid > 1 => current = Some(ppid),
+                    _ => return Err(process_refused()),
+                }
             }
-            Ok(())
+            Err(process_refused())
         }
     }
+}
+
+fn process_refused() -> Response {
+    Response::error(
+        ErrorCode::Unsupported,
+        "This pane's member is registered to another process tree; run the team register command from the agent's own pane",
+    )
+}
+
+/// The process table facts of `pid`: its parent and its kernel start time.
+/// `None` when the process is gone or not ours to read.
+#[cfg(target_os = "linux")]
+pub(crate) fn process_info(pid: u32) -> Option<(u32, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The comm field may hold spaces, so parsing starts after its `)`.
+    let rest = &stat[stat.rfind(')')? + 2..];
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // After the comm, field 0 is the state and field 1 the ppid; the start
+    // time is field 19 (kernel field 22, counting pid and comm).
+    let ppid: u32 = fields.get(1)?.parse().ok()?;
+    let started: u64 = fields.get(19)?.parse().ok()?;
+    Some((ppid, started))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn process_info(pid: u32) -> Option<(u32, u64)> {
+    let _ = pid;
+    None
 }

@@ -1,4 +1,4 @@
-use super::{MAX_VISIBLE_POSTS, TeamAction};
+use super::{EXPANDED_POSTS_LIMIT, MAX_VISIBLE_POSTS, TeamAction};
 use crate::{HerdrWindow, direction::Logical, i18n::fl, team::model::DeliveryState};
 use gpui::{prelude::*, *};
 
@@ -159,6 +159,23 @@ impl HerdrWindow {
                     .child(fl!("team-posts-empty")),
             );
         } else {
+            let expanded_limit = self
+                .team_view
+                .read(cx)
+                .bulletin_expanded_limit
+                .max(EXPANDED_POSTS_LIMIT);
+            let (skip_count, visible_posts) = if !show_all && posts.len() > RECENT_POSTS_LIMIT {
+                let skip = posts.len() - RECENT_POSTS_LIMIT;
+                (skip, &posts[skip..])
+            } else if show_all {
+                let limit = expanded_limit.min(MAX_VISIBLE_POSTS);
+                let skip = posts.len().saturating_sub(limit);
+                (skip, &posts[skip..])
+            } else {
+                let count = posts.len().min(MAX_VISIBLE_POSTS);
+                (0, &posts[..count])
+            };
+
             if posts.len() > RECENT_POSTS_LIMIT {
                 if !show_all {
                     let hidden_count = posts.len() - RECENT_POSTS_LIMIT;
@@ -184,11 +201,40 @@ impl HerdrWindow {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.team_view.update(cx, |view, cx| {
                                     view.bulletin_show_all = true;
+                                    view.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
                                     cx.notify();
                                 });
                             })),
                     );
                 } else {
+                    if skip_count > 0 {
+                        feed = feed.child(
+                            div()
+                                .id("bulletin-show-earlier")
+                                .debug_selector(|| "bulletin-show-earlier".into())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap_2()
+                                .py_1()
+                                .px_2()
+                                .rounded(px(crate::config::corners::CONTROL))
+                                .bg(rgb(theme.surface))
+                                .border_1()
+                                .border_color(rgb(theme.active))
+                                .text_size(px(11.))
+                                .text_color(rgb(theme.muted))
+                                .cursor_pointer()
+                                .role(Role::Button)
+                                .child(format!("Show older messages ({} earlier)", skip_count))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.team_view.update(cx, |view, cx| {
+                                        view.bulletin_expanded_limit += EXPANDED_POSTS_LIMIT;
+                                        cx.notify();
+                                    });
+                                })),
+                        );
+                    }
                     feed = feed.child(
                         div()
                             .id("bulletin-collapse-earlier")
@@ -211,20 +257,13 @@ impl HerdrWindow {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.team_view.update(cx, |view, cx| {
                                     view.bulletin_show_all = false;
+                                    view.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
                                     cx.notify();
                                 });
                             })),
                     );
                 }
             }
-
-            let (skip_count, visible_posts) = if !show_all && posts.len() > RECENT_POSTS_LIMIT {
-                let skip = posts.len() - RECENT_POSTS_LIMIT;
-                (skip, &posts[skip..])
-            } else {
-                let count = posts.len().min(MAX_VISIBLE_POSTS);
-                (0, &posts[..count])
-            };
 
             for (i, post) in visible_posts.iter().enumerate() {
                 let idx = skip_count + i;

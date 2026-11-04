@@ -6,7 +6,11 @@ use std::collections::HashSet;
 
 mod board;
 mod bulletin;
+mod findings;
 mod roster;
+
+#[cfg(test)]
+mod perf_tests;
 
 #[cfg(test)]
 mod tests;
@@ -15,6 +19,12 @@ pub(super) const MAX_VISIBLE_MEMBERS: usize = 64;
 pub(super) const MAX_VISIBLE_CANDIDATES: usize = 64;
 const MAX_VISIBLE_TEAMS: usize = 64;
 pub(super) const MAX_VISIBLE_POSTS: usize = 200;
+pub(super) const MAX_VISIBLE_TASKS: usize = 64;
+pub(super) const MAX_VISIBLE_FINDINGS: usize = 64;
+pub(super) const RECENT_ACTIVE_TASKS_LIMIT: usize = 16;
+pub(super) const RECENT_COMPLETED_TASKS_LIMIT: usize = 16;
+pub(super) const RECENT_FINDINGS_LIMIT: usize = 16;
+pub(super) const EXPANDED_POSTS_LIMIT: usize = 30;
 
 /// Intent emitted by the view. The subscriber must validate current identities
 /// and perform writes, focus changes, and refreshes outside rendering.
@@ -157,6 +167,10 @@ pub(crate) struct TeamView {
     pub(super) bulletin_following: bool,
     pub(super) bulletin_scroll: ScrollHandle,
     pub(super) bulletin_show_all: bool,
+    pub(super) bulletin_expanded_limit: usize,
+    pub(super) active_tasks_show_all: bool,
+    pub(super) completed_tasks_show_all: bool,
+    pub(super) findings_show_all: bool,
     action_warning: Option<SharedString>,
     font: crate::config::FontConfig,
     pub(super) theme: Theme,
@@ -281,6 +295,10 @@ impl TeamView {
             bulletin_following: true,
             bulletin_scroll: ScrollHandle::new(),
             bulletin_show_all: false,
+            bulletin_expanded_limit: EXPANDED_POSTS_LIMIT,
+            active_tasks_show_all: false,
+            completed_tasks_show_all: false,
+            findings_show_all: false,
             action_warning: None,
             font,
             theme,
@@ -327,6 +345,10 @@ impl TeamView {
             self.editing_task_id = None;
             self.confirming_delete_team = false;
             self.action_warning = None;
+            self.active_tasks_show_all = false;
+            self.completed_tasks_show_all = false;
+            self.findings_show_all = false;
+            self.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
         } else if let Some(reply_to) = self.reply_to.as_ref()
             && !snapshot.posts.iter().any(|post| post.id == *reply_to)
         {

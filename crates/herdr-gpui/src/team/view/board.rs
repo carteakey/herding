@@ -1,10 +1,10 @@
-use super::{TeamAction, TeamView};
+use super::{
+    MAX_VISIBLE_TASKS, RECENT_ACTIVE_TASKS_LIMIT, RECENT_COMPLETED_TASKS_LIMIT, TeamAction,
+    TeamView,
+};
 use crate::i18n::fl;
 use gpui::{prelude::*, *};
-use herdr_orchestrator::team_store::{Confidence, TaskStatus};
-
-const MAX_VISIBLE_TASKS: usize = 64;
-const MAX_VISIBLE_FINDINGS: usize = 64;
+use herdr_orchestrator::team_store::TaskStatus;
 
 fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
@@ -380,8 +380,49 @@ impl TeamView {
                 .take(MAX_VISIBLE_TASKS)
                 .partition(|t| !matches!(t.status, TaskStatus::Done | TaskStatus::Cancelled));
 
-            for task in active_tasks {
+            let active_total = active_tasks.len();
+            let visible_active_count = if self.active_tasks_show_all {
+                active_total
+            } else {
+                active_total.min(RECENT_ACTIVE_TASKS_LIMIT)
+            };
+            for task in active_tasks.iter().take(visible_active_count) {
                 section = section.child(self.render_task_card(task, team_id, cx));
+            }
+
+            if active_total > RECENT_ACTIVE_TASKS_LIMIT {
+                let (label, show_all) = if self.active_tasks_show_all {
+                    (
+                        format!("Show fewer open tasks ({RECENT_ACTIVE_TASKS_LIMIT})"),
+                        false,
+                    )
+                } else {
+                    let more = active_total - RECENT_ACTIVE_TASKS_LIMIT;
+                    (
+                        format!("Show all {active_total} open tasks ({more} more)"),
+                        true,
+                    )
+                };
+                section = section.child(
+                    div()
+                        .id("team-tasks-active-toggle")
+                        .debug_selector(|| "team-tasks-active-toggle".into())
+                        .px_2()
+                        .py_1()
+                        .rounded(px(crate::config::corners::CONTROL))
+                        .bg(rgb(theme.surface))
+                        .border_1()
+                        .border_color(rgb(theme.active))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .cursor_pointer()
+                        .role(Role::Button)
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.active_tasks_show_all = show_all;
+                            cx.notify();
+                        })),
+                );
             }
 
             if !completed_tasks.is_empty() {
@@ -411,8 +452,49 @@ impl TeamView {
                         })),
                 );
                 if self.completed_tasks_open {
-                    for task in completed_tasks {
+                    let visible_completed = if self.completed_tasks_show_all {
+                        count
+                    } else {
+                        count.min(RECENT_COMPLETED_TASKS_LIMIT)
+                    };
+                    for task in completed_tasks.iter().take(visible_completed) {
                         section = section.child(self.render_task_card(task, team_id, cx));
+                    }
+                    if count > RECENT_COMPLETED_TASKS_LIMIT {
+                        let (label, show_all) = if self.completed_tasks_show_all {
+                            (
+                                format!(
+                                    "Show fewer completed tasks ({RECENT_COMPLETED_TASKS_LIMIT})"
+                                ),
+                                false,
+                            )
+                        } else {
+                            let more = count - RECENT_COMPLETED_TASKS_LIMIT;
+                            (
+                                format!("Show all {count} completed tasks ({more} more)"),
+                                true,
+                            )
+                        };
+                        section = section.child(
+                            div()
+                                .id("team-tasks-completed-show-more")
+                                .debug_selector(|| "team-tasks-completed-show-more".into())
+                                .px_2()
+                                .py_1()
+                                .rounded(px(crate::config::corners::CONTROL))
+                                .bg(rgb(theme.surface))
+                                .border_1()
+                                .border_color(rgb(theme.active))
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .cursor_pointer()
+                                .role(Role::Button)
+                                .child(label)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.completed_tasks_show_all = show_all;
+                                    cx.notify();
+                                })),
+                        );
                     }
                 }
             }
@@ -441,8 +523,10 @@ impl TeamView {
             .as_ref()
             .map(|a| fl!("team-task-assignee", assignee = a.as_ref()))
             .unwrap_or_else(|| fl!("team-task-unassigned"));
+        let task_id_sel = task_id.clone();
         let mut card = div()
             .id(SharedString::from(format!("team-task-{}", task.id)))
+            .debug_selector(move || format!("team-task-{task_id_sel}"))
             .flex()
             .flex_col()
             .gap_1()
@@ -694,292 +778,5 @@ impl TeamView {
             );
         }
         card
-    }
-
-    pub(super) fn render_findings(&self, team_id: &str, cx: &mut Context<Self>) -> Div {
-        let theme = &self.theme;
-        let mut section = div().flex().flex_col().gap_2();
-        let findings_count = self.snapshot.findings.len();
-        let toggle_symbol = if self.findings_collapsed {
-            "▶"
-        } else {
-            "▼"
-        };
-        section = section.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                    div()
-                        .id("team-findings-toggle")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(14.))
-                                .child(format!(
-                                    "{} {} ({})",
-                                    toggle_symbol,
-                                    fl!("team-findings-title"),
-                                    findings_count
-                                )),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.findings_collapsed = !this.findings_collapsed;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .id("team-finding-toggle-form")
-                        .px_2()
-                        .py(px(2.))
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .text_size(px(11.))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(if self.finding_form_open {
-                            fl!("team-action-cancel")
-                        } else {
-                            fl!("team-action-add-finding")
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.finding_form_open = !this.finding_form_open;
-                            cx.notify();
-                        })),
-                ),
-        );
-
-        if self.finding_form_open
-            && let Some((author, _)) = self.snapshot.post_author.as_ref()
-        {
-            let author = author.clone();
-            let team_id = team_id.to_owned();
-            let current_confidence = match self.finding_confidence {
-                Confidence::Low => fl!("team-confidence-low"),
-                Confidence::Medium => fl!("team-confidence-medium"),
-                Confidence::High => fl!("team-confidence-high"),
-            };
-            section = section.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_3()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.surface))
-                    .border_1()
-                    .border_color(rgb(theme.active))
-                    .child(self.finding_description.clone())
-                    .child(self.finding_evidence.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id("team-finding-confidence")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(12.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(current_confidence)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.finding_confidence = match this.finding_confidence {
-                                            Confidence::High => Confidence::Medium,
-                                            Confidence::Medium => Confidence::Low,
-                                            Confidence::Low => Confidence::High,
-                                        };
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("team-finding-add")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(12.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-add-finding"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let description = this
-                                            .finding_description
-                                            .read(cx)
-                                            .text()
-                                            .trim()
-                                            .to_owned();
-                                        let evidence =
-                                            this.finding_evidence.read(cx).text().trim().to_owned();
-                                        if description.is_empty() || evidence.is_empty() {
-                                            return;
-                                        }
-                                        let confidence = this.finding_confidence;
-                                        this.finding_description
-                                            .update(cx, |input, cx| input.clear(cx));
-                                        this.finding_evidence
-                                            .update(cx, |input, cx| input.clear(cx));
-                                        this.finding_form_open = false;
-                                        cx.emit(TeamAction::AddFinding {
-                                            team_id: team_id.clone(),
-                                            author: author.clone(),
-                                            description,
-                                            evidence,
-                                            confidence,
-                                        });
-                                    })),
-                            ),
-                    ),
-            );
-        }
-
-        if !self.findings_collapsed {
-            if self.snapshot.findings.is_empty() {
-                section = section.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(theme.muted))
-                        .child(fl!("team-findings-empty")),
-                );
-            } else {
-                for finding in self.snapshot.findings.iter().take(MAX_VISIBLE_FINDINGS) {
-                    let confidence_label = match finding.confidence {
-                        Confidence::Low => fl!("team-confidence-low"),
-                        Confidence::Medium => fl!("team-confidence-medium"),
-                        Confidence::High => fl!("team-confidence-high"),
-                    };
-                    let expanded = self.expanded_finding_ids.contains(&finding.id);
-                    let fid = finding.id.clone();
-                    let mut card = div()
-                        .id(SharedString::from(format!("team-finding-{}", finding.id)))
-                        .debug_selector(|| "team-finding-card".into())
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .p_2()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.surface))
-                        .border_1()
-                        .border_color(rgb(theme.active));
-
-                    let fid_click = fid.clone();
-                    let row = div()
-                        .id(SharedString::from(format!(
-                            "team-finding-row-{}",
-                            finding.id
-                        )))
-                        .debug_selector(|| "team-finding-row".into())
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.expanded_finding_ids.contains(&fid_click) {
-                                this.expanded_finding_ids.remove(&fid_click);
-                            } else {
-                                this.expanded_finding_ids.insert(fid_click.clone());
-                            }
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .debug_selector(|| "team-finding-author".into())
-                                        .flex_none()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_size(px(12.))
-                                        .child(finding.author.clone()),
-                                )
-                                .when(!expanded, |summary| {
-                                    summary.child(
-                                        div()
-                                            .debug_selector(|| "team-finding-description".into())
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(12.))
-                                            .child(finding.description.clone()),
-                                    )
-                                }),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_none()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py(px(1.))
-                                        .rounded(px(crate::config::corners::CONTROL))
-                                        .bg(rgb(theme.background))
-                                        .text_size(px(10.))
-                                        .text_color(rgb(theme.muted))
-                                        .child(confidence_label),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .text_color(rgb(theme.muted))
-                                        .child(if expanded { "▼" } else { "▶" }),
-                                ),
-                        );
-                    card = card.child(row);
-                    if expanded {
-                        card = card.child(
-                            div()
-                                .debug_selector(|| "team-finding-description".into())
-                                .text_size(px(12.))
-                                .child(finding.description.clone()),
-                        );
-                        card = card.child(
-                            div()
-                                .p_2()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.background))
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .child(fl!(
-                                    "team-finding-evidence",
-                                    evidence = finding.evidence.as_ref()
-                                )),
-                        );
-                        if let Some(superseded) = finding.supersedes.as_ref() {
-                            card =
-                                card.child(
-                                    div().text_size(px(11.)).text_color(rgb(theme.muted)).child(
-                                        fl!("team-finding-supersedes", id = superseded.as_str()),
-                                    ),
-                                );
-                        }
-                    }
-                    section = section.child(card);
-                }
-            }
-        }
-        section
     }
 }

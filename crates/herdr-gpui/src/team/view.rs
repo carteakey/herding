@@ -397,9 +397,12 @@ impl TeamView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = &self.theme;
+        let id = id.into();
         let label = label.into();
+        let selector = id.to_string();
         div()
-            .id(id.into())
+            .id(id)
+            .debug_selector(move || selector.clone())
             .px_2()
             .py_1()
             .rounded(px(crate::config::corners::CONTROL))
@@ -408,6 +411,49 @@ impl TeamView {
             .cursor_pointer()
             .role(Role::Button)
             .child(label)
+            .on_click(cx.listener(move |_, _, _, cx| cx.emit(action.clone())))
+    }
+
+    pub(super) fn icon_button(
+        &self,
+        id: impl Into<SharedString>,
+        icon: &'static str,
+        tooltip: impl Into<SharedString>,
+    ) -> Stateful<Div> {
+        let theme = &self.theme;
+        let id = id.into();
+        let tooltip = tooltip.into();
+        let selector = id.to_string();
+        div()
+            .id(id)
+            .debug_selector(move || selector.clone())
+            .size(px(22.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(crate::config::corners::CONTROL))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(theme.active)))
+            .role(Role::Button)
+            .aria_label(tooltip)
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(13.))
+                    .text_color(rgb(theme.foreground)),
+            )
+    }
+
+    pub(super) fn icon_action_button(
+        &self,
+        id: impl Into<SharedString>,
+        icon: &'static str,
+        tooltip: impl Into<SharedString>,
+        action: TeamAction,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        self.icon_button(id, icon, tooltip)
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(action.clone())))
     }
 
@@ -542,7 +588,8 @@ impl Render for TeamView {
             .flex()
             .flex_col()
             .gap_2()
-            .p_2()
+            .px_3()
+            .py_2()
             .rounded(px(crate::config::corners::CONTROL))
             .bg(rgb(theme.surface))
             .border_1()
@@ -550,7 +597,6 @@ impl Render for TeamView {
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .gap_2()
@@ -559,27 +605,24 @@ impl Render for TeamView {
                             .flex_1()
                             .min_w_0()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(17.))
+                            .text_size(px(16.))
+                            .truncate()
                             .child(team_name.clone()),
                     )
                     .child(
                         div()
                             .flex()
-                            .flex_wrap()
                             .items_center()
+                            .justify_end()
                             .gap_1()
                             .child(
-                                div()
-                                    .id("team-rename-toggle")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(11.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-rename"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                self.icon_button(
+                                    "team-rename-toggle",
+                                    "icons/pencil.svg",
+                                    fl!("team-action-rename"),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         this.editing_member_id = None;
                                         this.editing_team_name = !this.editing_team_name;
                                         if this.editing_team_name {
@@ -589,10 +632,16 @@ impl Render for TeamView {
                                             });
                                         }
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
-                            .child(self.action_button(
+                            .child(self.icon_action_button(
                                 "team-toggle-pause",
+                                if self.snapshot.paused {
+                                    "icons/play.svg"
+                                } else {
+                                    "icons/coffee.svg"
+                                },
                                 if self.snapshot.paused {
                                     fl!("team-action-resume")
                                 } else {
@@ -601,8 +650,9 @@ impl Render for TeamView {
                                 TeamAction::TogglePauseTeam,
                                 cx,
                             ))
-                            .child(self.action_button(
+                            .child(self.icon_action_button(
                                 "team-toggle-bulletin",
+                                "icons/panel-right.svg",
                                 if self.snapshot.bulletin_open {
                                     fl!("team-action-hide-bulletin")
                                 } else {
@@ -611,27 +661,25 @@ impl Render for TeamView {
                                 TeamAction::ToggleBulletinSidebar,
                                 cx,
                             ))
-                            .child(self.action_button(
+                            .child(self.icon_action_button(
                                 "team-switch",
+                                "icons/sessions.svg",
                                 fl!("team-action-switch"),
                                 TeamAction::SwitchTeamView,
                                 cx,
                             ))
                             .child(
-                                div()
-                                    .id("team-delete")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(12.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-delete-team"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                self.icon_button(
+                                    "team-delete",
+                                    "icons/trash.svg",
+                                    fl!("team-action-delete-team"),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         this.confirming_delete_team = !this.confirming_delete_team;
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             );

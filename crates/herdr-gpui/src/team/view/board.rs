@@ -33,7 +33,8 @@ impl TeamView {
             .flex()
             .flex_col()
             .gap_2()
-            .p_3()
+            .px_3()
+            .py_2()
             .rounded(px(crate::config::corners::CONTROL))
             .bg(rgb(theme.surface))
             .border_1()
@@ -47,24 +48,19 @@ impl TeamView {
         );
         if has_goal && !self.editing_goal {
             header = header.child(
-                div()
-                    .id("team-goal-edit")
-                    .px_2()
-                    .py(px(1.))
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.active))
-                    .text_size(px(11.))
-                    .cursor_pointer()
-                    .role(Role::Button)
-                    .child(fl!("team-action-edit"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let current_goal = current_goal.clone();
-                        this.editing_goal = true;
-                        this.team_goal.update(cx, |input, cx| {
-                            input.set_text_at(&current_goal, current_goal.len(), cx);
-                        });
-                        cx.notify();
-                    })),
+                self.icon_button(
+                    "team-goal-edit",
+                    "icons/pencil.svg",
+                    fl!("team-action-edit"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let current_goal = current_goal.clone();
+                    this.editing_goal = true;
+                    this.team_goal.update(cx, |input, cx| {
+                        input.set_text_at(&current_goal, current_goal.len(), cx);
+                    });
+                    cx.notify();
+                })),
             );
         }
         card = card.child(header);

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::config::{FontConfig, Theme};
-use crate::team::model::{TeamFinding, TeamLoadState, TeamSnapshot};
+use crate::team::model::{PaneIdentity, TeamFinding, TeamLoadState, TeamMember, TeamSnapshot};
 use gpui::{FontWeight, px, size};
 use herdr_orchestrator::team_store::Confidence;
 
@@ -281,4 +281,90 @@ fn bulletin_auto_scroll_following_and_jump_to_latest(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     assert!(cx.debug_bounds("bulletin-jump-to-latest").is_none());
+}
+
+#[gpui::test]
+fn dense_ui_icon_toolbars_layout_properly(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| TeamView::new(font(), Theme::default(), cx));
+    view.update(cx, |view, cx| {
+        view.snapshot = TeamSnapshot {
+            state: TeamLoadState::Ready,
+            team_id: Some("team-test".into()),
+            team_name: Some("herding".into()),
+            team_goal: Some("Build dense UI with compact icon toolbars".into()),
+            members: vec![TeamMember {
+                member_id: "m1".into(),
+                name: "agyolo2".into(),
+                role: "worker".into(),
+                agent: "antigravity".into(),
+                pane: Some(PaneIdentity {
+                    daemon_id: "d1".into(),
+                    session_id: Some("s1".into()),
+                    workspace_id: "w1".into(),
+                    pane_id: "p1".into(),
+                }),
+                target_pane: None,
+                status: "idle".into(),
+                supervisor: false,
+                paused: false,
+            }],
+            ..TeamSnapshot::default()
+        };
+        cx.notify();
+    });
+    cx.simulate_resize(size(px(600.), px(900.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // Header toolbar icon buttons
+    for id in [
+        "team-rename-toggle",
+        "team-toggle-pause",
+        "team-toggle-bulletin",
+        "team-switch",
+        "team-delete",
+    ] {
+        let b = cx
+            .debug_bounds(id)
+            .unwrap_or_else(|| panic!("header button {id} should be laid out"));
+        assert!(
+            b.size.width <= px(24.) && b.size.height <= px(24.),
+            "header button {id} should be a compact icon button: {b:?}"
+        );
+    }
+
+    // Goal edit icon button
+    let goal_edit = cx
+        .debug_bounds("team-goal-edit")
+        .expect("goal edit button should be laid out");
+    assert!(
+        goal_edit.size.width <= px(24.) && goal_edit.size.height <= px(24.),
+        "goal edit button should be a compact icon button: {goal_edit:?}"
+    );
+
+    // Roster toggle form icon button
+    let roster_toggle = cx
+        .debug_bounds("team-worker-toggle-form")
+        .expect("roster worker toggle button should be laid out");
+    assert!(
+        roster_toggle.size.width <= px(24.) && roster_toggle.size.height <= px(24.),
+        "roster worker toggle button should be a compact icon button: {roster_toggle:?}"
+    );
+
+    // Member card toolbar icon buttons
+    for id in [
+        "team-focus-0",
+        "team-nudge-0",
+        "team-pause-member-0",
+        "team-rename-member-0",
+        "team-supervisor-0",
+        "team-remove-0",
+    ] {
+        let b = cx
+            .debug_bounds(id)
+            .unwrap_or_else(|| panic!("member action button {id} should be laid out"));
+        assert!(
+            b.size.width <= px(24.) && b.size.height <= px(24.),
+            "member action button {id} should be a compact icon button: {b:?}"
+        );
+    }
 }

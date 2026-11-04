@@ -104,24 +104,23 @@ impl TeamView {
                         )),
                 )
                 .child(
-                    div()
-                        .id("team-worker-toggle-form")
-                        .px_2()
-                        .py(px(2.))
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .text_size(px(11.))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(if self.worker_form_open {
+                    self.icon_button(
+                        "team-worker-toggle-form",
+                        if self.worker_form_open {
+                            "icons/close.svg"
+                        } else {
+                            "icons/plus.svg"
+                        },
+                        if self.worker_form_open {
                             fl!("team-action-cancel")
                         } else {
                             fl!("team-action-add-worker")
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.worker_form_open = !this.worker_form_open;
-                            cx.notify();
-                        })),
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.worker_form_open = !this.worker_form_open;
+                        cx.notify();
+                    })),
                 ),
         );
 
@@ -148,65 +147,163 @@ impl TeamView {
             let is_renaming = self.editing_member_id.as_deref() == Some(member.member_id.as_str());
             let mut card = div()
                 .id(SharedString::from(format!("team-member-{index}")))
+                .debug_selector(move || format!("team-member-{index}"))
                 .flex()
                 .flex_col()
-                .gap_2()
-                .p_2()
+                .gap_1()
+                .px_3()
+                .py_2()
                 .rounded(px(crate::config::corners::CONTROL))
                 .bg(rgb(theme.surface))
                 .border_1()
-                .border_color(rgb(theme.active))
+                .border_color(rgb(theme.active));
+
+            let info = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .flex_1()
+                .min_w_0()
                 .child(
                     div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(13.))
-                                .child(member.name.clone()),
-                        )
-                        .when(!member.agent.is_empty(), |r| {
-                            r.child(
-                                div()
-                                    .px_2()
-                                    .py(px(1.))
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.background))
-                                    .text_size(px(11.))
-                                    .text_color(rgb(theme.muted))
-                                    .child(member.agent.clone()),
-                            )
-                        })
-                        .child(
-                            div()
-                                .px_2()
-                                .py(px(1.))
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.background))
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .child(member.role.clone()),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py(px(1.))
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.background))
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .child(if member.paused {
-                                    fl!("team-status-paused").into()
-                                } else {
-                                    member.status.clone()
-                                }),
-                        ),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(px(13.))
+                        .child(member.name.clone()),
+                )
+                .when(!member.agent.is_empty(), |r| {
+                    r.child(
+                        div()
+                            .px_2()
+                            .py(px(1.))
+                            .rounded(px(crate::config::corners::CONTROL))
+                            .bg(rgb(theme.background))
+                            .text_size(px(11.))
+                            .text_color(rgb(theme.muted))
+                            .child(member.agent.clone()),
+                    )
+                })
+                .child(
+                    div()
+                        .px_2()
+                        .py(px(1.))
+                        .rounded(px(crate::config::corners::CONTROL))
+                        .bg(rgb(theme.background))
+                        .text_size(px(11.))
+                        .text_color(rgb(theme.muted))
+                        .child(member.role.clone()),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py(px(1.))
+                        .rounded(px(crate::config::corners::CONTROL))
+                        .bg(rgb(theme.background))
+                        .text_size(px(11.))
+                        .text_color(rgb(theme.muted))
+                        .child(if member.paused {
+                            fl!("team-status-paused").into()
+                        } else {
+                            member.status.clone()
+                        }),
                 );
+
+            let mut actions = div().flex().items_center().justify_end().gap_1();
+            if let Some(pane) = member.pane.as_ref().filter(|pane| pane.verified()) {
+                actions = actions
+                    .child(self.icon_action_button(
+                        SharedString::from(format!("team-focus-{index}")),
+                        "icons/terminal.svg",
+                        fl!("team-action-focus"),
+                        TeamAction::FocusWorker { pane: pane.clone() },
+                        cx,
+                    ))
+                    .child(self.icon_action_button(
+                        SharedString::from(format!("team-nudge-{index}")),
+                        "icons/pulse.svg",
+                        fl!("team-action-nudge"),
+                        TeamAction::NudgeMember {
+                            member_id: member.member_id.clone(),
+                        },
+                        cx,
+                    ))
+                    .child(self.icon_action_button(
+                        SharedString::from(format!("team-pause-member-{index}")),
+                        if member.paused {
+                            "icons/play.svg"
+                        } else {
+                            "icons/coffee.svg"
+                        },
+                        if member.paused {
+                            fl!("team-action-resume")
+                        } else {
+                            fl!("team-action-pause")
+                        },
+                        TeamAction::TogglePauseMember {
+                            member_id: member.member_id.clone(),
+                        },
+                        cx,
+                    ));
+            } else if member.pane.is_some() {
+                actions = actions.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(theme.muted))
+                        .child(fl!("team-roster-session-unavailable")),
+                );
+            }
+
+            let edit_member_id = member.member_id.clone();
+            let edit_member_name = member.name.to_string();
+            actions = actions.child(
+                self.icon_button(
+                    SharedString::from(format!("team-rename-member-{index}")),
+                    "icons/pencil.svg",
+                    fl!("team-action-rename"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.editing_team_name = false;
+                    this.editing_member_id = Some(edit_member_id.clone());
+                    let current = edit_member_name.clone();
+                    this.rename_input
+                        .update(cx, |i, cx| i.set_text_at(&current, current.len(), cx));
+                    cx.notify();
+                })),
+            );
+
+            if !member.supervisor {
+                actions = actions
+                    .child(self.icon_action_button(
+                        SharedString::from(format!("team-supervisor-{index}")),
+                        "icons/user.svg",
+                        fl!("team-action-select-supervisor"),
+                        TeamAction::SelectSupervisor {
+                            team_id: team_id.to_owned(),
+                            member_id: member.member_id.clone(),
+                        },
+                        cx,
+                    ))
+                    .child(self.icon_action_button(
+                        SharedString::from(format!("team-remove-{index}")),
+                        "icons/trash.svg",
+                        fl!("team-action-remove-member"),
+                        TeamAction::RemoveMember {
+                            team_id: team_id.to_owned(),
+                            member_id: member.member_id.clone(),
+                        },
+                        cx,
+                    ));
+            }
+
+            card = card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(info)
+                    .child(actions),
+            );
 
             if is_renaming {
                 let team_id_rename = team_id.to_owned();
@@ -260,90 +357,6 @@ impl TeamView {
                         ),
                 );
             }
-
-            let mut actions = div().flex().flex_wrap().items_center().gap_1();
-            if let Some(pane) = member.pane.as_ref().filter(|pane| pane.verified()) {
-                actions = actions
-                    .child(self.action_button(
-                        SharedString::from(format!("team-focus-{index}")),
-                        fl!("team-action-focus"),
-                        TeamAction::FocusWorker { pane: pane.clone() },
-                        cx,
-                    ))
-                    .child(self.action_button(
-                        SharedString::from(format!("team-nudge-{index}")),
-                        fl!("team-action-nudge"),
-                        TeamAction::NudgeMember {
-                            member_id: member.member_id.clone(),
-                        },
-                        cx,
-                    ))
-                    .child(self.action_button(
-                        SharedString::from(format!("team-pause-member-{index}")),
-                        if member.paused {
-                            fl!("team-action-resume")
-                        } else {
-                            fl!("team-action-pause")
-                        },
-                        TeamAction::TogglePauseMember {
-                            member_id: member.member_id.clone(),
-                        },
-                        cx,
-                    ));
-            } else if member.pane.is_some() {
-                actions = actions.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
-                        .child(fl!("team-roster-session-unavailable")),
-                );
-            }
-
-            let edit_member_id = member.member_id.clone();
-            let edit_member_name = member.name.to_string();
-            actions = actions.child(
-                div()
-                    .id(SharedString::from(format!("team-rename-member-{index}")))
-                    .px_2()
-                    .py_1()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.active))
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .role(Role::Button)
-                    .child(fl!("team-action-rename"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.editing_team_name = false;
-                        this.editing_member_id = Some(edit_member_id.clone());
-                        let current = edit_member_name.clone();
-                        this.rename_input
-                            .update(cx, |i, cx| i.set_text_at(&current, current.len(), cx));
-                        cx.notify();
-                    })),
-            );
-
-            if !member.supervisor {
-                actions = actions
-                    .child(self.action_button(
-                        SharedString::from(format!("team-supervisor-{index}")),
-                        fl!("team-action-select-supervisor"),
-                        TeamAction::SelectSupervisor {
-                            team_id: team_id.to_owned(),
-                            member_id: member.member_id.clone(),
-                        },
-                        cx,
-                    ))
-                    .child(self.action_button(
-                        SharedString::from(format!("team-remove-{index}")),
-                        fl!("team-action-remove-member"),
-                        TeamAction::RemoveMember {
-                            team_id: team_id.to_owned(),
-                            member_id: member.member_id.clone(),
-                        },
-                        cx,
-                    ));
-            }
-            card = card.child(actions);
             section = section.child(card);
         }
         section

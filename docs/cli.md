@@ -27,6 +27,13 @@ herdr-gpui --help              # every command
 herdr-gpui COMMAND --help      # one command
 ```
 
+`herdr-gpui --version` (or `-V`) prints one line, such as
+`herdr-gpui v20261104.2 (05b1a580)`, and exits. The calendar version comes
+from the newest release tag reachable when the binary was built, with
+`-dirty` appended when the tree carried uncommitted changes; a build from a
+clone without release tags prints only the short rev, and neither being
+known prints `(unknown build)`.
+
 ## Options and output
 
 Every command accepts:

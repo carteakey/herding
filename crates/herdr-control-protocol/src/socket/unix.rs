@@ -66,7 +66,7 @@ pub(super) fn peer_credentials(stream: &Connection) -> io::Result<PeerCredential
     {
         use nix::sys::socket::getsockopt;
         let credentials = getsockopt(&stream.0, nix::sys::socket::sockopt::PeerCredentials)
-            .map_err(|error| io::Error::other(error))?;
+            .map_err(io::Error::other)?;
         // A pid of 0 means the kernel could not tell; both ends then match
         // on uid and gid alone.
         let pid = credentials.pid();

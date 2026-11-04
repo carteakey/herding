@@ -38,6 +38,29 @@ fn build_info_is_an_informational_mode() {
     );
 }
 
+#[test]
+fn version_flag_parses_to_the_version_mode() {
+    assert_eq!(
+        LaunchOptions::parse(["--version"]).unwrap().mode,
+        LaunchMode::Version
+    );
+    assert_eq!(
+        LaunchOptions::parse(["-V"]).unwrap().mode,
+        LaunchMode::Version
+    );
+}
+
+#[test]
+fn version_line_pins_the_format_and_fallbacks() {
+    assert_eq!(
+        format_version("20261104.2", "05b1a580"),
+        "herdr-gpui v20261104.2 (05b1a580)"
+    );
+    assert_eq!(format_version("20261104.2", ""), "herdr-gpui v20261104.2");
+    assert_eq!(format_version("", "05b1a580"), "herdr-gpui (05b1a580)");
+    assert_eq!(format_version("", ""), "herdr-gpui (unknown build)");
+}
+
 /// A browser command as the parser should produce it: text output, the
 /// default window.
 fn browser(command: BrowserCommand) -> LaunchMode {

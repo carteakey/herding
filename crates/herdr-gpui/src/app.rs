@@ -292,10 +292,15 @@ pub(crate) fn run() -> std::process::ExitCode {
         print!("{}", cli::build_info());
         return std::process::ExitCode::SUCCESS;
     }
+    if mode == LaunchMode::Version {
+        println!("{}", cli::version_line());
+        return std::process::ExitCode::SUCCESS;
+    }
     if mode == LaunchMode::Help {
         println!(
             "herdr-gpui [--socket CLIENT_SOCKET | --session NAME [--dev]]\nConnects to Local and saved SSH hosts; never installs remote software.\nStarts the local Herdr daemon if needed; never stops it.\nExplicit --socket and --dev targets are attach-only; --socket isolates the GUI to one existing daemon."
         );
+        println!("  --version           Print the calendar version and rev, then exit");
         println!(
             "  --build-info        Print the executable's build identity without starting the GUI"
         );

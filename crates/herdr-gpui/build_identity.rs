@@ -14,6 +14,7 @@ pub struct Identity {
     pub detached: bool,
     pub watched: Vec<PathBuf>,
     pub commit: String,
+    pub version: String,
 }
 
 fn anchored<'a>(command: &'a mut Command, manifest: &Path) -> &'a mut Command {
@@ -63,6 +64,7 @@ pub fn detect(manifest: &Path) -> Identity {
         return identity;
     };
     identity.commit = git(manifest, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+    identity.version = calendar_version(manifest);
     if let Some(root) = git(manifest, &["rev-parse", "--show-toplevel"]) {
         let pointer = Path::new(&root).join(".git");
         if pointer.is_file() {
@@ -110,6 +112,32 @@ pub fn detect(manifest: &Path) -> Identity {
             .unwrap_or_default();
     }
     identity
+}
+
+/// The release's calendar version, `YYYYMMDD.COUNTER` from the newest
+/// release tag reachable from HEAD, per the `release_version.rs` convention.
+/// Uncommitted changes append `-dirty`; no git, no reachable release tag, or
+/// a foreign tag shape leaves the version empty rather than inventing one.
+fn calendar_version(manifest: &Path) -> String {
+    let version = git(
+        manifest,
+        &["describe", "--tags", "--abbrev=0", "--match", "v20*"],
+    )
+    .and_then(|tag| {
+        let version = tag.strip_prefix('v').unwrap_or(&tag).to_owned();
+        crate::release_version::numeric(&version).map(|_| version)
+    });
+    match version {
+        Some(version) if dirty(manifest) => format!("{version}-dirty"),
+        Some(version) => version,
+        None => String::new(),
+    }
+}
+
+fn dirty(manifest: &Path) -> bool {
+    git(manifest, &["status", "--porcelain"])
+        .map(|status| !status.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn validate_pr(value: &str) -> Option<&str> {

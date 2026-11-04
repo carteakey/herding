@@ -5,6 +5,10 @@
 #[cfg_attr(not(unix), allow(dead_code))]
 #[path = "../build_identity.rs"]
 mod build_identity;
+// build_identity reads the release version through the shared parser.
+#[cfg_attr(not(unix), allow(dead_code))]
+#[path = "../release_version.rs"]
+mod release_version;
 
 #[cfg_attr(not(unix), allow(unused_imports))]
 use build_identity::*;

@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - v0.2.0
 
 ### Added
+- `herdr-gpui --version` (or `-V`): prints one line, e.g.
+  `herdr-gpui v20261104.2 (05b1a580)`. The build embeds the calendar version
+  from the newest reachable release tag plus the short rev, with `-dirty`
+  appended for uncommitted trees; per-part fallbacks keep a bare clone honest.
 - Team calls from your own user are bound to the process that registered
   the member (Unix peer credentials: `SO_PEERCRED` on Linux, `getpeereid`
   on macOS); the control tunnel's callers are recognized by their sshd

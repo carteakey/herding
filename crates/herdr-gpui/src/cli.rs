@@ -10,6 +10,8 @@ pub enum LaunchMode {
     Normal,
     Help,
     BuildInfo,
+    /// Print the calendar version and rev, then exit.
+    Version,
     /// Talk to the running app, or read its files, then exit without
     /// starting GPUI.
     Control(control::Invocation),
@@ -141,6 +143,24 @@ pub fn build_info() -> &'static str {
     &record[PREFIX_LEN..record.len() - 1]
 }
 
+/// Shapes `herdr-gpui v20261104.2 (05b1a580)`, declining either part the
+/// build could not embed (no git, or no release tag on the branch).
+fn format_version(version: &str, rev: &str) -> String {
+    match (version.is_empty(), rev.is_empty()) {
+        (false, false) => format!("herdr-gpui v{version} ({rev})"),
+        (false, true) => format!("herdr-gpui v{version}"),
+        (true, false) => format!("herdr-gpui ({rev})"),
+        (true, true) => "herdr-gpui (unknown build)".to_owned(),
+    }
+}
+
+/// One line for `--version`: the calendar version and short rev the build
+/// embedded. Falls back per part, so a build from a bare clone still says
+/// something true.
+pub fn version_line() -> String {
+    format_version(env!("HERDR_BUILD_VERSION"), env!("HERDR_BUILD_COMMIT"))
+}
+
 /// The arguments after a leading `--mockup`. Paths stay OS strings.
 #[cfg(feature = "mockup")]
 fn parse_mockup(mut args: impl Iterator<Item = OsString>) -> Result<LaunchMode, CliError> {
@@ -201,6 +221,12 @@ impl LaunchOptions {
         let mode = LaunchMode::Normal;
         while let Some(arg) = args.next() {
             match arg.to_str() {
+                Some("--version" | "-V") => {
+                    return Ok(Self {
+                        target: ConnectTarget::Local,
+                        mode: LaunchMode::Version,
+                    });
+                }
                 Some("--help" | "-h" | "--build-info") => {
                     return Ok(Self {
                         target: ConnectTarget::Local,

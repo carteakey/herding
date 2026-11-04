@@ -99,6 +99,7 @@ fn main() -> Result<(), BuildError> {
     println!("cargo:rustc-env=HERDR_BUILD_BRANCH={}", identity.branch);
     println!("cargo:rustc-env=HERDR_BUILD_PR={pr}");
     println!("cargo:rustc-env=HERDR_BUILD_COMMIT={}", identity.commit);
+    println!("cargo:rustc-env=HERDR_BUILD_VERSION={}", identity.version);
     if std::env::var_os("CARGO_FEATURE_MOCKUP").is_some() {
         mockup_scratch()?;
     }

@@ -1,4 +1,4 @@
-use super::{MAX_VISIBLE_FINDINGS, RECENT_FINDINGS_LIMIT, TeamAction, TeamView};
+use super::{ButtonVariant, MAX_VISIBLE_FINDINGS, RECENT_FINDINGS_LIMIT, TeamAction, TeamView};
 use crate::i18n::fl;
 use gpui::{prelude::*, *};
 use herdr_orchestrator::team_store::Confidence;
@@ -13,6 +13,8 @@ impl TeamView {
         } else {
             "▼"
         };
+        // The title itself toggles the collapse, so this header stays custom
+        // rather than using `section_header`.
         section = section.child(
             div()
                 .flex()
@@ -25,12 +27,14 @@ impl TeamView {
                         .flex()
                         .items_center()
                         .gap_1()
+                        .min_w_0()
                         .cursor_pointer()
                         .role(Role::Button)
                         .child(
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_size(px(14.))
+                                .truncate()
                                 .child(format!(
                                     "{} {} ({})",
                                     toggle_symbol,
@@ -44,24 +48,19 @@ impl TeamView {
                         })),
                 )
                 .child(
-                    div()
-                        .id("team-finding-toggle-form")
-                        .px_2()
-                        .py(px(2.))
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .text_size(px(11.))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(if self.finding_form_open {
+                    self.button(
+                        "team-finding-toggle-form",
+                        if self.finding_form_open {
                             fl!("team-action-cancel")
                         } else {
                             fl!("team-action-add-finding")
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.finding_form_open = !this.finding_form_open;
-                            cx.notify();
-                        })),
+                        },
+                        ButtonVariant::Primary,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.finding_form_open = !this.finding_form_open;
+                        cx.notify();
+                    })),
                 ),
         );
 
@@ -76,15 +75,9 @@ impl TeamView {
                 Confidence::High => fl!("team-confidence-high"),
             };
             section = section.child(
-                div()
-                    .flex()
-                    .flex_col()
+                self.card()
                     .gap_2()
                     .p_3()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.surface))
-                    .border_1()
-                    .border_color(rgb(theme.active))
                     .child(self.finding_description.clone())
                     .child(self.finding_evidence.clone())
                     .child(
@@ -94,37 +87,30 @@ impl TeamView {
                             .items_center()
                             .gap_2()
                             .child(
-                                div()
-                                    .id("team-finding-confidence")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(12.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(current_confidence)
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                self.button(
+                                    "team-finding-confidence",
+                                    current_confidence,
+                                    ButtonVariant::Primary,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         this.finding_confidence = match this.finding_confidence {
                                             Confidence::High => Confidence::Medium,
                                             Confidence::Medium => Confidence::Low,
                                             Confidence::Low => Confidence::High,
                                         };
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                div()
-                                    .id("team-finding-add")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(12.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-add-finding"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                self.button(
+                                    "team-finding-add",
+                                    fl!("team-action-add-finding"),
+                                    ButtonVariant::Primary,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         let description = this
                                             .finding_description
                                             .read(cx)
@@ -149,7 +135,8 @@ impl TeamView {
                                             evidence,
                                             confidence,
                                         });
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             );
@@ -179,7 +166,8 @@ impl TeamView {
                     let expanded = self.expanded_finding_ids.contains(&finding.id);
                     let fid = finding.id.clone();
                     let fid_tag = fid.clone();
-                    let mut card = div()
+                    let mut card = self
+                        .card()
                         .id(SharedString::from(format!("team-finding-{}", finding.id)))
                         .debug_selector(|| "team-finding-card".into())
                         .child(
@@ -187,14 +175,8 @@ impl TeamView {
                                 .size_0()
                                 .debug_selector(move || format!("team-finding-{fid_tag}")),
                         )
-                        .flex()
-                        .flex_col()
                         .gap_1()
-                        .p_2()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.surface))
-                        .border_1()
-                        .border_color(rgb(theme.active));
+                        .p_2();
 
                     let fid_click = fid.clone();
                     let row = div()
@@ -250,16 +232,7 @@ impl TeamView {
                                 .flex_none()
                                 .items_center()
                                 .gap_2()
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py(px(1.))
-                                        .rounded(px(crate::config::corners::CONTROL))
-                                        .bg(rgb(theme.background))
-                                        .text_size(px(10.))
-                                        .text_color(rgb(theme.muted))
-                                        .child(confidence_label),
-                                )
+                                .child(self.chip(confidence_label))
                                 .child(
                                     div()
                                         .text_size(px(10.))
@@ -275,18 +248,10 @@ impl TeamView {
                                 .text_size(px(12.))
                                 .child(finding.description.clone()),
                         );
-                        card = card.child(
-                            div()
-                                .p_2()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.background))
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .child(fl!(
-                                    "team-finding-evidence",
-                                    evidence = finding.evidence.as_ref()
-                                )),
-                        );
+                        card = card.child(self.well().child(fl!(
+                            "team-finding-evidence",
+                            evidence = finding.evidence.as_ref()
+                        )));
                         if let Some(superseded) = finding.supersedes.as_ref() {
                             card =
                                 card.child(
@@ -313,20 +278,7 @@ impl TeamView {
                         )
                     };
                     section = section.child(
-                        div()
-                            .id("team-findings-show-more")
-                            .debug_selector(|| "team-findings-show-more".into())
-                            .px_2()
-                            .py_1()
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.surface))
-                            .border_1()
-                            .border_color(rgb(theme.active))
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .cursor_pointer()
-                            .role(Role::Button)
-                            .child(label)
+                        self.button("team-findings-show-more", label, ButtonVariant::Toggle)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.findings_show_all = show_all;
                                 cx.notify();

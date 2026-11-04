@@ -1,25 +1,465 @@
-use super::{EXPANDED_POSTS_LIMIT, MAX_VISIBLE_POSTS, TeamAction};
-use crate::{HerdrWindow, direction::Logical, i18n::fl, team::model::DeliveryState};
+use super::{ButtonVariant, EXPANDED_POSTS_LIMIT, MAX_VISIBLE_POSTS, TeamAction, TeamView};
+use crate::{
+    HerdrWindow, backdrop::Fill, direction::Logical, i18n::fl, team::model::DeliveryState,
+};
 use gpui::{prelude::*, *};
 
 const BULLETIN_WIDTH: f32 = 340.;
 const MIN_TERMINAL_WIDTH: f32 = 260.;
 pub(super) const RECENT_POSTS_LIMIT: usize = 20;
 
-impl HerdrWindow {
-    pub(crate) fn push_team_action(&mut self, action: TeamAction, cx: &mut Context<Self>) {
-        if self.team_actions.len() < crate::team::ACTION_QUEUE_CAPACITY {
-            self.team_actions.push_back(action);
-            self.poll_team(cx);
+impl TeamView {
+    /// The live bulletin feed, composer included. This runs on every frame
+    /// the sidebar is open, so it borrows the snapshot directly: the old
+    /// HerdrWindow version deep-cloned every post and member onto the UI
+    /// thread once per frame because the entity borrow fought the listeners.
+    /// Actions are emitted and reach the same bridge queue through the
+    /// HerdrWindow subscription.
+    pub(crate) fn render_bulletin_sidebar(
+        &self,
+        fill: Fill,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = &self.theme;
+        let snapshot = &self.snapshot;
+        let post_body = self.post_body.clone();
+        let reply_to = self.reply_to.clone();
+
+        let pending_count: usize = snapshot
+            .posts
+            .iter()
+            .flat_map(|p| p.deliveries.iter())
+            .filter(|(_, _, state)| *state == DeliveryState::Pending)
+            .count();
+
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(rgb(theme.active))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(13.))
+                            .child(fl!("team-bulletin").to_uppercase()),
+                    )
+                    .child(self.chip(fl!(
+                        "team-bulletin-summary",
+                        posts = snapshot.posts.len(),
+                        unacknowledged = pending_count
+                    ))),
+            )
+            .child(
+                self.button(
+                    "team-bulletin-hide",
+                    fl!("team-action-hide"),
+                    ButtonVariant::Primary,
+                )
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(TeamAction::ToggleBulletinSidebar);
+                })),
+            );
+
+        let mut feed = div()
+            .id("team-bulletin-feed")
+            .track_scroll(&self.bulletin_scroll)
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let dy = match event.delta {
+                    ScrollDelta::Lines(delta) => delta.y,
+                    ScrollDelta::Pixels(delta) => f32::from(delta.y),
+                };
+                if dy > 0. && this.bulletin_following {
+                    this.bulletin_following = false;
+                    cx.notify();
+                }
+            }));
+
+        if snapshot.posts.is_empty() {
+            feed = feed.child(
+                self.card()
+                    .p_3()
+                    .text_size(px(12.))
+                    .text_color(rgb(theme.muted))
+                    .child(fl!("team-posts-empty")),
+            );
         } else {
-            self.team_action_overflow = true;
-            self.team_view.update(cx, |view, cx| {
-                view.set_action_warning(Some(fl!("team-action-queue-full").into()), cx);
-            });
+            let expanded_limit = self.bulletin_expanded_limit.max(EXPANDED_POSTS_LIMIT);
+            let (skip_count, visible_posts) =
+                if !self.bulletin_show_all && snapshot.posts.len() > RECENT_POSTS_LIMIT {
+                    let skip = snapshot.posts.len() - RECENT_POSTS_LIMIT;
+                    (skip, &snapshot.posts[skip..])
+                } else if self.bulletin_show_all {
+                    let limit = expanded_limit.min(MAX_VISIBLE_POSTS);
+                    let skip = snapshot.posts.len().saturating_sub(limit);
+                    (skip, &snapshot.posts[skip..])
+                } else {
+                    let count = snapshot.posts.len().min(MAX_VISIBLE_POSTS);
+                    (0, &snapshot.posts[..count])
+                };
+
+            if snapshot.posts.len() > RECENT_POSTS_LIMIT {
+                if !self.bulletin_show_all {
+                    let hidden_count = snapshot.posts.len() - RECENT_POSTS_LIMIT;
+                    feed = feed.child(
+                        self.button(
+                            "bulletin-show-earlier",
+                            format!("Show older messages ({} earlier)", hidden_count),
+                            ButtonVariant::Toggle,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bulletin_show_all = true;
+                            this.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
+                            cx.notify();
+                        })),
+                    );
+                } else {
+                    if skip_count > 0 {
+                        feed = feed.child(
+                            self.button(
+                                "bulletin-show-earlier",
+                                format!("Show older messages ({} earlier)", skip_count),
+                                ButtonVariant::Toggle,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.bulletin_expanded_limit += EXPANDED_POSTS_LIMIT;
+                                cx.notify();
+                            })),
+                        );
+                    }
+                    feed = feed.child(
+                        self.button(
+                            "bulletin-collapse-earlier",
+                            "Show recent messages only",
+                            ButtonVariant::Toggle,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bulletin_show_all = false;
+                            this.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
+                            cx.notify();
+                        })),
+                    );
+                }
+            }
+
+            for (i, post) in visible_posts.iter().enumerate() {
+                let idx = skip_count + i;
+                let post_id = post.id.clone();
+                let mut card = self
+                    .card()
+                    .id(SharedString::from(format!("bulletin-post-{idx}")))
+                    .debug_selector(move || format!("bulletin-post-{idx}"))
+                    .gap_1()
+                    .p_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(12.))
+                                    .truncate()
+                                    .child(post.author.clone()),
+                            )
+                            .child({
+                                let reply_post_id = post.id.clone();
+                                self.button(
+                                    SharedString::from(format!("bulletin-reply-{idx}")),
+                                    fl!("team-action-reply"),
+                                    ButtonVariant::Primary,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.reply_to = Some(reply_post_id.clone());
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                    );
+                if let Some(parent) = post.reply_to_author.as_ref() {
+                    card = card.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(theme.muted))
+                            .child(fl!("team-reply-to", author = parent.as_ref())),
+                    );
+                }
+                let is_long = post.body.lines().count() > 3 || post.body.chars().count() > 180;
+                let is_expanded = self.expanded_bulletin_ids.contains(&post_id);
+                if is_long && !is_expanded {
+                    let preview: String = post.body.lines().take(3).collect::<Vec<_>>().join("\n");
+                    let preview = if preview.chars().count() > 180 {
+                        format!("{}...", preview.chars().take(180).collect::<String>())
+                    } else {
+                        format!("{preview}...")
+                    };
+                    let toggle_id = post_id.clone();
+                    card = card.child(div().text_size(px(13.)).child(preview));
+                    card = card.child(
+                        self.text_button(
+                            SharedString::from(format!("bulletin-expand-{idx}")),
+                            "Show more",
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.expanded_bulletin_ids.insert(toggle_id.clone());
+                            cx.notify();
+                        })),
+                    );
+                } else if is_long && is_expanded {
+                    let toggle_id = post_id.clone();
+                    card = card.child(div().text_size(px(13.)).child(post.body.clone()));
+                    card = card.child(
+                        self.text_button(
+                            SharedString::from(format!("bulletin-collapse-{idx}")),
+                            "Show less",
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.expanded_bulletin_ids.remove(&toggle_id);
+                            cx.notify();
+                        })),
+                    );
+                } else {
+                    card = card.child(div().text_size(px(13.)).child(post.body.clone()));
+                }
+
+                if !post.deliveries.is_empty() {
+                    let mut pills = div().flex().flex_wrap().gap_1().pt_1();
+                    for (_, recipient, state) in &post.deliveries {
+                        let status = match state {
+                            DeliveryState::Pending => fl!("team-delivery-pending"),
+                            DeliveryState::Acknowledged => fl!("team-delivery-acknowledged"),
+                        };
+                        pills = pills.child(self.chip(fl!(
+                            "team-delivery-recipient-status",
+                            recipient = recipient.as_ref(),
+                            status = status
+                        )));
+                    }
+                    card = card.child(pills);
+                } else if post.body.contains('@') {
+                    card = card.child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(theme.muted))
+                            .child(fl!("team-delivery-unavailable")),
+                    );
+                }
+                feed = feed.child(card);
+            }
+
+            if self.bulletin_following {
+                let scroll_for_canvas = self.bulletin_scroll.clone();
+                feed = feed.child(
+                    canvas(
+                        move |_, window, _| {
+                            let max_y = scroll_for_canvas.max_offset().y;
+                            if max_y > px(0.) {
+                                let target = -max_y;
+                                let current = scroll_for_canvas.offset().y;
+                                let diff = target - current;
+                                if diff < px(-1.) {
+                                    if cfg!(test) {
+                                        scroll_for_canvas.set_offset(point(px(0.), target));
+                                    } else {
+                                        let remaining = f32::from(diff);
+                                        let step = (remaining * 0.35).min(-2.0);
+                                        let next =
+                                            (f32::from(current) + step).max(f32::from(target));
+                                        scroll_for_canvas.set_offset(point(px(0.), px(next)));
+                                        if next > f32::from(target) {
+                                            window.request_animation_frame();
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_0(),
+                );
+            } else {
+                feed = feed.child(
+                    self.button(
+                        "bulletin-jump-to-latest",
+                        "Jump to latest ↓",
+                        ButtonVariant::Primary,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.bulletin_following = true;
+                        this.bulletin_scroll
+                            .set_offset(point(px(0.), -this.bulletin_scroll.max_offset().y));
+                        cx.notify();
+                    })),
+                );
+            }
         }
-        cx.notify();
+
+        let mut column = div()
+            .id("team-bulletin-sidebar")
+            .debug_selector(|| "team-bulletin-sidebar".into())
+            .w(px(BULLETIN_WIDTH))
+            .flex_none()
+            .h_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .bg(fill.panel(theme.sidebar_background()))
+            .border_s(px(1.))
+            .border_color(rgb(theme.active))
+            .text_color(rgb(theme.foreground))
+            .child(header)
+            .child(feed);
+
+        if let Some((_, author_label)) = snapshot.post_author.as_ref() {
+            let mut chips = div().flex().flex_wrap().gap_1();
+            for (chip_idx, token) in [fl!("team-mention-team"), fl!("team-mention-supervisor")]
+                .into_iter()
+                .chain(snapshot.members.iter().map(|m| format!("@{}", m.name)))
+                .enumerate()
+            {
+                let token_click = token.clone();
+                chips = chips.child(
+                    self.chip_button(
+                        SharedString::from(format!("bulletin-chip-{chip_idx}")),
+                        token,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let token_click = token_click.clone();
+                        this.post_body.update(cx, |input, cx| {
+                            let current = input.text().to_owned();
+                            let next = if current.trim().is_empty() {
+                                format!("{token_click} ")
+                            } else {
+                                format!("{current} {token_click} ")
+                            };
+                            input.set_text_at(&next, next.len(), cx);
+                        });
+                    })),
+                );
+            }
+
+            let mut composer = div()
+                .flex_none()
+                .p_3()
+                .border_t_1()
+                .border_color(rgb(theme.active))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(chips);
+
+            if let Some(reply_id) = reply_to.as_ref() {
+                composer = composer.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .text_size(px(11.))
+                        .text_color(rgb(theme.muted))
+                        .child(format!("Replying to {reply_id}"))
+                        .child(
+                            self.button(
+                                "bulletin-cancel-reply",
+                                fl!("team-action-cancel"),
+                                ButtonVariant::Primary,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reply_to = None;
+                                cx.notify();
+                            })),
+                        ),
+                );
+            }
+
+            composer = composer
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(theme.muted))
+                        .child(fl!("team-posting-as", author = author_label.as_ref())),
+                )
+                .child(
+                    div()
+                        .id("bulletin-composer-input")
+                        .debug_selector(|| "bulletin-composer-input".into())
+                        .w_full()
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if event.keystroke.key.as_str() == "enter" {
+                                cx.stop_propagation();
+                                if !event.keystroke.modifiers.shift {
+                                    this.submit_bulletin_post(cx);
+                                }
+                            }
+                        }))
+                        .child(post_body),
+                )
+                .child(
+                    self.button(
+                        "team-post-submit",
+                        if reply_to.is_some() {
+                            fl!("team-action-send-reply")
+                        } else {
+                            fl!("team-action-post")
+                        },
+                        ButtonVariant::Primary,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.submit_bulletin_post(cx))),
+                );
+            column = column.child(composer);
+        }
+        column
     }
 
+    fn submit_bulletin_post(&mut self, cx: &mut Context<Self>) {
+        let body = self.post_body.read(cx).text().trim().to_owned();
+        if body.is_empty() {
+            return;
+        }
+        let Some(team_id) = self.snapshot.team_id.clone() else {
+            return;
+        };
+        let Some((author, _)) = self.snapshot.post_author.as_ref() else {
+            return;
+        };
+        let author = author.clone();
+        let action = match self.reply_to.take() {
+            Some(reply_to) => TeamAction::Reply {
+                team_id,
+                author,
+                reply_to,
+                body,
+            },
+            None => TeamAction::Post {
+                team_id,
+                author,
+                body,
+            },
+        };
+        self.post_body.update(cx, |input, cx| input.clear(cx));
+        cx.emit(action);
+    }
+}
+
+impl HerdrWindow {
     /// Renders the right-hand Team Bulletin sidebar beside `content` when the
     /// Team sidebar is active and a team is selected.
     pub(crate) fn with_team_bulletin_panel(
@@ -53,593 +493,8 @@ impl HerdrWindow {
     }
 
     pub(crate) fn render_team_bulletin_sidebar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = &self.theme;
-        let view = self.team_view.read(cx);
-        let snapshot = &view.snapshot;
-        let team_id = snapshot.team_id.clone().unwrap_or_default();
-        let post_body = view.post_body.clone();
-        let reply_to = view.reply_to.clone();
-        let post_author = snapshot.post_author.clone();
-        let posts = snapshot.posts.clone();
-        let members = snapshot.members.clone();
-        let bulletin_scroll = view.bulletin_scroll.clone();
-        let is_following = view.bulletin_following;
-        let show_all = view.bulletin_show_all;
-
-        let pending_count: usize = posts
-            .iter()
-            .flat_map(|p| p.deliveries.iter())
-            .filter(|(_, _, state)| *state == DeliveryState::Pending)
-            .count();
-
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(rgb(theme.active))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(13.))
-                            .child(fl!("team-bulletin").to_uppercase()),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py(px(1.))
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.surface))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .child(fl!(
-                                "team-bulletin-summary",
-                                posts = posts.len(),
-                                unacknowledged = pending_count
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .id("team-bulletin-hide")
-                    .px_2()
-                    .py(px(2.))
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.active))
-                    .text_size(px(11.))
-                    .cursor_pointer()
-                    .role(Role::Button)
-                    .child(fl!("team-action-hide"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.push_team_action(TeamAction::ToggleBulletinSidebar, cx);
-                    })),
-            );
-
-        let mut feed = div()
-            .id("team-bulletin-feed")
-            .track_scroll(&bulletin_scroll)
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                let dy = match event.delta {
-                    ScrollDelta::Lines(delta) => delta.y,
-                    ScrollDelta::Pixels(delta) => f32::from(delta.y),
-                };
-                if dy > 0. {
-                    this.team_view.update(cx, |view, cx| {
-                        if view.bulletin_following {
-                            view.bulletin_following = false;
-                            cx.notify();
-                        }
-                    });
-                }
-            }));
-
-        if posts.is_empty() {
-            feed = feed.child(
-                div()
-                    .p_3()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.surface))
-                    .text_size(px(12.))
-                    .text_color(rgb(theme.muted))
-                    .child(fl!("team-posts-empty")),
-            );
-        } else {
-            let expanded_limit = self
-                .team_view
-                .read(cx)
-                .bulletin_expanded_limit
-                .max(EXPANDED_POSTS_LIMIT);
-            let (skip_count, visible_posts) = if !show_all && posts.len() > RECENT_POSTS_LIMIT {
-                let skip = posts.len() - RECENT_POSTS_LIMIT;
-                (skip, &posts[skip..])
-            } else if show_all {
-                let limit = expanded_limit.min(MAX_VISIBLE_POSTS);
-                let skip = posts.len().saturating_sub(limit);
-                (skip, &posts[skip..])
-            } else {
-                let count = posts.len().min(MAX_VISIBLE_POSTS);
-                (0, &posts[..count])
-            };
-
-            if posts.len() > RECENT_POSTS_LIMIT {
-                if !show_all {
-                    let hidden_count = posts.len() - RECENT_POSTS_LIMIT;
-                    feed = feed.child(
-                        div()
-                            .id("bulletin-show-earlier")
-                            .debug_selector(|| "bulletin-show-earlier".into())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap_2()
-                            .py_1()
-                            .px_2()
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.surface))
-                            .border_1()
-                            .border_color(rgb(theme.active))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .cursor_pointer()
-                            .role(Role::Button)
-                            .child(format!("Show older messages ({} earlier)", hidden_count))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.team_view.update(cx, |view, cx| {
-                                    view.bulletin_show_all = true;
-                                    view.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
-                                    cx.notify();
-                                });
-                            })),
-                    );
-                } else {
-                    if skip_count > 0 {
-                        feed = feed.child(
-                            div()
-                                .id("bulletin-show-earlier")
-                                .debug_selector(|| "bulletin-show-earlier".into())
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .py_1()
-                                .px_2()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.surface))
-                                .border_1()
-                                .border_color(rgb(theme.active))
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(format!("Show older messages ({} earlier)", skip_count))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.team_view.update(cx, |view, cx| {
-                                        view.bulletin_expanded_limit += EXPANDED_POSTS_LIMIT;
-                                        cx.notify();
-                                    });
-                                })),
-                        );
-                    }
-                    feed = feed.child(
-                        div()
-                            .id("bulletin-collapse-earlier")
-                            .debug_selector(|| "bulletin-collapse-earlier".into())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap_2()
-                            .py_1()
-                            .px_2()
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.surface))
-                            .border_1()
-                            .border_color(rgb(theme.active))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .cursor_pointer()
-                            .role(Role::Button)
-                            .child("Show recent messages only")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.team_view.update(cx, |view, cx| {
-                                    view.bulletin_show_all = false;
-                                    view.bulletin_expanded_limit = EXPANDED_POSTS_LIMIT;
-                                    cx.notify();
-                                });
-                            })),
-                    );
-                }
-            }
-
-            for (i, post) in visible_posts.iter().enumerate() {
-                let idx = skip_count + i;
-                let post_id = post.id.clone();
-                let mut card = div()
-                    .id(SharedString::from(format!("bulletin-post-{idx}")))
-                    .debug_selector(move || format!("bulletin-post-{idx}"))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.surface))
-                    .border_1()
-                    .border_color(rgb(theme.active))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_size(px(12.))
-                                    .child(post.author.clone()),
-                            )
-                            .child({
-                                let reply_post_id = post.id.clone();
-                                div()
-                                    .id(SharedString::from(format!("bulletin-reply-{idx}")))
-                                    .px_2()
-                                    .py(px(1.))
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(11.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-reply"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let post_id = reply_post_id.clone();
-                                        this.team_view.update(cx, |view, cx| {
-                                            view.reply_to = Some(post_id);
-                                            cx.notify();
-                                        });
-                                    }))
-                            }),
-                    );
-                if let Some(parent) = post.reply_to_author.as_ref() {
-                    card = card.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .child(fl!("team-reply-to", author = parent.as_ref())),
-                    );
-                }
-                let is_long = post.body.lines().count() > 3 || post.body.chars().count() > 180;
-                let is_expanded = self
-                    .team_view
-                    .read(cx)
-                    .expanded_bulletin_ids
-                    .contains(&post_id);
-                if is_long && !is_expanded {
-                    let preview: String = post.body.lines().take(3).collect::<Vec<_>>().join("\n");
-                    let preview = if preview.chars().count() > 180 {
-                        format!("{}...", preview.chars().take(180).collect::<String>())
-                    } else {
-                        format!("{preview}...")
-                    };
-                    let toggle_id = post_id.clone();
-                    card = card.child(div().text_size(px(13.)).child(preview));
-                    card = card.child(
-                        div()
-                            .id(SharedString::from(format!("bulletin-expand-{idx}")))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .cursor_pointer()
-                            .role(Role::Button)
-                            .child("Show more")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let id = toggle_id.clone();
-                                this.team_view.update(cx, |view, cx| {
-                                    view.expanded_bulletin_ids.insert(id);
-                                    cx.notify();
-                                });
-                            })),
-                    );
-                } else if is_long && is_expanded {
-                    let toggle_id = post_id.clone();
-                    card = card.child(div().text_size(px(13.)).child(post.body.clone()));
-                    card = card.child(
-                        div()
-                            .id(SharedString::from(format!("bulletin-collapse-{idx}")))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .cursor_pointer()
-                            .role(Role::Button)
-                            .child("Show less")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let id = toggle_id.clone();
-                                this.team_view.update(cx, |view, cx| {
-                                    view.expanded_bulletin_ids.remove(&id);
-                                    cx.notify();
-                                });
-                            })),
-                    );
-                } else {
-                    card = card.child(div().text_size(px(13.)).child(post.body.clone()));
-                }
-
-                if !post.deliveries.is_empty() {
-                    let mut pills = div().flex().flex_wrap().gap_1().pt_1();
-                    for (_, recipient, state) in &post.deliveries {
-                        let status = match state {
-                            DeliveryState::Pending => fl!("team-delivery-pending"),
-                            DeliveryState::Acknowledged => fl!("team-delivery-acknowledged"),
-                        };
-                        pills = pills.child(
-                            div()
-                                .px_2()
-                                .py(px(1.))
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.background))
-                                .text_size(px(10.))
-                                .text_color(rgb(theme.muted))
-                                .child(fl!(
-                                    "team-delivery-recipient-status",
-                                    recipient = recipient.as_ref(),
-                                    status = status
-                                )),
-                        );
-                    }
-                    card = card.child(pills);
-                } else if post.body.contains('@') {
-                    card = card.child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(theme.muted))
-                            .child(fl!("team-delivery-unavailable")),
-                    );
-                }
-                feed = feed.child(card);
-            }
-
-            if is_following {
-                let scroll_for_canvas = bulletin_scroll.clone();
-                feed = feed.child(
-                    canvas(
-                        move |_, window, _| {
-                            let max_y = scroll_for_canvas.max_offset().y;
-                            if max_y > px(0.) {
-                                let target = -max_y;
-                                let current = scroll_for_canvas.offset().y;
-                                let diff = target - current;
-                                if diff < px(-1.) {
-                                    if cfg!(test) {
-                                        scroll_for_canvas.set_offset(point(px(0.), target));
-                                    } else {
-                                        let remaining = f32::from(diff);
-                                        let step = (remaining * 0.35).min(-2.0);
-                                        let next =
-                                            (f32::from(current) + step).max(f32::from(target));
-                                        scroll_for_canvas.set_offset(point(px(0.), px(next)));
-                                        if next > f32::from(target) {
-                                            window.request_animation_frame();
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_0(),
-                );
-            } else {
-                feed = feed.child(
-                    div()
-                        .id("bulletin-jump-to-latest")
-                        .debug_selector(|| "bulletin-jump-to-latest".into())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap_1()
-                        .py_1()
-                        .px_3()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .border_1()
-                        .border_color(rgb(theme.active))
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.foreground))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child("Jump to latest ↓")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.team_view.update(cx, |view, cx| {
-                                view.bulletin_following = true;
-                                view.bulletin_scroll.set_offset(point(
-                                    px(0.),
-                                    -view.bulletin_scroll.max_offset().y,
-                                ));
-                                cx.notify();
-                            });
-                        })),
-                );
-            }
-        }
-
-        let mut column = div()
-            .id("team-bulletin-sidebar")
-            .debug_selector(|| "team-bulletin-sidebar".into())
-            .w(px(BULLETIN_WIDTH))
-            .flex_none()
-            .h_full()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .bg(self.fill().panel(theme.sidebar_background()))
-            .border_s(px(1.))
-            .border_color(rgb(theme.active))
-            .text_color(rgb(theme.foreground))
-            .child(header)
-            .child(feed);
-
-        if let Some((author, author_label)) = post_author {
-            let mut chips = div().flex().flex_wrap().gap_1();
-            for (chip_idx, token) in [fl!("team-mention-team"), fl!("team-mention-supervisor")]
-                .into_iter()
-                .chain(members.iter().map(|m| format!("@{}", m.name)))
-                .enumerate()
-            {
-                let token_click = token.clone();
-                let post_body_chip = post_body.clone();
-                chips = chips.child(
-                    div()
-                        .id(SharedString::from(format!("bulletin-chip-{chip_idx}")))
-                        .px_2()
-                        .py(px(1.))
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.surface))
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(token)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            let token_click = token_click.clone();
-                            post_body_chip.update(cx, |input, cx| {
-                                let current = input.text().to_owned();
-                                let next = if current.trim().is_empty() {
-                                    format!("{token_click} ")
-                                } else {
-                                    format!("{current} {token_click} ")
-                                };
-                                input.set_text_at(&next, next.len(), cx);
-                            });
-                        })),
-                );
-            }
-
-            let mut composer = div()
-                .flex_none()
-                .p_3()
-                .border_t_1()
-                .border_color(rgb(theme.active))
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(chips);
-
-            if let Some(reply_id) = reply_to.as_ref() {
-                composer = composer.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
-                        .child(format!("Replying to {reply_id}"))
-                        .child(
-                            div()
-                                .id("bulletin-cancel-reply")
-                                .px_2()
-                                .py(px(1.))
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.active))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(fl!("team-action-cancel"))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.team_view.update(cx, |view, cx| {
-                                        view.reply_to = None;
-                                        cx.notify();
-                                    });
-                                })),
-                        ),
-                );
-            }
-
-            let post_body_submit = post_body.clone();
-            let submit_action = {
-                let team_id = team_id.clone();
-                let author = author.clone();
-                let post_body = post_body_submit.clone();
-                move |this: &mut HerdrWindow, cx: &mut Context<HerdrWindow>| {
-                    let body = post_body.read(cx).text().trim().to_owned();
-                    if body.is_empty() {
-                        return;
-                    }
-                    let current_reply = this.team_view.read(cx).reply_to.clone();
-                    let action = match current_reply {
-                        Some(reply_to) => TeamAction::Reply {
-                            team_id: team_id.clone(),
-                            author: author.clone(),
-                            reply_to,
-                            body,
-                        },
-                        None => TeamAction::Post {
-                            team_id: team_id.clone(),
-                            author: author.clone(),
-                            body,
-                        },
-                    };
-                    this.team_view.update(cx, |view, cx| {
-                        view.reply_to = None;
-                        view.post_body.update(cx, |input, cx| input.clear(cx));
-                    });
-                    this.push_team_action(action, cx);
-                }
-            };
-
-            let submit_for_enter = submit_action.clone();
-            let input_container = div()
-                .id("bulletin-composer-input")
-                .debug_selector(|| "bulletin-composer-input".into())
-                .w_full()
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if event.keystroke.key.as_str() == "enter" {
-                        cx.stop_propagation();
-                        if !event.keystroke.modifiers.shift {
-                            submit_for_enter(this, cx);
-                        }
-                    }
-                }))
-                .child(post_body);
-
-            composer = composer
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
-                        .child(fl!("team-posting-as", author = author_label.as_ref())),
-                )
-                .child(input_container)
-                .child(
-                    div()
-                        .id("team-post-submit")
-                        .debug_selector(|| "team-post-submit".into())
-                        .px_3()
-                        .py_1()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(if reply_to.is_some() {
-                            fl!("team-action-send-reply")
-                        } else {
-                            fl!("team-action-post")
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            submit_action(this, cx);
-                        })),
-                );
-            column = column.child(composer);
-        }
-        column
+        let fill = self.fill();
+        self.team_view
+            .update(cx, |view, cx| view.render_bulletin_sidebar(fill, cx))
     }
 }

@@ -1,6 +1,6 @@
 use super::{
-    MAX_VISIBLE_TASKS, RECENT_ACTIVE_TASKS_LIMIT, RECENT_COMPLETED_TASKS_LIMIT, TeamAction,
-    TeamView,
+    ButtonVariant, MAX_VISIBLE_TASKS, RECENT_ACTIVE_TASKS_LIMIT, RECENT_COMPLETED_TASKS_LIMIT,
+    TeamAction, TeamView,
 };
 use crate::i18n::fl;
 use gpui::{prelude::*, *};
@@ -16,6 +16,12 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// Whether a task brief or result is long enough to fold behind a preview.
+/// Counted in characters, so multibyte text folds at the same visual length.
+fn is_long_text(text: &str) -> bool {
+    text.chars().count() > 120 || text.lines().count() > 2
+}
+
 impl TeamView {
     pub(super) fn render_goal(&self, team_id: &str, cx: &mut Context<Self>) -> Div {
         let theme = &self.theme;
@@ -29,16 +35,7 @@ impl TeamView {
             .map(|g| g.to_string())
             .unwrap_or_default();
 
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .rounded(px(crate::config::corners::CONTROL))
-            .bg(rgb(theme.surface))
-            .border_1()
-            .border_color(rgb(theme.active));
+        let mut card = self.card().gap_2().px_3().py_2();
 
         let mut header = div().flex().items_center().justify_between().gap_2().child(
             div()
@@ -81,45 +78,35 @@ impl TeamView {
                 .gap_2()
                 .child(div().flex_1().min_w(px(160.)).child(self.team_goal.clone()))
                 .child(
-                    div()
-                        .id("team-goal-save")
-                        .px_3()
-                        .py_1()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.active))
-                        .text_size(px(12.))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(fl!("team-action-save-goal"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let goal = this.team_goal.read(cx).text().trim().to_owned();
-                            if goal.is_empty() {
-                                return;
-                            }
-                            this.editing_goal = false;
-                            this.team_goal.update(cx, |input, cx| input.clear(cx));
-                            cx.emit(TeamAction::SetGoal {
-                                team_id: team_id.clone(),
-                                goal,
-                            });
-                        })),
+                    self.button(
+                        "team-goal-save",
+                        fl!("team-action-save-goal"),
+                        ButtonVariant::Primary,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let goal = this.team_goal.read(cx).text().trim().to_owned();
+                        if goal.is_empty() {
+                            return;
+                        }
+                        this.editing_goal = false;
+                        this.team_goal.update(cx, |input, cx| input.clear(cx));
+                        cx.emit(TeamAction::SetGoal {
+                            team_id: team_id.clone(),
+                            goal,
+                        });
+                    })),
                 );
             if self.editing_goal {
                 controls = controls.child(
-                    div()
-                        .id("team-goal-cancel")
-                        .px_2()
-                        .py_1()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.background))
-                        .text_size(px(12.))
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(fl!("team-action-cancel"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.editing_goal = false;
-                            cx.notify();
-                        })),
+                    self.button(
+                        "team-goal-cancel",
+                        fl!("team-action-cancel"),
+                        ButtonVariant::Ghost,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.editing_goal = false;
+                        cx.notify();
+                    })),
                 );
             }
             card = card.child(controls);
@@ -139,91 +126,65 @@ impl TeamView {
 
         let mut section = div().flex().flex_col().gap_2();
         section = section.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(px(14.))
-                        .child(format!(
-                            "{} ({}/{})",
-                            fl!("team-tasks-title"),
-                            active_count,
-                            self.snapshot.tasks.len()
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            div()
-                                .id("team-issue-toggle-form")
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.active))
-                                .text_size(px(11.))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(if self.issue_form_open {
-                                    fl!("team-action-cancel")
-                                } else {
-                                    fl!("team-action-import-issue")
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.issue_form_open = !this.issue_form_open;
-                                    cx.notify();
-                                })),
+            self.section_header(format!(
+                "{} ({}/{})",
+                fl!("team-tasks-title"),
+                active_count,
+                self.snapshot.tasks.len()
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        self.button(
+                            "team-issue-toggle-form",
+                            if self.issue_form_open {
+                                fl!("team-action-cancel")
+                            } else {
+                                fl!("team-action-import-issue")
+                            },
+                            ButtonVariant::Primary,
                         )
-                        .child(
-                            div()
-                                .id("team-task-toggle-form")
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.active))
-                                .text_size(px(11.))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(if self.task_form_open || self.editing_task_id.is_some() {
-                                    fl!("team-action-cancel")
-                                } else {
-                                    fl!("team-action-add-task")
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if this.task_form_open || this.editing_task_id.is_some() {
-                                        this.task_form_open = false;
-                                        this.editing_task_id = None;
-                                        this.task_title.update(cx, |i, cx| i.clear(cx));
-                                        this.task_brief.update(cx, |i, cx| i.clear(cx));
-                                        this.task_assignee.update(cx, |i, cx| i.clear(cx));
-                                    } else {
-                                        this.task_form_open = true;
-                                    }
-                                    cx.notify();
-                                })),
-                        ),
-                ),
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.issue_form_open = !this.issue_form_open;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        self.button(
+                            "team-task-toggle-form",
+                            if self.task_form_open || self.editing_task_id.is_some() {
+                                fl!("team-action-cancel")
+                            } else {
+                                fl!("team-action-add-task")
+                            },
+                            ButtonVariant::Primary,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.task_form_open || this.editing_task_id.is_some() {
+                                this.task_form_open = false;
+                                this.editing_task_id = None;
+                                this.task_title.update(cx, |i, cx| i.clear(cx));
+                                this.task_brief.update(cx, |i, cx| i.clear(cx));
+                                this.task_assignee.update(cx, |i, cx| i.clear(cx));
+                            } else {
+                                this.task_form_open = true;
+                            }
+                            cx.notify();
+                        })),
+                    ),
+            ),
         );
 
         if self.issue_form_open {
             let team_id_issue_task = team_id.to_owned();
             let team_id_issue_goal = team_id.to_owned();
             section = section.child(
-                div()
-                    .flex()
-                    .flex_col()
+                self.card()
                     .gap_2()
                     .p_3()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.surface))
-                    .border_1()
-                    .border_color(rgb(theme.active))
                     .child(self.issue_input.clone())
                     .child(
                         div()
@@ -232,17 +193,13 @@ impl TeamView {
                             .items_center()
                             .gap_2()
                             .child(
-                                div()
-                                    .id("team-issue-import-task")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(11.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-import-issue-task"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                self.button(
+                                    "team-issue-import-task",
+                                    fl!("team-action-import-issue-task"),
+                                    ButtonVariant::Primary,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         let issue_ref =
                                             this.issue_input.read(cx).text().trim().to_owned();
                                         if issue_ref.is_empty() {
@@ -255,20 +212,17 @@ impl TeamView {
                                             issue_ref,
                                             as_goal: false,
                                         });
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                div()
-                                    .id("team-issue-import-goal")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.background))
-                                    .text_size(px(11.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(fl!("team-action-import-issue-goal"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                self.button(
+                                    "team-issue-import-goal",
+                                    fl!("team-action-import-issue-goal"),
+                                    ButtonVariant::Ghost,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         let issue_ref =
                                             this.issue_input.read(cx).text().trim().to_owned();
                                         if issue_ref.is_empty() {
@@ -281,7 +235,8 @@ impl TeamView {
                                             issue_ref,
                                             as_goal: true,
                                         });
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             );
@@ -290,15 +245,9 @@ impl TeamView {
         if self.task_form_open || self.editing_task_id.is_some() || self.snapshot.tasks.is_empty() {
             let is_editing = self.editing_task_id.is_some();
             section = section.child(
-                div()
-                    .flex()
-                    .flex_col()
+                self.card()
                     .gap_2()
                     .p_3()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.surface))
-                    .border_1()
-                    .border_color(rgb(theme.active))
                     .child(self.task_title.clone())
                     .child(self.task_brief.clone())
                     .child(
@@ -314,21 +263,17 @@ impl TeamView {
                                     .child(self.task_assignee.clone()),
                             )
                             .child(
-                                div()
-                                    .id("team-task-create")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(crate::config::corners::CONTROL))
-                                    .bg(rgb(theme.active))
-                                    .text_size(px(12.))
-                                    .cursor_pointer()
-                                    .role(Role::Button)
-                                    .child(if is_editing {
+                                self.button(
+                                    "team-task-create",
+                                    if is_editing {
                                         fl!("team-action-save-task")
                                     } else {
                                         fl!("team-action-add-task")
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    },
+                                    ButtonVariant::Primary,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         let title =
                                             this.task_title.read(cx).text().trim().to_owned();
                                         if title.is_empty() {
@@ -359,7 +304,8 @@ impl TeamView {
                                                 assignee,
                                             });
                                         }
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             );
@@ -404,20 +350,7 @@ impl TeamView {
                     )
                 };
                 section = section.child(
-                    div()
-                        .id("team-tasks-active-toggle")
-                        .debug_selector(|| "team-tasks-active-toggle".into())
-                        .px_2()
-                        .py_1()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.surface))
-                        .border_1()
-                        .border_color(rgb(theme.active))
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(label)
+                    self.button("team-tasks-active-toggle", label, ButtonVariant::Toggle)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.active_tasks_show_all = show_all;
                             cx.notify();
@@ -433,23 +366,15 @@ impl TeamView {
                     format!("▶ Completed ({count})")
                 };
                 section = section.child(
-                    div()
-                        .id("team-tasks-completed-toggle")
-                        .px_2()
-                        .py_1()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.surface))
-                        .border_1()
-                        .border_color(rgb(theme.active))
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .cursor_pointer()
-                        .role(Role::Button)
-                        .child(toggle_label)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.completed_tasks_open = !this.completed_tasks_open;
-                            cx.notify();
-                        })),
+                    self.button(
+                        "team-tasks-completed-toggle",
+                        toggle_label,
+                        ButtonVariant::Toggle,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.completed_tasks_open = !this.completed_tasks_open;
+                        cx.notify();
+                    })),
                 );
                 if self.completed_tasks_open {
                     let visible_completed = if self.completed_tasks_show_all {
@@ -476,24 +401,17 @@ impl TeamView {
                             )
                         };
                         section = section.child(
-                            div()
-                                .id("team-tasks-completed-show-more")
-                                .debug_selector(|| "team-tasks-completed-show-more".into())
-                                .px_2()
-                                .py_1()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.surface))
-                                .border_1()
-                                .border_color(rgb(theme.active))
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(label)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.button(
+                                "team-tasks-completed-show-more",
+                                label,
+                                ButtonVariant::Toggle,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.completed_tasks_show_all = show_all;
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         );
                     }
                 }
@@ -524,17 +442,12 @@ impl TeamView {
             .map(|a| fl!("team-task-assignee", assignee = a.as_ref()))
             .unwrap_or_else(|| fl!("team-task-unassigned"));
         let task_id_sel = task_id.clone();
-        let mut card = div()
+        let mut card = self
+            .card()
             .id(SharedString::from(format!("team-task-{}", task.id)))
             .debug_selector(move || format!("team-task-{task_id_sel}"))
-            .flex()
-            .flex_col()
             .gap_1()
             .p_3()
-            .rounded(px(crate::config::corners::CONTROL))
-            .bg(rgb(theme.surface))
-            .border_1()
-            .border_color(rgb(theme.active))
             .child(
                 div()
                     .flex()
@@ -548,18 +461,10 @@ impl TeamView {
                             .min_w_0()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(13.))
+                            .truncate()
                             .child(task.title.clone()),
                     )
-                    .child(
-                        div()
-                            .px_2()
-                            .py(px(1.))
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.background))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .child(status_label),
-                    ),
+                    .child(self.chip(status_label)),
             )
             .child(
                 div()
@@ -568,7 +473,7 @@ impl TeamView {
                     .child(assignee_text),
             );
         if !task.brief.is_empty() {
-            let is_long = task.brief.len() > 120 || task.brief.lines().count() > 2;
+            let is_long = is_long_text(&task.brief);
             let tid = task_id.clone();
             if is_long && !is_expanded {
                 let preview = truncate_text(&task.brief, 120);
@@ -579,17 +484,16 @@ impl TeamView {
                         .gap_1()
                         .child(div().text_size(px(12.)).child(preview))
                         .child(
-                            div()
-                                .id(SharedString::from(format!("task-brief-more-{tid}")))
-                                .text_size(px(10.))
-                                .text_color(rgb(theme.muted))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child("More")
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.text_button(
+                                SharedString::from(format!("task-brief-more-{tid}")),
+                                "More",
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.expanded_task_ids.insert(tid.clone());
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 );
             } else if is_long && is_expanded {
@@ -600,17 +504,16 @@ impl TeamView {
                         .gap_1()
                         .child(div().text_size(px(12.)).child(task.brief.clone()))
                         .child(
-                            div()
-                                .id(SharedString::from(format!("task-brief-less-{tid}")))
-                                .text_size(px(10.))
-                                .text_color(rgb(theme.muted))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child("Less")
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.text_button(
+                                SharedString::from(format!("task-brief-less-{tid}")),
+                                "Less",
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.expanded_task_ids.remove(&tid);
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 );
             } else {
@@ -619,85 +522,57 @@ impl TeamView {
         }
         if let Some(reason) = task.blocker_reason.as_ref() {
             card = card.child(
-                div()
-                    .p_2()
-                    .rounded(px(crate::config::corners::CONTROL))
-                    .bg(rgb(theme.background))
-                    .text_size(px(11.))
-                    .text_color(rgb(theme.muted))
+                self.well()
                     .child(fl!("team-task-blocked-by", reason = reason.as_ref())),
             );
         }
         if let Some(result) = task.result.as_ref() {
-            let is_long = result.len() > 120 || result.lines().count() > 2;
+            let is_long = is_long_text(result.as_ref());
             let tid = task_id.clone();
             if is_long && !is_expanded {
                 let preview = truncate_text(result.as_ref(), 120);
                 card = card.child(
-                    div()
-                        .p_2()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.background))
+                    self.well()
                         .flex()
                         .flex_col()
                         .gap_1()
+                        .child(fl!("team-task-result", result = preview.as_str()))
                         .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .child(fl!("team-task-result", result = preview.as_str())),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("task-result-more-{tid}")))
-                                .text_size(px(10.))
-                                .text_color(rgb(theme.muted))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child("More")
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.text_button(
+                                SharedString::from(format!("task-result-more-{tid}")),
+                                "More",
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.expanded_task_ids.insert(tid.clone());
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 );
             } else if is_long && is_expanded {
                 card = card.child(
-                    div()
-                        .p_2()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.background))
+                    self.well()
                         .flex()
                         .flex_col()
                         .gap_1()
+                        .child(fl!("team-task-result", result = result.as_ref()))
                         .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(theme.muted))
-                                .child(fl!("team-task-result", result = result.as_ref())),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("task-result-less-{tid}")))
-                                .text_size(px(10.))
-                                .text_color(rgb(theme.muted))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child("Less")
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.text_button(
+                                SharedString::from(format!("task-result-less-{tid}")),
+                                "Less",
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.expanded_task_ids.remove(&tid);
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 );
             } else {
                 card = card.child(
-                    div()
-                        .p_2()
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.background))
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
+                    self.well()
                         .child(fl!("team-task-result", result = result.as_ref())),
                 );
             }
@@ -738,30 +613,25 @@ impl TeamView {
                         cx,
                     ))
                     .child(
-                        div()
-                            .id(SharedString::from(format!("team-task-edit-{}", task.id)))
-                            .px_2()
-                            .py_1()
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.active))
-                            .text_size(px(12.))
-                            .cursor_pointer()
-                            .role(Role::Button)
-                            .child(fl!("team-action-edit"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.editing_task_id = Some(edit_id.clone());
-                                this.task_form_open = true;
-                                let t = edit_title.clone();
-                                let b = edit_brief.clone();
-                                let a = edit_assignee.clone();
-                                this.task_title
-                                    .update(cx, |i, cx| i.set_text_at(&t, t.len(), cx));
-                                this.task_brief
-                                    .update(cx, |i, cx| i.set_text_at(&b, b.len(), cx));
-                                this.task_assignee
-                                    .update(cx, |i, cx| i.set_text_at(&a, a.len(), cx));
-                                cx.notify();
-                            })),
+                        self.button(
+                            SharedString::from(format!("team-task-edit-{}", task.id)),
+                            fl!("team-action-edit"),
+                            ButtonVariant::Primary,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.editing_task_id = Some(edit_id.clone());
+                            this.task_form_open = true;
+                            let t = edit_title.clone();
+                            let b = edit_brief.clone();
+                            let a = edit_assignee.clone();
+                            this.task_title
+                                .update(cx, |i, cx| i.set_text_at(&t, t.len(), cx));
+                            this.task_brief
+                                .update(cx, |i, cx| i.set_text_at(&b, b.len(), cx));
+                            this.task_assignee
+                                .update(cx, |i, cx| i.set_text_at(&a, a.len(), cx));
+                            cx.notify();
+                        })),
                     )
                     .child(self.action_button(
                         SharedString::from(format!("team-task-complete-{}", task.id)),

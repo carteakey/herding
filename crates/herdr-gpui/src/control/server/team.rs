@@ -24,7 +24,9 @@ mod identity;
 mod projection;
 
 use dispatch::notify_team_mutation;
-use identity::{PeerBindings, check_peer, current_identity, pane_agents, process_info};
+use identity::{
+    PeerBindings, agent_lineage, check_peer, current_identity, pane_agents, process_info,
+};
 pub(crate) use identity::{ProcessIdentity, prove_pane_session_at};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
 
@@ -80,7 +82,7 @@ pub(super) fn serve(
                     "The connecting process's credentials could not be read; team registration needs a Unix socket",
                 );
             }
-            let agent = view
+            let discovered = view
                 .chats
                 .existing
                 .bindings()
@@ -90,6 +92,16 @@ pub(super) fn serve(
                     pid: binding.pid,
                     started_ticks: Some(binding.started_ticks),
                 });
+            // Without a discovered binding, an agent-session proof still
+            // names the agent kind, and the caller's own ancestry carries
+            // that agent: anchor it from /proc directly.
+            let agent = discovered.or_else(|| {
+                let kind = target.session.strip_prefix("agent:")?.split(':').next()?;
+                (!kind.is_empty()).then_some(()).and_then(|()| {
+                    let pid = peer.as_ref()?.pid?;
+                    agent_lineage(pid, kind)
+                })
+            });
             peers.insert(target.clone(), agent);
         } else if let Err(response) =
             check_peer(peers, &target, peer, peer_auth, local_uid(), &process_info)

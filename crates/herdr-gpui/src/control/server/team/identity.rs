@@ -296,7 +296,7 @@ pub(crate) fn check_peer(
 fn process_refused() -> Response {
     Response::error(
         ErrorCode::Unsupported,
-        "This pane's member is registered to another process tree; run the team register command from the agent's own pane",
+        "This caller does not descend from the pane's registered agent process; run the team register command from the agent's own pane",
     )
 }
 
@@ -318,5 +318,52 @@ pub(crate) fn process_info(pid: u32) -> Option<(u32, u64)> {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn process_info(pid: u32) -> Option<(u32, u64)> {
     let _ = pid;
+    None
+}
+
+/// `/proc/PID/cmdline`, arguments joined into one lowercased line.
+#[cfg(target_os = "linux")]
+fn proc_cmdline(pid: u32) -> Option<String> {
+    let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let line = String::from_utf8_lossy(&bytes).replace('\0', " ");
+    (!line.trim().is_empty()).then(|| line.to_lowercase())
+}
+
+/// How far an ancestry walk follows parents before giving up; deep enough
+/// for any agent nesting, shallow enough to fail fast.
+const LINEAGE_CAP: usize = 16;
+
+/// Anchors the agent process for a registering CLI on Linux: walks the
+/// caller's ancestry and returns the first ancestor whose command line
+/// carries the agent `kind`. Shells in between carry their own command
+/// line, not the agent's name, so the first match is the agent; the start
+/// time recorded alongside excludes a reused pid. This is the fallback when
+/// the UI's discovered process bindings name no process for the pane.
+#[cfg(target_os = "linux")]
+pub(crate) fn agent_lineage(pid: u32, kind: &str) -> Option<ProcessIdentity> {
+    let kind = kind.to_lowercase();
+    let mut current = pid;
+    for _ in 0..LINEAGE_CAP {
+        if let Some(line) = proc_cmdline(current)
+            && line.contains(&kind)
+            && let Some((_, started)) = process_info(current)
+        {
+            return Some(ProcessIdentity {
+                pid: current,
+                started_ticks: Some(started),
+            });
+        }
+        let (parent, _) = process_info(current)?;
+        if parent <= 1 {
+            return None;
+        }
+        current = parent;
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn agent_lineage(pid: u32, kind: &str) -> Option<ProcessIdentity> {
+    let _ = (pid, kind);
     None
 }

@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Team calls from your own user are bound to the pane's agent process
   (Unix peer credentials classify the caller; a `/proc` parent walk
   accepts the registered process or its descendants, so fresh CLI
-  invocations pass and bystanders refuse); the control tunnel's callers
+  invocations pass and bystanders refuse; the anchor prefers the
+  discovered process binding and falls back to the caller's agent-kind
+  lineage); the control tunnel's callers
   are recognized by their sshd credential and proved by snapshot as
   before (`docs/control-tunnel.md`).
 - Task assignment wakes the assignee's own session with the task card:

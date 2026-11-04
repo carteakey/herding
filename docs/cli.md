@@ -175,8 +175,11 @@ The kernel reports the connecting process's credentials (Linux through
 `SO_PEERCRED`, which carries the PID; macOS through `getpeereid`, which
 carries the user and group but no PID). Registering a member records the
 pane's agent process - the long-lived process that spawns the team CLI
-calls, which the UI's discovered process bindings name - not the transient
-CLI process, because every CLI invocation is a fresh process. A later call
+calls - not the transient CLI process, because every CLI invocation is a
+fresh process. The anchor comes from the UI's discovered process bindings
+when one names the pane, otherwise from the registering caller's own
+ancestry: on Linux the first ancestor whose command line carries the agent
+kind, start time included. A later call
 from your own user passes when the connecting process is the registered
 agent process or one of its descendants (a bounded `/proc` parent walk,
 with the kernel's start time for the recorded pid compared so a recycled

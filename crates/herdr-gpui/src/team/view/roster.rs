@@ -1,4 +1,4 @@
-use super::{MAX_VISIBLE_CANDIDATES, MAX_VISIBLE_MEMBERS, TeamAction, TeamView};
+use super::{ButtonVariant, MAX_VISIBLE_CANDIDATES, MAX_VISIBLE_MEMBERS, TeamAction, TeamView};
 use crate::{i18n::fl, team::model::DeliveryState};
 use gpui::{prelude::*, *};
 use herdr_orchestrator::team_store::TaskStatus;
@@ -6,22 +6,26 @@ use herdr_orchestrator::team_store::TaskStatus;
 impl TeamView {
     pub(super) fn render_status_banner(&self) -> Div {
         let theme = &self.theme;
-        let working = self
-            .snapshot
-            .members
-            .iter()
-            .filter(|m| m.status.as_ref() == fl!("team-status-working"))
-            .count();
-        let idle = self
-            .snapshot
-            .members
-            .iter()
-            .filter(|m| {
-                m.status.as_ref() == fl!("team-status-idle")
-                    || m.status.as_ref() == fl!("team-status-live")
-                    || m.status.as_ref() == fl!("team-status-done")
-            })
-            .count();
+        // The localized labels are bound once: comparing each member's status
+        // against a fresh `fl!` lookup rebuilt them for every member, every
+        // frame. One pass also replaces the three separate filter scans.
+        let working_label = fl!("team-status-working");
+        let idle_label = fl!("team-status-idle");
+        let live_label = fl!("team-status-live");
+        let done_label = fl!("team-status-done");
+        let mut working = 0usize;
+        let mut idle = 0usize;
+        for member in &self.snapshot.members {
+            let status = member.status.as_ref();
+            if status == working_label.as_str() {
+                working += 1;
+            } else if status == idle_label.as_str()
+                || status == live_label.as_str()
+                || status == done_label.as_str()
+            {
+                idle += 1;
+            }
+        }
         let active_tasks = self
             .snapshot
             .tasks
@@ -61,15 +65,9 @@ impl TeamView {
             summary_base
         };
 
-        div()
-            .flex()
-            .flex_col()
+        self.card()
             .gap_1()
             .p_2()
-            .rounded(px(crate::config::corners::CONTROL))
-            .bg(rgb(theme.surface))
-            .border_1()
-            .border_color(rgb(theme.active))
             .child(
                 div()
                     .text_size(px(12.))
@@ -88,40 +86,30 @@ impl TeamView {
         let theme = &self.theme;
         let mut section = div().flex().flex_col().gap_2();
         section = section.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(px(14.))
-                        .child(format!(
-                            "{} ({})",
-                            fl!("team-roster-title"),
-                            self.snapshot.members.len()
-                        )),
+            self.section_header(format!(
+                "{} ({})",
+                fl!("team-roster-title"),
+                self.snapshot.members.len()
+            ))
+            .child(
+                self.icon_button(
+                    "team-worker-toggle-form",
+                    if self.worker_form_open {
+                        "icons/close.svg"
+                    } else {
+                        "icons/plus.svg"
+                    },
+                    if self.worker_form_open {
+                        fl!("team-action-cancel")
+                    } else {
+                        fl!("team-action-add-worker")
+                    },
                 )
-                .child(
-                    self.icon_button(
-                        "team-worker-toggle-form",
-                        if self.worker_form_open {
-                            "icons/close.svg"
-                        } else {
-                            "icons/plus.svg"
-                        },
-                        if self.worker_form_open {
-                            fl!("team-action-cancel")
-                        } else {
-                            fl!("team-action-add-worker")
-                        },
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.worker_form_open = !this.worker_form_open;
-                        cx.notify();
-                    })),
-                ),
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.worker_form_open = !this.worker_form_open;
+                    cx.notify();
+                })),
+            ),
         );
 
         if self.worker_form_open {
@@ -145,18 +133,13 @@ impl TeamView {
             .enumerate()
         {
             let is_renaming = self.editing_member_id.as_deref() == Some(member.member_id.as_str());
-            let mut card = div()
+            let mut card = self
+                .card()
                 .id(SharedString::from(format!("team-member-{index}")))
                 .debug_selector(move || format!("team-member-{index}"))
-                .flex()
-                .flex_col()
                 .gap_1()
                 .px_3()
-                .py_2()
-                .rounded(px(crate::config::corners::CONTROL))
-                .bg(rgb(theme.surface))
-                .border_1()
-                .border_color(rgb(theme.active));
+                .py_2();
 
             let info = div()
                 .flex()
@@ -169,44 +152,18 @@ impl TeamView {
                     div()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_size(px(13.))
+                        .truncate()
                         .child(member.name.clone()),
                 )
                 .when(!member.agent.is_empty(), |r| {
-                    r.child(
-                        div()
-                            .px_2()
-                            .py(px(1.))
-                            .rounded(px(crate::config::corners::CONTROL))
-                            .bg(rgb(theme.background))
-                            .text_size(px(11.))
-                            .text_color(rgb(theme.muted))
-                            .child(member.agent.clone()),
-                    )
+                    r.child(self.chip(member.agent.clone()))
                 })
-                .child(
-                    div()
-                        .px_2()
-                        .py(px(1.))
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.background))
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
-                        .child(member.role.clone()),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py(px(1.))
-                        .rounded(px(crate::config::corners::CONTROL))
-                        .bg(rgb(theme.background))
-                        .text_size(px(11.))
-                        .text_color(rgb(theme.muted))
-                        .child(if member.paused {
-                            fl!("team-status-paused").into()
-                        } else {
-                            member.status.clone()
-                        }),
-                );
+                .child(self.chip(member.role.clone()))
+                .child(self.chip(if member.paused {
+                    fl!("team-status-paused").into()
+                } else {
+                    member.status.clone()
+                }));
 
             let mut actions = div().flex().items_center().justify_end().gap_1();
             if let Some(pane) = member.pane.as_ref().filter(|pane| pane.verified()) {
@@ -315,17 +272,13 @@ impl TeamView {
                         .gap_2()
                         .child(div().flex_1().child(self.rename_input.clone()))
                         .child(
-                            div()
-                                .id(SharedString::from(format!("team-member-save-{index}")))
-                                .px_2()
-                                .py_1()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.active))
-                                .text_size(px(11.))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(fl!("team-action-save"))
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.button(
+                                SharedString::from(format!("team-member-save-{index}")),
+                                fl!("team-action-save"),
+                                ButtonVariant::Primary,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     let name = this.rename_input.read(cx).text().trim().to_owned();
                                     if name.is_empty() {
                                         return;
@@ -337,23 +290,19 @@ impl TeamView {
                                         member_id: member_id_rename.clone(),
                                         name,
                                     });
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            div()
-                                .id(SharedString::from(format!("team-member-cancel-{index}")))
-                                .px_2()
-                                .py_1()
-                                .rounded(px(crate::config::corners::CONTROL))
-                                .bg(rgb(theme.background))
-                                .text_size(px(11.))
-                                .cursor_pointer()
-                                .role(Role::Button)
-                                .child(fl!("team-action-cancel"))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.editing_member_id = None;
-                                    cx.notify();
-                                })),
+                            self.button(
+                                SharedString::from(format!("team-member-cancel-{index}")),
+                                fl!("team-action-cancel"),
+                                ButtonVariant::Ghost,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.editing_member_id = None;
+                                cx.notify();
+                            })),
                         ),
                 );
             }
@@ -363,17 +312,8 @@ impl TeamView {
     }
 
     fn render_add_worker(&self, cx: &mut Context<Self>) -> Div {
-        let theme = &self.theme;
         let name = self.worker_name.read(cx).text().to_owned();
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_2()
-            .rounded(px(crate::config::corners::CONTROL))
-            .bg(rgb(theme.surface))
-            .border_1()
-            .border_color(rgb(theme.active));
+        let mut body = self.card().gap_2().p_2();
         body = body.child(self.worker_name.clone());
         body = body.child(self.render_spawn_bar("team-worker", cx));
         let eligible = self.snapshot.pane_candidates.iter().filter(|c| {

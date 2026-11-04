@@ -486,7 +486,7 @@ fn human_completion_wakes_supervisor() {
 }
 
 #[test]
-fn open_task_still_goes_to_assignee_without_signal() {
+fn open_task_wakes_the_assignee_with_a_dedupe_signal() {
     let dispatches = prompts_for_scoped_reply(&Reply::ScopedTask {
         team: wake_team(),
         task: wake_task(TaskStatus::Open),
@@ -494,7 +494,38 @@ fn open_task_still_goes_to_assignee_without_signal() {
     });
     assert_eq!(dispatches.len(), 1);
     assert_eq!(dispatches[0].pane_id, "p_w1");
-    assert!(dispatches[0].signal.is_none());
+    assert_eq!(
+        dispatches[0].signal.as_deref(),
+        Some("assignee|task1|m_w1|10000"),
+        "the wake dedupes on one stored assignment state"
+    );
+}
+
+#[test]
+fn a_reassigned_task_wakes_once_per_assignment_state() {
+    // The same stored state redelivered - identical signal, so the wake
+    // ledger dedupes it and the assignee is never woken twice for it.
+    let first = prompts_for_scoped_reply(&Reply::ScopedTask {
+        team: wake_team(),
+        task: wake_task(TaskStatus::Open),
+        actor: worker_actor(),
+    });
+    let redelivered = prompts_for_scoped_reply(&Reply::ScopedTask {
+        team: wake_team(),
+        task: wake_task(TaskStatus::Open),
+        actor: worker_actor(),
+    });
+    assert_eq!(first[0].signal, redelivered[0].signal);
+
+    // A genuine re-assign is a new state: a new signal, one further wake.
+    let mut reassigned = wake_task(TaskStatus::Open);
+    reassigned.updated_at = at(11);
+    let again = prompts_for_scoped_reply(&Reply::ScopedTask {
+        team: wake_team(),
+        task: reassigned,
+        actor: worker_actor(),
+    });
+    assert_ne!(first[0].signal, again[0].signal);
 }
 
 #[test]

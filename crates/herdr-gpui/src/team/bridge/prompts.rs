@@ -8,6 +8,26 @@ impl HerdrWindow {
     /// Sessions this window can prove across all connected host endpoints:
     /// native ACP chats, verified CLI bindings, and active terminal agent
     /// sessions in each daemon's snapshot.
+    /// Whether the agent session in `pane_id` is dead: its state labels
+    /// carry the crash vocabulary the heartbeat inspection reports. A dead
+    /// session is never dispatched to; the work stays pending on the board.
+    pub(crate) fn team_session_dead(&self, pane_id: &str) -> bool {
+        self.endpoints.iter().enumerate().any(|(index, endpoint)| {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            let Some(snapshot) = live.snapshot.as_deref() else {
+                return false;
+            };
+            snapshot.agents.iter().any(|agent| {
+                agent.pane_id == pane_id
+                    && session_health(&agent.state_labels) == SessionHealth::Crashed
+            })
+        })
+    }
+
     pub(super) fn team_candidates(&self) -> Vec<PaneCandidate> {
         let mut candidates = Vec::new();
         for (index, endpoint) in self.endpoints.iter().enumerate() {
@@ -49,31 +69,12 @@ impl HerdrWindow {
                     format!("{host_prefix}{base_label} ({agent_kind})")
                 };
                 let status = if let Some(agent) = agent_entry {
-                    if let Some(state_text) = agent.state_labels.iter().find_map(|(k, v)| {
-                        if k == "working" || k == "idle" || k == "blocked" {
-                            let lower = v.to_lowercase();
-                            if lower.contains("429")
-                                || lower.contains("rate limit")
-                                || lower.contains("quota")
-                                || lower.contains("usage")
-                            {
-                                Some(fl!("team-status-pto"))
-                            } else if lower.contains("process exited with status")
-                                || lower.contains("connection closed")
-                            {
-                                // The same crash vocabulary the heartbeat
-                                // inspection reports, localized here.
-                                Some(fl!("team-status-crashed"))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }) {
-                        state_text.into()
-                    } else {
-                        status_label(agent.agent_status)
+                    match session_health(&agent.state_labels) {
+                        SessionHealth::Alive => status_label(agent.agent_status),
+                        SessionHealth::RateLimited => fl!("team-status-pto").into(),
+                        // The same crash vocabulary the heartbeat
+                        // inspection reports, localized here.
+                        SessionHealth::Crashed => fl!("team-status-crashed").into(),
                     }
                 } else {
                     fl!("team-status-live").into()
@@ -610,6 +611,37 @@ fn prompts_for_team_action(
         }
         _ => Vec::new(),
     }
+}
+
+/// What the agent's own state labels say about its session, classified once
+/// so the roster badge and the dispatch dead-session hatch agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SessionHealth {
+    Alive,
+    RateLimited,
+    Crashed,
+}
+
+/// Classifies an agent's state labels: rate-limit vocabulary is the PTO
+/// state, process-exit or connection-closed vocabulary is a dead session.
+pub(crate) fn session_health(state_labels: &[(String, String)]) -> SessionHealth {
+    for (key, value) in state_labels {
+        if key != "working" && key != "idle" && key != "blocked" {
+            continue;
+        }
+        let lower = value.to_lowercase();
+        if lower.contains("429")
+            || lower.contains("rate limit")
+            || lower.contains("quota")
+            || lower.contains("usage")
+        {
+            return SessionHealth::RateLimited;
+        }
+        if lower.contains("process exited with status") || lower.contains("connection closed") {
+            return SessionHealth::Crashed;
+        }
+    }
+    SessionHealth::Alive
 }
 
 /// What actually happened to a dispatched team prompt, so activity lines

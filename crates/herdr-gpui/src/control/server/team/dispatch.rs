@@ -22,6 +22,12 @@ pub(super) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
             view.team_bridge.mark_dirty();
             if view.live.status.is_connected() {
                 for dispatch in &dispatches {
+                    // The escape hatch: a member whose session heartbeat is
+                    // dead is never dispatched to; the work stays pending on
+                    // the board until a live session takes it.
+                    if view.team_session_dead(&dispatch.pane_id) {
+                        continue;
+                    }
                     if let Some(signal) = &dispatch.signal
                         && view.team_bridge.wake_seen(&dispatch.team_id, signal)
                     {
@@ -100,7 +106,7 @@ pub(super) fn prompts_for_scoped_reply(reply: &Reply) -> Vec<TeamDispatch> {
                             m.display_name, task.task_id, task.title, task.task_id, task.task_id
                         ),
                         summary: format!("Assigned task \"{}\" to {} ({pane_id})", task.title, m.display_name),
-                        signal: None,
+                        signal: Some(assignee_signal(task)),
                     })
                 })
                 .into_iter()
@@ -118,6 +124,18 @@ pub(super) fn prompts_for_scoped_reply(reply: &Reply) -> Vec<TeamDispatch> {
         }
         _ => Vec::new(),
     }
+}
+
+/// Dedupe key for an assignee wake: one stored assignment state, so a
+/// re-assign wakes once per new state while unchanged state never does,
+/// the same semantics the supervisor result wake's signal carries.
+pub(crate) fn assignee_signal(task: &Task) -> String {
+    format!(
+        "assignee|{}|{}|{}",
+        task.task_id,
+        task.assignee.as_deref().unwrap_or(""),
+        task.updated_at.timestamp_millis()
+    )
 }
 
 /// The supervisor wake prompt for a task the supervisor must react to.

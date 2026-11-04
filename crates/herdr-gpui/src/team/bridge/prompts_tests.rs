@@ -228,6 +228,72 @@ fn test_snapshot(
     .expect("test snapshot is valid")
 }
 
+/// A snapshot whose single agent carries the given state labels, so tests
+/// can drive the crash and rate-limit vocabulary.
+fn test_snapshot_with_labels(
+    boot_id: &str,
+    workspace: &str,
+    pane: &str,
+    agent: &str,
+    state_labels: &[(&str, &str)],
+) -> ClientShellSnapshot {
+    let mut snapshot = test_snapshot(boot_id, workspace, pane, Some(agent));
+    let labels = state_labels
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect::<Vec<_>>();
+    for entry in snapshot.agents.iter_mut() {
+        entry.state_labels = labels.clone();
+    }
+    snapshot
+}
+
+#[gpui::test]
+fn a_dead_session_is_never_dispatched_to(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(fixture_window);
+    cx.update(|_, cx| {
+        view.update(cx, |view, _| {
+            // The crash vocabulary the heartbeat inspection reports.
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(test_snapshot_with_labels(
+                "boot",
+                "w1X",
+                "w1X:p1",
+                "codex",
+                &[("working", "process exited with status 1")],
+            )));
+
+            assert!(
+                view.team_session_dead("w1X:p1"),
+                "a crashed session is dead and skipped"
+            );
+            assert!(
+                !view.team_session_dead("w1X:other"),
+                "a pane without an agent is not reported dead; delivery simply finds no agent"
+            );
+
+            // The rate-limit vocabulary is the PTO state, not death.
+            view.live.snapshot = Some(Arc::new(test_snapshot_with_labels(
+                "boot",
+                "w1X",
+                "w1X:p1",
+                "codex",
+                &[("working", "rate limit 429, retry later")],
+            )));
+            assert!(!view.team_session_dead("w1X:p1"));
+
+            // A healthy agent is alive.
+            view.live.snapshot = Some(Arc::new(test_snapshot(
+                "boot",
+                "w1X",
+                "w1X:p1",
+                Some("codex"),
+            )));
+            assert!(!view.team_session_dead("w1X:p1"));
+        })
+    });
+}
+
 fn add_remote_endpoint(view: &mut HerdrWindow, id: &str, label: &str, live: LiveState) {
     let mut remote = Endpoint::new(
         id.into(),

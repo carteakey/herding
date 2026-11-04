@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the member (Unix peer credentials: `SO_PEERCRED` on Linux, `getpeereid`
   on macOS); the control tunnel's callers are recognized by their sshd
   credential and proved by snapshot as before (`docs/control-tunnel.md`).
+- Task assignment wakes the assignee's own session with the task card:
+  dispatched only after the store write confirms, deduped per assignment
+  state, and skipped for a dead session, so handing out work needs no
+  supervisor bulletin.
 - **SSH Control Tunnel (`1b26ce05`)**:
   - `scripts/control-tunnel.sh`: forwards an SSH host's control socket path back to the local Herdr UI over a single `ssh -R` Unix socket forward (OpenSSH 6.7+, no socat, no TCP), so `herdr-gpui team ...` runs natively from panes on remote hosts with unmodified caller identity.
   - Preflight refuses a live remote UI, recovers stale remote sockets the way the app's own bind does, and passes ssh options through (`--ssh-arg`).

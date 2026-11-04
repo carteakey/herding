@@ -78,8 +78,9 @@ pub(super) fn peer_credentials(stream: &Connection) -> io::Result<PeerCredential
     }
     #[cfg(target_os = "macos")]
     {
-        use std::os::fd::AsRawFd;
-        let (uid, gid) = nix::unistd::getpeereid(stream.0.as_raw_fd())
+        // nix 0.31's getpeereid takes `impl AsFd`; the stream handle itself,
+        // since a raw fd does not implement it.
+        let (uid, gid) = nix::unistd::getpeereid(&stream.0)
             .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
         Ok(PeerCredentials {
             uid: uid.as_raw(),

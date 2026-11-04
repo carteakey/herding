@@ -66,7 +66,7 @@ pub(super) fn peer_credentials(stream: &Connection) -> io::Result<PeerCredential
     {
         use nix::sys::socket::getsockopt;
         let credentials = getsockopt(&stream.0, nix::sys::socket::sockopt::PeerCredentials)
-            .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            .map_err(|error| io::Error::other(error))?;
         // A pid of 0 means the kernel could not tell; both ends then match
         // on uid and gid alone.
         let pid = credentials.pid();
@@ -78,6 +78,7 @@ pub(super) fn peer_credentials(stream: &Connection) -> io::Result<PeerCredential
     }
     #[cfg(target_os = "macos")]
     {
+        use std::os::fd::AsRawFd;
         let (uid, gid) = nix::unistd::getpeereid(stream.0.as_raw_fd())
             .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
         Ok(PeerCredentials {

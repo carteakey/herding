@@ -546,6 +546,7 @@ impl Bridge {
                 self.tasks.clear();
                 self.findings.clear();
                 self.snapshot_in_flight = None;
+                self.supervisor_wakes.remove(&team_id);
                 self.warning = None;
                 self.dirty = true;
                 self.submit(
@@ -952,6 +953,9 @@ impl Bridge {
         }
     }
 }
+
+#[cfg(test)]
+mod perf_tests;
 
 #[cfg(test)]
 mod tests;

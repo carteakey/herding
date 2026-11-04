@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gpui::SharedString;
 use herdr_client::protocol::AgentStatus;
@@ -15,6 +15,28 @@ pub(crate) fn human() -> Author {
     Author::Human {
         user_id: HUMAN_ID.to_owned(),
     }
+}
+
+/// Member id → display name, built once per projection pass so author and
+/// recipient lookups do not rescan the roster per item.
+fn name_map(team: &Team) -> HashMap<String, SharedString> {
+    roster(team)
+        .map(|member| {
+            (
+                member.member_id.clone(),
+                SharedString::from(member.display_name.clone()),
+            )
+        })
+        .collect()
+}
+
+/// Resolves a member id to a display name, falling back to the raw id for
+/// members who are no longer on the roster.
+fn display_name(names: &HashMap<String, SharedString>, id: &str) -> SharedString {
+    names
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| SharedString::from(id.to_owned()))
 }
 
 pub(crate) fn roster(team: &Team) -> impl Iterator<Item = &Member> {
@@ -65,6 +87,9 @@ pub(crate) fn members(
             });
             let live = matched.is_some();
             let supervisor = member.member_id == team.supervisor.member_id;
+            // `pane` is consumed by the `pane` field below, so capture the
+            // configured target once instead of recomputing it.
+            let target_pane = pane.clone();
             TeamMember {
                 member_id: member.member_id.clone(),
                 name: member.display_name.clone().into(),
@@ -78,7 +103,7 @@ pub(crate) fn members(
                 pane: matched
                     .map(|c| c.identity.clone())
                     .or_else(|| pane.filter(|_| live)),
-                target_pane: pane_of(member),
+                target_pane,
                 status: matched
                     .map(|c| c.status.clone())
                     .unwrap_or_else(|| fl!("team-status-unavailable").into()),
@@ -96,31 +121,31 @@ pub(crate) fn view_posts(
         Vec<(String, RecipientStatus)>,
     )],
 ) -> Vec<TeamPost> {
-    let name = |id: &str| -> SharedString {
-        roster(team)
-            .find(|member| member.member_id == id)
-            .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
-            .into()
-    };
-    let roster_ids: HashSet<&str> = roster(team)
-        .map(|member| member.member_id.as_str())
-        .collect();
+    let names = name_map(team);
+    let name = |id: &str| display_name(&names, id);
     let author = |author: &Author| match author {
         Author::Human { .. } => SharedString::from(fl!("team-author-human")),
         Author::Member { member_id } => name(member_id),
     };
+    // One pass over the posts so each reply resolves its parent's author in
+    // O(1) instead of rescanning every post.
+    let authors: HashMap<&str, SharedString> = posts
+        .iter()
+        .map(|(post, _)| (post.post_id.as_str(), author(&post.author)))
+        .collect();
+    let roster_ids: HashSet<&str> = roster(team)
+        .map(|member| member.member_id.as_str())
+        .collect();
     posts
         .iter()
         .map(|(post, statuses)| TeamPost {
             id: post.post_id.clone(),
             author: author(&post.author),
             body: post.body.clone().into(),
-            reply_to_author: post.reply_to.as_ref().and_then(|id| {
-                posts
-                    .iter()
-                    .find(|(other, _)| other.post_id == *id)
-                    .map(|(other, _)| author(&other.author))
-            }),
+            reply_to_author: post
+                .reply_to
+                .as_ref()
+                .and_then(|id| authors.get(id.as_str()).cloned()),
             // A removed member keeps no delivery pill and cannot keep a post
             // counted as unacknowledged, even if their mention row predates
             // the cleanup in `remove_member`.
@@ -140,19 +165,14 @@ pub(crate) fn view_posts(
 }
 
 pub(crate) fn view_tasks(team: &Team, tasks: &[Task]) -> Vec<TeamTask> {
-    let name = |id: &str| -> SharedString {
-        roster(team)
-            .find(|member| member.member_id == id)
-            .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
-            .into()
-    };
+    let names = name_map(team);
     tasks
         .iter()
         .map(|task| TeamTask {
             id: task.task_id.clone(),
             title: task.title.clone().into(),
             brief: task.brief.clone().into(),
-            assignee: task.assignee.as_deref().map(name),
+            assignee: task.assignee.as_deref().map(|id| display_name(&names, id)),
             status: task.status,
             blocker_reason: task.blocker_reason.clone().map(Into::into),
             result: task.result.clone().map(Into::into),
@@ -164,21 +184,15 @@ pub(crate) fn view_findings(
     team: &Team,
     findings: &[herdr_orchestrator::team_store::Finding],
 ) -> Vec<TeamFinding> {
-    let name = |id: &str| -> SharedString {
-        roster(team)
-            .find(|member| member.member_id == id)
-            .map_or_else(|| id.to_owned(), |member| member.display_name.clone())
-            .into()
-    };
-    let author = |author: &Author| match author {
-        Author::Human { .. } => SharedString::from(fl!("team-author-human")),
-        Author::Member { member_id } => name(member_id),
-    };
+    let names = name_map(team);
     findings
         .iter()
         .map(|finding| TeamFinding {
             id: finding.finding_id.clone(),
-            author: author(&finding.author),
+            author: match &finding.author {
+                Author::Human { .. } => SharedString::from(fl!("team-author-human")),
+                Author::Member { member_id } => display_name(&names, member_id),
+            },
             description: finding.description.clone().into(),
             evidence: finding.evidence.clone().into(),
             confidence: finding.confidence,

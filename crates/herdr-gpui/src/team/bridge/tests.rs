@@ -437,6 +437,23 @@ fn fallback_reports_a_supervisor_without_pane_instead_of_waking() {
 }
 
 #[test]
+fn deleting_a_team_drops_its_wake_ledger() {
+    let mut bridge = Bridge::default();
+    bridge.mark_supervisor_woken("t1", ["task1|done|0"]);
+    bridge.mark_supervisor_woken("t2", ["task1|done|0"]);
+
+    bridge.act(
+        TeamAction::DeleteTeam {
+            team_id: "t1".into(),
+        },
+        &[],
+    );
+
+    assert!(!bridge.supervisor_wakes.contains_key("t1"));
+    assert!(bridge.supervisor_wakes.contains_key("t2"));
+}
+
+#[test]
 fn wake_ledger_is_bounded() {
     let mut bridge = Bridge::default();
     for i in 0..(WAKE_LEDGER_CAPACITY + 16) {

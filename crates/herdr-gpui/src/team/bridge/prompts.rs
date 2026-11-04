@@ -69,7 +69,9 @@ impl HerdrWindow {
             }
         }
         let mut focus = None;
-        let mut prompts = Vec::new();
+        // Prompts whose write the store confirmed since the last tick: an agent
+        // is told about a row only once the row exists.
+        let mut prompts = bridge.take_released_prompts();
         let mut spawn_agents = Vec::new();
         let mut split_pane = false;
         for action in actions {
@@ -96,7 +98,7 @@ impl HerdrWindow {
                         prompts_for_team_action(&action, bridge.team.as_ref(), &bridge.tasks);
                     bridge.act(action, &candidates);
                     if bridge.warning.is_none() {
-                        prompts.extend(dispatches);
+                        bridge.hold_prompts_for_action(dispatches);
                     }
                     prompts.extend(bridge.drain_unpaused_prompts());
                 }

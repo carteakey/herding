@@ -86,6 +86,11 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
   - `team status` counts tasks with `TeamStore::task_counts` (one aggregate)
     instead of materialising 100 rows and counting them in Rust, which counted
     only the oldest page.
+- **Bridge prompts wait for the write (task `bc4a896e`, finding `42fbec57`):**
+  an action's prompts are held against the operation it queued and released
+  when the worker confirms it, so an agent woken with "claim this task" or
+  "ack this post" finds the row when its first CLI call runs. A refused or
+  failed write withdraws them; window-local actions (a nudge) dispatch at once.
 - **Bridge snapshot projection caching (commit `1fef43d1`):**
   - Built a single-pass `name_map` and author map during `Bridge::snapshot`.
   - Resolved reply-to authors in O(1) via hash map instead of rescanning
@@ -110,6 +115,6 @@ queue 64 prompts, wake ledger 512 signals, `REFRESH` 2s, supervisor fallback 600
 - **Post-mutation refreshes are unthrottled:** One snapshot is triggered per
   mutation in a burst, bounded by mutation count. Revisit only if mutation
   bursts become common.
-- **UI prompt dispatch timing:** UI prompt dispatches currently send
-  optimistically alongside async save operations rather than waiting for
-  durable write confirmation from the store.
+- **UI prompt dispatch timing:** window-local actions (nudge, spawn) still
+  dispatch in the tick they are asked for, which is correct because nothing of
+  theirs reaches the store; only actions that queue an operation wait for it.

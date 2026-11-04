@@ -20,6 +20,8 @@ use std::{
 };
 
 pub(crate) mod prompts;
+mod queue;
+use queue::{HeldPrompts, PromptDispatch};
 mod views;
 pub(super) use views::*;
 
@@ -52,6 +54,12 @@ pub(crate) struct Bridge {
     service: Option<Service>,
     started: bool,
     pending: HashMap<u64, Pending>,
+    /// The first operation the action that just ran queued, if any. Cleared
+    /// when `act` starts, so held prompts can never name an older action.
+    action_request: Option<u64>,
+    /// Whether the action that just ran was refused - a full worker queue, or no
+    /// worker at all. Its prompts are withdrawn rather than dispatched.
+    action_refused: bool,
     selected: Option<String>,
     team: Option<Team>,
     goal: Option<String>,
@@ -69,6 +77,11 @@ pub(crate) struct Bridge {
     paused_teams: HashSet<String>,
     paused_members: HashSet<String>,
     queued_prompts: Vec<QueuedPrompt>,
+    /// Prompts held against the request id of the operation that produced them,
+    /// so an agent is told about a row only once the store has it.
+    awaiting_write: HeldPrompts,
+    /// Prompts whose operation the worker confirmed, ready for this tick.
+    released_prompts: Vec<PromptDispatch>,
     /// Stored results each team's supervisor has been woken about, keyed by
     /// team id. Window-local: after a restart the fallback may repeat one
     /// catch-up, which is bounded and rarely wrong to want.
@@ -88,6 +101,11 @@ pub(super) struct SupervisorWake {
 }
 
 pub(crate) const PAUSE_QUEUE_CAPACITY: usize = 64;
+
+/// How many prompts may wait for their action's write to be confirmed.
+/// Oldest-first eviction keeps a worker that never answers from turning the
+/// bridge into a prompt backlog.
+const PROMPT_HOLD_CAPACITY: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct QueuedPrompt {
@@ -137,64 +155,6 @@ impl Bridge {
         } else {
             false
         }
-    }
-
-    pub(super) fn enqueue_prompt(
-        &mut self,
-        team_id: String,
-        pane_id: String,
-        prompt: String,
-        summary: String,
-    ) {
-        if self.queued_prompts.len() >= PAUSE_QUEUE_CAPACITY {
-            self.queued_prompts.remove(0);
-        }
-        self.queued_prompts.push(QueuedPrompt {
-            team_id,
-            pane_id,
-            prompt,
-            summary,
-        });
-    }
-
-    pub(super) fn queued_count(&self) -> usize {
-        match self.current_team_id() {
-            Some(team_id) => self
-                .queued_prompts
-                .iter()
-                .filter(|p| p.team_id == team_id)
-                .count(),
-            None => self.queued_prompts.len(),
-        }
-    }
-
-    pub(super) fn drain_unpaused_prompts(&mut self) -> Vec<(String, String, String)> {
-        let Some(team) = self.team.as_ref() else {
-            return Vec::new();
-        };
-        if self.is_team_paused() {
-            return Vec::new();
-        }
-        let team_id = team.team_id.as_str();
-        let paused_panes: HashSet<String> = roster(team)
-            .filter(|m| self.paused_members.contains(&m.member_id))
-            .filter_map(|m| m.target.pane.clone())
-            .collect();
-        let mut ready = Vec::new();
-        let mut held = Vec::new();
-        for item in self.queued_prompts.drain(..) {
-            if item.team_id == team_id {
-                if paused_panes.contains(&item.pane_id) {
-                    held.push(item);
-                } else {
-                    ready.push((item.pane_id, item.prompt, item.summary));
-                }
-            } else {
-                held.push(item);
-            }
-        }
-        self.queued_prompts = held;
-        ready
     }
 
     /// Whether this stored result has already been woken for the team's
@@ -321,14 +281,19 @@ impl Bridge {
     }
 
     fn submit(&mut self, operation: Operation, pending: Pending) -> Option<u64> {
-        let service = self.service.as_mut()?;
+        let Some(service) = self.service.as_mut() else {
+            self.action_refused = true;
+            return None;
+        };
         match service.submit(operation) {
             Ok(id) => {
                 self.pending.insert(id, pending);
+                self.action_request = self.action_request.or(Some(id));
                 Some(id)
             }
             Err(error) => {
                 tracing::warn!(%error, "Team operation was not queued");
+                self.action_refused = true;
                 self.failure = Some(fl!("team-action-queue-full").into());
                 self.dirty = true;
                 None
@@ -358,12 +323,14 @@ impl Bridge {
     }
 
     fn complete(&mut self, completion: Completion) {
-        let Some(pending) = self.pending.remove(&completion.request_id) else {
+        let request_id = completion.request_id;
+        let Some(pending) = self.pending.remove(&request_id) else {
             return;
         };
         if matches!(pending, Pending::Snapshot { .. })
-            && self.snapshot_in_flight != Some(completion.request_id)
+            && self.snapshot_in_flight != Some(request_id)
         {
+            self.drop_held_prompts(request_id);
             return;
         }
         self.dirty = true;
@@ -375,14 +342,16 @@ impl Bridge {
                     crate::control::server::team_worker::Error::External(_)
                 ) =>
             {
+                self.drop_held_prompts(request_id);
                 self.warning = Some(error.to_string().into());
                 return;
             }
             Err(error) => {
                 tracing::warn!(%error, "Team operation failed");
+                self.drop_held_prompts(request_id);
                 self.failure = Some(fl!("team-error-not-connected").into());
                 if matches!(pending, Pending::Snapshot { .. })
-                    && self.snapshot_in_flight == Some(completion.request_id)
+                    && self.snapshot_in_flight == Some(request_id)
                 {
                     self.snapshot_in_flight = None;
                 }
@@ -390,6 +359,7 @@ impl Bridge {
             }
         };
         self.failure = None;
+        self.release_held_prompts(request_id);
         match (pending, reply) {
             (Pending::Teams { append }, Reply::Teams(teams)) => {
                 self.teams_after = (teams.len() == TEAM_PAGE)
@@ -415,7 +385,7 @@ impl Bridge {
                     findings,
                 },
             ) => {
-                if self.snapshot_in_flight == Some(completion.request_id) {
+                if self.snapshot_in_flight == Some(request_id) {
                     self.snapshot_in_flight = None;
                 }
                 // A reply for a team that is no longer selected is stale.
@@ -442,6 +412,10 @@ impl Bridge {
     }
 
     fn act(&mut self, action: TeamAction, candidates: &[PaneCandidate]) {
+        // Whatever this action queues is the confirmation its prompts wait for;
+        // an action that queues nothing announces nothing.
+        self.action_request = None;
+        self.action_refused = false;
         // A pane is only a member if the current daemon snapshot still proves it.
         let live = |pane: &PaneIdentity| {
             pane.verified()
@@ -956,6 +930,9 @@ impl Bridge {
 
 #[cfg(test)]
 mod perf_tests;
+
+#[cfg(test)]
+mod persist_tests;
 
 #[cfg(test)]
 mod tests;

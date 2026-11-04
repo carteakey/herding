@@ -34,6 +34,34 @@ const PENDING_MENTIONS_SQL: &str = "SELECT COUNT(*) FROM mentions m
 /// Post ids per `IN (...)` chunk in `recipient_statuses_for_posts`; well
 /// under SQLite's variable limit, and one chunk covers a full snapshot page.
 pub const STATUS_BATCH_CHUNK: usize = 500;
+/// SQL of [`TeamStore::posts`]: the page is selected before the mentions join
+/// so `limit` counts posts rather than join rows.
+const POSTS_PAGE_SQL: &str = "WITH page AS (
+    SELECT sequence,post_id,team_id,author_kind,author_id,reply_to,body,created_at
+    FROM posts WHERE team_id=?1 AND sequence>?2
+    ORDER BY sequence LIMIT ?3
+)
+SELECT page.sequence,page.post_id,page.team_id,page.author_kind,page.author_id,
+       page.reply_to,page.body,page.created_at,m.recipient_id
+FROM page LEFT JOIN mentions m ON m.post_id=page.post_id
+ORDER BY page.sequence,m.recipient_id";
+/// SQL of [`TeamStore::latest_posts`], the same page read from its newest end
+/// so a team's older history is never touched.
+const POSTS_LATEST_PAGE_SQL: &str = "WITH page AS (
+    SELECT sequence,post_id,team_id,author_kind,author_id,reply_to,body,created_at
+    FROM posts WHERE team_id=?1 AND sequence<?2
+    ORDER BY sequence DESC LIMIT ?3
+)
+SELECT page.sequence,page.post_id,page.team_id,page.author_kind,page.author_id,
+       page.reply_to,page.body,page.created_at,m.recipient_id
+FROM page LEFT JOIN mentions m ON m.post_id=page.post_id
+ORDER BY page.sequence DESC,m.recipient_id";
+
+/// Which side of a sequence [`TeamStore::page`] takes its `limit` posts from.
+enum Window {
+    After(i64),
+    Before(i64),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -505,24 +533,37 @@ impl TeamStore {
     /// posts, not join rows) and each page's mentions ride along in the same
     /// query instead of one query per post.
     pub fn posts(&self, team_id: &str, cursor: i64, limit: usize) -> Result<Vec<(i64, Post)>> {
+        self.page(team_id, Window::After(cursor), limit)
+    }
+
+    /// The newest `limit` posts, in the same ascending order [`posts`] returns.
+    ///
+    /// A snapshot uses this instead of reading from the oldest post and keeping
+    /// only the last page, which costs a page per page-sized slice of the
+    /// team's whole history. Pass the first sequence already shown as `before`
+    /// to page further back; that page's first sequence is the next cursor.
+    pub fn latest_posts(
+        &self,
+        team_id: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<(i64, Post)>> {
+        self.page(team_id, Window::Before(before.unwrap_or(i64::MAX)), limit)
+    }
+
+    fn page(&self, team_id: &str, window: Window, limit: usize) -> Result<Vec<(i64, Post)>> {
         if limit == 0 || limit > MAX_PAGE_SIZE {
             return Err(Error::Invalid {
                 field: "page size",
                 max: MAX_PAGE_SIZE,
             });
         }
-        let mut stmt = self.prep(
-            "WITH page AS (
-                SELECT sequence,post_id,team_id,author_kind,author_id,reply_to,body,created_at
-                FROM posts WHERE team_id=?1 AND sequence>?2
-                ORDER BY sequence LIMIT ?3
-            )
-            SELECT page.sequence,page.post_id,page.team_id,page.author_kind,page.author_id,
-                   page.reply_to,page.body,page.created_at,m.recipient_id
-            FROM page LEFT JOIN mentions m ON m.post_id=page.post_id
-            ORDER BY page.sequence,m.recipient_id",
-        )?;
-        let rows = stmt.query_map(params![team_id, cursor, limit as i64], |r| {
+        let (sql, bound, newest_first) = match window {
+            Window::After(cursor) => (POSTS_PAGE_SQL, cursor, false),
+            Window::Before(bound) => (POSTS_LATEST_PAGE_SQL, bound, true),
+        };
+        let mut stmt = self.prep(sql)?;
+        let rows = stmt.query_map(params![team_id, bound, limit as i64], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
@@ -565,6 +606,12 @@ impl TeamStore {
                     },
                 )),
             }
+        }
+        // A newest-first page is read from the team's newest end; callers get
+        // every page oldest-first so `posts` cursors and `before` cursors keep
+        // meaning the same sequence order.
+        if newest_first {
+            out.reverse();
         }
         Ok(out)
     }
@@ -811,6 +858,10 @@ pub(super) fn ensure_author_in_team<'a>(
 #[cfg(test)]
 #[path = "team_store/departure_tests.rs"]
 mod departure_tests;
+
+#[cfg(test)]
+#[path = "team_store/page_tests.rs"]
+mod page_tests;
 
 #[cfg(test)]
 #[path = "team_store/status_tests.rs"]

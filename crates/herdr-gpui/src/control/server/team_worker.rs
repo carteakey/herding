@@ -591,10 +591,9 @@ fn import_github_issue(
     Ok(())
 }
 
-/// Pages are bounded; a team with more than `MAX_SCANNED_POSTS` posts shows
-/// its newest `limit` among the first scanned, which a later pass will page.
-const MAX_SCANNED_POSTS: usize = 1000;
-
+/// A snapshot shows its newest `limit` posts, read as page-sized slices from
+/// the newest end, so the refresh pays for its page and not for how much
+/// history the team has accumulated.
 fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply, Error> {
     let Some(team) = store.team(team_id)? else {
         return Ok(Reply::Snapshot {
@@ -606,20 +605,24 @@ fn snapshot(store: &mut TeamStore, team_id: &str, limit: usize) -> Result<Reply,
         });
     };
     let goal = store.team_goal(team_id)?;
-    let mut scanned = Vec::new();
-    let mut cursor = 0;
-    while scanned.len() < MAX_SCANNED_POSTS {
-        let page = store.posts(team_id, cursor, team_store::MAX_PAGE_SIZE)?;
-        let Some((last, _)) = page.last() else { break };
-        cursor = *last;
-        let full = page.len() == team_store::MAX_PAGE_SIZE;
-        scanned.extend(page);
-        if !full {
+    let mut pages: Vec<Vec<(i64, Post)>> = Vec::new();
+    let mut remaining = limit;
+    while remaining > 0 {
+        let want = remaining.min(team_store::MAX_PAGE_SIZE);
+        let before = pages
+            .last()
+            .and_then(|page| page.first())
+            .map(|(sequence, _)| *sequence);
+        let page = store.latest_posts(team_id, before, want)?;
+        let got = page.len();
+        remaining = remaining.saturating_sub(got);
+        pages.push(page);
+        // A short page is the oldest end of the team: there is nothing older.
+        if got < want {
             break;
         }
     }
-    let skip = scanned.len().saturating_sub(limit);
-    let returned: Vec<(i64, Post)> = scanned.into_iter().skip(skip).collect();
+    let returned: Vec<(i64, Post)> = pages.into_iter().rev().flatten().collect();
     // One query per 500-id chunk instead of one query per post: the single
     // worker thread served a refresh with up to POST_LIMIT serial round-trips
     // here before.
@@ -855,6 +858,10 @@ fn scoped(
 #[cfg(test)]
 #[path = "team_worker/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "team_worker/newest_page_tests.rs"]
+mod newest_page_tests;
 
 #[cfg(test)]
 #[path = "team_worker/query_bounds_tests.rs"]

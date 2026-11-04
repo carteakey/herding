@@ -24,6 +24,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::time::{Duration, Instant};
 
 const SNAPSHOT_LIMIT: usize = 200;
+/// The window the pre-fix worker scanned before it dropped all but its page.
 const MAX_SCANNED_POSTS: usize = 1000;
 
 struct Scale {
@@ -48,6 +49,16 @@ const STRESS: Scale = Scale {
     posts: MAX_SCANNED_POSTS,
     tasks: 100,
     findings: 100,
+};
+
+/// More posts than the old scan window reached, so a refresh that has to walk
+/// history pays for all of it and a newest-page read does not.
+const DEEP: Scale = Scale {
+    label: "deep history (9 members, 4000 posts, 40 tasks, 20 findings)",
+    members: 9,
+    posts: 4000,
+    tasks: 40,
+    findings: 20,
 };
 
 fn member_id(index: usize) -> String {
@@ -241,8 +252,10 @@ fn snapshot_replica(store: &mut TeamStore, team_id: &str) -> (Duration, usize) {
     (start.elapsed(), statements)
 }
 
-/// The worker's current snapshot: pages carry their mentions in one query, and
-/// the returned page's statuses come back one query per id chunk.
+/// The worker's current snapshot: it reads its page from the newest end
+/// (`latest_posts`, page-sized slices), each page carries its mentions in the
+/// same query, and the returned page's statuses come back one query per id
+/// chunk. The cost is the page count, not the team's history.
 fn snapshot_replica_batched(store: &mut TeamStore, team_id: &str) -> (Duration, usize) {
     let mut statements = 0usize;
     let start = Instant::now();
@@ -250,22 +263,27 @@ fn snapshot_replica_batched(store: &mut TeamStore, team_id: &str) -> (Duration, 
     statements += 2; // team row + members
     let _goal = store.team_goal(team_id);
     statements += 1;
-    let mut scanned = Vec::new();
-    let mut cursor = 0i64;
-    while scanned.len() < MAX_SCANNED_POSTS {
-        let page = store.posts(team_id, cursor, MAX_PAGE_SIZE).expect("page");
+    let mut pages: Vec<Vec<(i64, herdr_orchestrator::team_store::Post)>> = Vec::new();
+    let mut remaining = SNAPSHOT_LIMIT;
+    while remaining > 0 {
+        let want = remaining.min(MAX_PAGE_SIZE);
+        let before = pages
+            .last()
+            .and_then(|page| page.first())
+            .map(|(sequence, _)| *sequence);
+        let page = store
+            .latest_posts(team_id, before, want)
+            .expect("newest page");
+        let got = page.len();
+        remaining = remaining.saturating_sub(got);
         statements += 1;
-        let Some((last, _)) = page.last() else { break };
-        cursor = *last;
-        let full = page.len() == MAX_PAGE_SIZE;
-        scanned.extend(page);
-        if !full {
+        pages.push(page);
+        if got < want {
             break;
         }
     }
-    let skip = scanned.len().saturating_sub(SNAPSHOT_LIMIT);
     let returned: Vec<(i64, herdr_orchestrator::team_store::Post)> =
-        scanned.into_iter().skip(skip).collect();
+        pages.into_iter().rev().flatten().collect();
     let ids: Vec<String> = returned
         .iter()
         .map(|(_, post)| post.post_id.clone())
@@ -279,6 +297,19 @@ fn snapshot_replica_batched(store: &mut TeamStore, team_id: &str) -> (Duration, 
         statuses.len(),
         returned.len(),
         "one entry per returned post"
+    );
+    // Cost is only half the point: the page has to be the team's latest
+    // conversation. This reads the newest post separately and is not counted in
+    // the statement total.
+    let newest = store
+        .latest_posts(team_id, None, 1)
+        .expect("newest post")
+        .last()
+        .map(|(_, post)| post.post_id.clone());
+    assert_eq!(
+        returned.last().map(|(_, post)| post.post_id.clone()),
+        newest,
+        "the shipped page reaches the team's newest post"
     );
     let _ = team;
     (start.elapsed(), statements)
@@ -356,6 +387,20 @@ fn audit_scale(scale: &Scale) {
     println!(
         "{:>58} {} SQL statements per snapshot (mentions() + recipient_statuses() per post)",
         "", statements
+    );
+    let team_newest = store
+        .latest_posts(&team_id, None, 1)
+        .expect("newest post")
+        .last()
+        .map(|(_, post)| post.post_id.clone());
+    let window_newest = store
+        .latest_posts(&team_id, Some(MAX_SCANNED_POSTS as i64 + 1), 1)
+        .expect("window end")
+        .last()
+        .map(|(_, post)| post.post_id.clone());
+    println!(
+        "{:>58} the scanned window ended at {window_newest:?}; the team's newest post is {team_newest:?}",
+        ""
     );
 
     let mut batched = Vec::new();
@@ -481,4 +526,5 @@ fn team_store_perf_audit() {
     println!("team_store perf audit (timings are wall-clock; run on an idle machine)");
     audit_scale(&REALISTIC);
     audit_scale(&STRESS);
+    audit_scale(&DEEP);
 }

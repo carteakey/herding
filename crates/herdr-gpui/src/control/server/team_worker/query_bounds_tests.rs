@@ -60,9 +60,9 @@ fn snapshot_queries(store: &mut TeamStore) -> (usize, usize) {
     (store.statement_count(), posts.len())
 }
 
-/// 60 posts fit one page, 250 need three: the refresh pays for the extra page
-/// and nothing else. Before batching, the same pair differed by one status
-/// query per returned post.
+/// 60 posts fit one page, 250 need two pages of the snapshot's limit: the
+/// refresh pays for the extra page and nothing else. Before batching, the same
+/// pair differed by one status query per returned post.
 #[test]
 fn a_snapshot_issues_the_same_queries_whatever_the_post_count() {
     let few_dir = tempfile::tempdir().unwrap();
@@ -77,8 +77,8 @@ fn a_snapshot_issues_the_same_queries_whatever_the_post_count() {
     assert_eq!(many_posts, 200, "the snapshot returns its limit");
     assert_eq!(
         many_queries,
-        few_queries + 2,
-        "two extra pages, no extra per-post queries: {few_queries} vs {many_queries}"
+        few_queries + 1,
+        "one extra newest page, no extra per-post queries: {few_queries} vs {many_queries}"
     );
     assert!(
         many_queries <= 10,

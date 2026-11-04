@@ -18,9 +18,10 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
 ## Data flow, and where it can get slow
 
 1. **Store worker (serial).** Every 2s (`REFRESH`) and after each CLI
-   mutation, an `Operation::Snapshot` reads the team from SQLite: up to
-   1,000 scanned posts (hard cap), the last `POST_LIMIT` (200) returned,
-   plus all tasks and findings up to `MAX_PAGE_SIZE`.
+   mutation, an `Operation::Snapshot` reads the team from SQLite: its newest
+   `POST_LIMIT` (200) posts, taken as `MAX_PAGE_SIZE` (100) pages from the
+   newest end so the cost does not grow with the team's history, plus all
+   tasks and findings up to `MAX_PAGE_SIZE`.
 2. **Bridge.** The reply lands in `Bridge`, and `Bridge::snapshot`
    re-projects the whole board into a `TeamSnapshot` whenever the bridge is
    dirty (every team event under multi-agent traffic) on the UI thread.
@@ -41,8 +42,9 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
 | Board draw with 40 done tasks folded | 10.00ms | 6.76ms (release) | "Completed (N)" compaction active |
 | Bulletin draw, 20-post clip | ~1.9–5.8ms | 2.88ms | steady state; cheap by design |
 | Bulletin draw, 200-post history expanded | 33.83ms (release) | 4.43ms (release) / 2.95ms (debug) | dropped 87% to 91% via 30-post window and paging |
-| Store snapshot at 200 posts | 408 statements, 6–8ms | 9 statements, 1.87ms median | batched recipient queries + indexed mentions |
-| Store snapshot stress (1,000 posts) | 1,215 statements, 16–21ms | 16 statements, 6.84ms median | 98.7% statement reduction |
+| Store snapshot at 200 posts | 408 statements, 6–8ms | 8 statements, 2.02ms median | batched recipient queries, indexed mentions, newest-page read |
+| Store snapshot stress (1,000 posts) | 1,215 statements, 16–21ms | 8 statements, 2.39ms median | 99.3% statement reduction |
+| Store snapshot with 4,000 posts | 1,215 statements, 7.14ms median, page ended at `post00999` | 8 statements, 1.94ms median, page ends at `post03999` | history no longer costs refresh time or hides the newest posts |
 | Store writes | 67–84µs; ack 28–42µs | 67–84µs; ack 28–42µs | healthy |
 
 ## Fixes applied
@@ -62,6 +64,15 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
     `COUNT` query (`TeamStore::pending_mention_count`), backed by a new
     `CREATE INDEX IF NOT EXISTS mentions_recipient_idx`.
   - Added `prepare_cached` for hot reads on the worker connection.
+- **Store newest-page snapshot reads (task `e9a9dbab`, finding `6e75fed0`):**
+  - `TeamStore::latest_posts(team_id, Some(sequence), limit)` reads a page
+    backwards from a sequence, and the worker snapshot now asks for its
+    `POST_LIMIT` in `MAX_PAGE_SIZE` pages from the newest end instead of
+    scanning a 1,000-post window and dropping all but its last 200.
+  - A team older than that window now shows its newest posts: at 4,000 posts
+    the old window ended at `post00999` while the newest was `post03999`.
+  - `TeamStore::posts` keeps its forward cursor, so `herdr-gpui bulletin list
+    --after SEQ` still walks forwards from a post.
 - **Bridge snapshot projection caching (commit `1fef43d1`):**
   - Built a single-pass `name_map` and author map during `Bridge::snapshot`.
   - Resolved reply-to authors in O(1) via hash map instead of rescanning
@@ -70,17 +81,20 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
 
 ## Bounds that keep this healthy
 
-`POST_LIMIT` 200, scan cap 1,000 posts, `MAX_PAGE_SIZE` per read,
+`POST_LIMIT` 200 read as `MAX_PAGE_SIZE` (100) pages from the newest end,
+`MAX_PAGE_SIZE` per read,
 `RECENT_POSTS_LIMIT` 20 rendered bulletin posts (windowed to 30 when expanded),
 `MAX_VISIBLE_TASKS` 16 per page, `MAX_VISIBLE_FINDINGS` 16 per page, pause
 queue 64 prompts, wake ledger 512 signals, `REFRESH` 2s, supervisor fallback 600s.
 
 ## Known hotspots left open
 
-- **Scanning the 1,000-post window on refresh (`e9a9dbab`):** The store worker
-  snapshot still scans 10 pages (~5.4ms out of a 6.8ms stress refresh) to
-  collect the newest 200 posts before discarding earlier pages. Reading the
-  newest limit posts directly will eliminate most of that scan time.
+- **Tasks and findings are still one page:** `TeamStore::tasks` and
+  `TeamStore::findings` take a limit and no cursor, so a team with more than
+  `MAX_PAGE_SIZE` of them shows only the first page in the panel and the CLI
+  (finding `271faf33`). Posts are now read newest-first and page backwards
+  with `TeamStore::latest_posts(team_id, Some(sequence), limit)`; the same
+  cursor shape is what those two reads need.
 - **Post-mutation refreshes are unthrottled:** One snapshot is triggered per
   mutation in a burst, bounded by mutation count. Revisit only if mutation
   bursts become common.

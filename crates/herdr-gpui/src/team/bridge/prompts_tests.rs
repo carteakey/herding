@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use super::*;
 use crate::HerdrWindow;
 use herdr_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskStatus};

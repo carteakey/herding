@@ -10,6 +10,9 @@ use std::collections::HashMap;
 
 /// Resolves the proven session identity and agent kind for `pane_id` in the
 /// window's selected daemon.
+/// Kept for the live remote re-verification after the fleet rollout rebuilds
+/// the hosts and their panes re-register; unused until then.
+#[allow(dead_code)]
 pub(crate) fn prove_pane_session(view: &HerdrWindow, pane_id: &str) -> Option<(String, String)> {
     prove_pane_session_in(view, view.selected_endpoint, &view.live, pane_id)
 }

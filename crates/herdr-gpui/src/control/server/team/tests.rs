@@ -185,6 +185,44 @@ fn refuses_a_disconnected_caller_host_even_when_the_window_is_connected(
     });
 }
 
+/// Finding c2686543, pinned: nothing in a control request proves which
+/// process sent it. The caller asserts `HERDR_PANE_ID` and
+/// `HERDR_WORKSPACE_ID`, the proof shows the named pane exists and runs an
+/// agent, and no field anywhere ties the request to that agent's process,
+/// so a bystander process that learns a live pane id is proved as that
+/// pane's member. If hardening ever binds a request to the agent's own
+/// process (peer credentials, per-pane authentication), this test is where
+/// the change becomes visible.
+#[gpui::test]
+fn a_caller_naming_a_live_pane_is_treated_as_that_pane(cx: &mut gpui::TestAppContext) {
+    with_window(cx, |view| {
+        view.live.status = ConnectionStatus::Connected;
+        view.live.snapshot = Some(Arc::new(snapshot(
+            "boot-selected",
+            "w0",
+            "w0:p1",
+            Some("codex"),
+        )));
+        view.endpoints[0].live = view.live.clone();
+
+        // The agent's own pane environment asserts exactly these two ids; a
+        // bystander process that learned them asserts the same ones, and
+        // `Caller` has no further field that could tell the two apart.
+        let bystander = Caller {
+            pane_id: Some("w0:p1".into()),
+            workspace_id: Some("w0".into()),
+            ..Caller::default()
+        };
+        let (target, endpoint) = current_identity(view, &bystander)
+            .expect("the proof relies on the asserted pane id alone, by design");
+
+        assert_eq!(endpoint, 0);
+        assert_eq!(target.session, "agent:codex:w0:w0:p1");
+        assert_eq!(target.workspace.as_deref(), Some("w0"));
+        assert_eq!(target.pane.as_deref(), Some("w0:p1"));
+    });
+}
+
 fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH)
 }

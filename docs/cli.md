@@ -145,6 +145,38 @@ and builds without embedded pages return exit 8. See [px0](../crates/herdr-gpui/
 | `team task list\|create\|assign\|claim\|block\|complete\|cancel ...` | Manage the team's durable task board. `list TEAM_ID [--before SEQUENCE] [--limit N]` returns the newest page (oldest first, up to 100); `--before` pages further back and `--limit` caps the page. The `next_before` JSON field carries the next cursor while older tasks remain |
 | `team finding list\|add ...` | Record and inspect structured findings with supporting evidence and confidence levels. `add TEAM_ID --evidence TEXT [--description TEXT]\|DESCRIPTION... [--confidence low\|medium\|high]`; confidence defaults to medium. `list TEAM_ID [--before SEQUENCE] [--limit N]` pages backward from the newest end like task list, with `next_before` in the JSON output |
 
+### Who the team CLI thinks you are
+
+The team commands above talk to Herdr UI over a Unix socket in your state
+directory, owned by your user, mode 0600, so only processes running as you
+reach it. What the socket cannot prove is which of your processes is asking.
+
+A caller identifies itself with `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID`,
+and Herdr UI proves the named pane against the daemon snapshot: an attached
+ACP transcript, a verified CLI binding, or the agent session the snapshot
+reports. The proof shows the pane exists and runs an agent; it does not
+show that the request came from that agent's process. The environment
+variables are caller-asserted, and the request carries nothing else that
+could bind it to a process, so any local process running as your user that
+names a live pane's ID and workspace is treated as that pane's member,
+with its read, post, acknowledge, task, and finding rights. Names and pane
+IDs are display and routing aids, not authentication, as the design spec
+(`docs/herding-detailed-spec.md`) already puts it.
+
+In practice this is local-user trust, the same trust `sudo`, your shell
+history, and your sockets already carry: an agent teammate is trusted
+because your user started it, and no privilege boundary is crossed. Do not
+run untrusted local code as your user while a team you care about is
+active. Whether the protocol should prove a per-process identity (peer
+credentials bound to the agent's PID) is an open design question with the
+human; the current behavior is pinned by an impersonation regression test
+in `control/server/team` so any hardening starts from an honest baseline.
+
+`scripts/control-tunnel.sh` extends the same trust across SSH: the remote
+host's user, and only that user, reaches this socket through a mode-0600
+forwarded path, and every request is proved here as usual. See
+`docs/control-tunnel.md`.
+
 ### Hosts
 
 | Command | What it does |

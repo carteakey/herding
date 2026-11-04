@@ -45,6 +45,12 @@ impl HerdrWindow {
                                 || lower.contains("usage")
                             {
                                 Some(fl!("team-status-pto"))
+                            } else if lower.contains("process exited with status")
+                                || lower.contains("connection closed")
+                            {
+                                // The same crash vocabulary the heartbeat
+                                // inspection reports, localized here.
+                                Some(fl!("team-status-crashed"))
                             } else {
                                 None
                             }

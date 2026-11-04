@@ -1,6 +1,8 @@
 //! Heartbeat inspection logic for agent pane terminals and wire serialization.
 use super::*;
 use crate::control::protocol::team::Reply as WireReply;
+use herdr_orchestrator::team_store::{Member, Team};
+use std::collections::HashMap;
 
 pub(super) fn heartbeat_response(
     team: &Team,

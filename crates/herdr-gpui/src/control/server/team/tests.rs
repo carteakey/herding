@@ -1,11 +1,17 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use super::dispatch::prompts_for_scoped_reply;
 use super::*;
 use crate::{
-    control::protocol::Caller, endpoint::Endpoint, sidebar::layout_tests::fixture_window,
-    state::ConnectionStatus,
+    HerdrWindow,
+    control::protocol::Caller,
+    control::server::team_worker::Reply,
+    endpoint::Endpoint,
+    sidebar::layout_tests::fixture_window,
+    state::{ConnectionStatus, LiveState},
 };
 use herdr_client::{ConnectTarget, protocol::ClientShellSnapshot};
+use herdr_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskStatus, Team};
 use std::sync::Arc;
 
 fn caller(workspace: &str, pane: &str) -> Caller {

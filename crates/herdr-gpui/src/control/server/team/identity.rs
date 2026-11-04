@@ -18,7 +18,7 @@ pub(crate) fn prove_pane_session(view: &HerdrWindow, pane_id: &str) -> Option<(S
 /// CLI bindings are projected from the selected daemon alone, so they only
 /// prove a pane on that daemon; every other host is proved by the agent
 /// session its own snapshot reports.
-pub(super) fn prove_pane_session_at(
+pub(crate) fn prove_pane_session_at(
     view: &HerdrWindow,
     index: usize,
     pane_id: &str,

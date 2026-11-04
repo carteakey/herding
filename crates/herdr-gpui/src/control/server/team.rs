@@ -24,7 +24,7 @@ mod identity;
 mod projection;
 
 use dispatch::notify_team_mutation;
-pub(crate) use identity::prove_pane_session;
+pub(crate) use identity::{prove_pane_session, prove_pane_session_at};
 use identity::{current_identity, pane_agents};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
 

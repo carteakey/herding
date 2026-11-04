@@ -5,21 +5,34 @@ use herdr_orchestrator::team_store::{Task, Team};
 use std::time::Instant;
 
 impl HerdrWindow {
-    /// Sessions this window can prove: native ACP chats, verified CLI bindings,
-    /// and active terminal agent sessions in the selected daemon's snapshot.
+    /// Sessions this window can prove across all connected host endpoints:
+    /// native ACP chats, verified CLI bindings, and active terminal agent
+    /// sessions in each daemon's snapshot.
     pub(super) fn team_candidates(&self) -> Vec<PaneCandidate> {
-        let Some(snapshot) = self.live.snapshot.as_deref() else {
-            return Vec::new();
-        };
-        if !self.live.status.is_connected() || snapshot.boot_id.is_empty() {
-            return Vec::new();
-        }
-        snapshot
-            .panes
-            .iter()
-            .filter_map(|pane| {
-                let (session, agent_kind) =
-                    crate::control::server::team::prove_pane_session(self, &pane.pane_id)?;
+        let mut candidates = Vec::new();
+        for (index, endpoint) in self.endpoints.iter().enumerate() {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            let Some(snapshot) = live.snapshot.as_deref() else {
+                continue;
+            };
+            if !live.status.is_connected() || snapshot.boot_id.is_empty() {
+                continue;
+            }
+            let host_prefix = if index != self.selected_endpoint {
+                format!("{}: ", endpoint.label)
+            } else {
+                String::new()
+            };
+            for pane in &snapshot.panes {
+                let Some((session, agent_kind)) =
+                    crate::control::server::team::prove_pane_session_at(self, index, &pane.pane_id)
+                else {
+                    continue;
+                };
                 let agent_entry = snapshot
                     .agents
                     .iter()
@@ -31,9 +44,9 @@ impl HerdrWindow {
                     .or_else(|| agent_entry.and_then(|a| a.title.as_deref()))
                     .unwrap_or(pane.pane_id.as_str());
                 let label = if agent_kind.is_empty() {
-                    base_label.to_owned()
+                    format!("{host_prefix}{base_label}")
                 } else {
-                    format!("{base_label} ({agent_kind})")
+                    format!("{host_prefix}{base_label} ({agent_kind})")
                 };
                 let status = if let Some(agent) = agent_entry {
                     if let Some(state_text) = agent.state_labels.iter().find_map(|(k, v)| {
@@ -59,7 +72,7 @@ impl HerdrWindow {
                 } else {
                     fl!("team-status-live").into()
                 };
-                Some(PaneCandidate {
+                candidates.push(PaneCandidate {
                     identity: PaneIdentity {
                         daemon_id: snapshot.boot_id.clone(),
                         session_id: Some(session),
@@ -69,9 +82,10 @@ impl HerdrWindow {
                     label: label.into(),
                     agent: agent_kind.into(),
                     status,
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        candidates
     }
 
     /// Runs on each window tick. Idle until the Team panel is first shown.
@@ -240,6 +254,27 @@ impl HerdrWindow {
         outcome
     }
 
+    /// Resolves which endpoint currently contains `pane_id` in its snapshot,
+    /// falling back to the selected endpoint if unknown or if the pane cannot
+    /// be located across connected endpoints.
+    pub(crate) fn target_endpoint_for_pane(&self, pane_id: &str) -> usize {
+        self.endpoints
+            .iter()
+            .enumerate()
+            .find(|(i, ep)| {
+                let live = if *i == self.selected_endpoint {
+                    &self.live
+                } else {
+                    &ep.live
+                };
+                live.snapshot
+                    .as_deref()
+                    .is_some_and(|s| s.panes.iter().any(|p| p.pane_id == pane_id))
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(self.selected_endpoint)
+    }
+
     fn dispatch_team_prompt(
         &mut self,
         pane_id: &str,
@@ -260,8 +295,9 @@ impl HerdrWindow {
         if self.endpoints.is_empty() {
             return PromptOutcome::Unavailable;
         }
+        let target_endpoint_index = self.target_endpoint_for_pane(pane_id);
         let target = crate::browser::FeedbackKey {
-            scope: crate::browser::scope(&self.endpoints[self.selected_endpoint]),
+            scope: crate::browser::scope(&self.endpoints[target_endpoint_index]),
             pane_id: pane_id.to_owned(),
         };
         let outcome = match self.deliver_notes(Some(target), prompt, None, None, cx) {
@@ -626,179 +662,5 @@ fn supervisor_pane_id(team: &Team) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use herdr_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskStatus};
-
-    fn test_team() -> Team {
-        Team {
-            team_id: "t1".into(),
-            name: "team1".into(),
-            supervisor: Member {
-                member_id: "m_sup".into(),
-                display_name: "supervisor".into(),
-                target: SessionTarget {
-                    host: "local".into(),
-                    session: "default".into(),
-                    workspace: Some("ws".into()),
-                    pane: Some("p_sup".into()),
-                },
-            },
-            members: vec![
-                Member {
-                    member_id: "m_w1".into(),
-                    display_name: "worker1".into(),
-                    target: SessionTarget {
-                        host: "local".into(),
-                        session: "default".into(),
-                        workspace: Some("ws".into()),
-                        pane: Some("p_w1".into()),
-                    },
-                },
-                Member {
-                    member_id: "m_w2".into(),
-                    display_name: "worker2".into(),
-                    target: SessionTarget {
-                        host: "local".into(),
-                        session: "default".into(),
-                        workspace: Some("ws".into()),
-                        pane: Some("p_w2".into()),
-                    },
-                },
-            ],
-        }
-    }
-
-    #[test]
-    fn bulletin_post_targets_only_mentioned_recipient() {
-        let team = test_team();
-        let action = TeamAction::Post {
-            team_id: "t1".into(),
-            author: Author::Human {
-                user_id: "human".into(),
-            },
-            body: "@worker1 please check this".into(),
-        };
-        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
-        assert_eq!(prompts.len(), 1);
-        assert_eq!(prompts[0].0, "p_w1");
-        assert!(prompts[0].1.contains("@worker1 please check this"));
-    }
-
-    #[test]
-    fn bulletin_prompts_instruct_explicit_ack() {
-        let team = test_team();
-        let post_action = TeamAction::Post {
-            team_id: "t1".into(),
-            author: Author::Human {
-                user_id: "human".into(),
-            },
-            body: "@worker1 please check this".into(),
-        };
-        let prompts = prompts_for_team_action(&post_action, Some(&team), &[]);
-        assert!(prompts[0].1.contains("bulletin ack t1"));
-
-        let worker_action = TeamAction::AddWorker {
-            team_id: "t1".into(),
-            name: "worker3".into(),
-            pane: PaneIdentity {
-                daemon_id: "d1".into(),
-                session_id: Some("s1".into()),
-                workspace_id: "ws".into(),
-                pane_id: "p_w3".into(),
-            },
-        };
-        let worker_prompts = prompts_for_team_action(&worker_action, Some(&team), &[]);
-        assert!(worker_prompts[0].1.contains("bulletin ack t1"));
-    }
-
-    #[test]
-    fn bulletin_post_broadcasts_to_all_when_no_mention() {
-        let team = test_team();
-        let action = TeamAction::Post {
-            team_id: "t1".into(),
-            author: Author::Human {
-                user_id: "human".into(),
-            },
-            body: "Team sync in 5m".into(),
-        };
-        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
-        assert_eq!(prompts.len(), 3);
-        let panes: Vec<_> = prompts.iter().map(|(p, _, _)| p.as_str()).collect();
-        assert!(panes.contains(&"p_sup"));
-        assert!(panes.contains(&"p_w1"));
-        assert!(panes.contains(&"p_w2"));
-    }
-
-    #[test]
-    fn bulletin_post_excludes_member_author_from_all_broadcast() {
-        let team = test_team();
-        let action = TeamAction::Post {
-            team_id: "t1".into(),
-            author: Author::Member {
-                member_id: "m_w1".into(),
-            },
-            body: "General update from w1".into(),
-        };
-        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
-        assert_eq!(prompts.len(), 2);
-        let panes: Vec<_> = prompts.iter().map(|(p, _, _)| p.as_str()).collect();
-        assert!(panes.contains(&"p_sup"));
-        assert!(panes.contains(&"p_w2"));
-        assert!(!panes.contains(&"p_w1"));
-    }
-
-    #[test]
-    fn bulletin_post_with_invalid_mention_dispatches_to_none() {
-        let team = test_team();
-        let action = TeamAction::Post {
-            team_id: "t1".into(),
-            author: Author::Human {
-                user_id: "human".into(),
-            },
-            body: "@nonexistent_person check this".into(),
-        };
-        let prompts = prompts_for_team_action(&action, Some(&team), &[]);
-        assert_eq!(prompts.len(), 0);
-    }
-
-    fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH)
-    }
-
-    fn signal_task(status: TaskStatus) -> Task {
-        Task {
-            task_id: "task1".into(),
-            team_id: "t1".into(),
-            creator: Author::Human {
-                user_id: "human".into(),
-            },
-            title: "Write report".into(),
-            brief: String::new(),
-            assignee: None,
-            status,
-            blocker_reason: None,
-            result: None,
-            created_at: at(0),
-            updated_at: at(10),
-        }
-    }
-
-    #[test]
-    fn excerpt_caps_long_results() {
-        let long = "x".repeat(500);
-        assert_eq!(excerpt(&long).chars().count(), 243);
-        assert!(excerpt(&long).ends_with("..."));
-        assert_eq!(excerpt("  short  "), "short");
-    }
-
-    #[test]
-    fn wake_signal_tracks_status_and_revision() {
-        let mut task = signal_task(TaskStatus::Done);
-        let first = wake_signal(&task);
-        task.updated_at = at(11);
-        assert_ne!(wake_signal(&task), first, "a re-done task wakes again");
-        task.status = TaskStatus::Open;
-        assert_ne!(wake_signal(&task), first, "a reopened task wakes again");
-    }
-}
+#[path = "prompts_tests.rs"]
+mod tests;

@@ -182,6 +182,31 @@ impl TeamStore {
                 member_id: candidate.member_id,
             });
         }
+        // A resumed agent session re-proves the same pane under a new
+        // session id, so the exact-target match above misses it and the
+        // member's own name would otherwise be squatted by its dead
+        // predecessor forever. One pane hosts one live agent session, and
+        // the candidate target was proved against that pane's snapshot, so
+        // re-bind the name holder in the same daemon boot, workspace, and
+        // pane: member_id preserved, so supervisor status, assignments,
+        // and mention history stay intact. A name claim from a different
+        // pane is a different agent and stays refused below.
+        let resumed = members.iter().find(|m| {
+            m.display_name.eq_ignore_ascii_case(&candidate.display_name)
+                && m.target.host == candidate.target.host
+                && m.target.workspace == candidate.target.workspace
+                && m.target.pane == candidate.target.pane
+        });
+        if let Some(existing) = resumed {
+            let updated = Member {
+                member_id: existing.member_id.clone(),
+                display_name: candidate.display_name,
+                target: target.clone(),
+            };
+            insert_member(&tx, team_id, &updated)?;
+            tx.commit()?;
+            return Ok(updated);
+        }
         if members
             .iter()
             .any(|m| m.display_name.eq_ignore_ascii_case(&candidate.display_name))

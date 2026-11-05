@@ -229,18 +229,44 @@ fn team_goal_registration_discovery_and_mention_validation() {
         .unwrap();
     assert_eq!(registered.display_name, "ZCode-1");
 
-    // Duplicate display name from another session is rejected.
-    let other_target = SessionTarget {
+    // A resumed session in the same pane re-binds the name holder: the
+    // member id survives, the target moves to the new session, and no
+    // second member appears.
+    let resumed_target = SessionTarget {
         session: "sess-w4".into(),
         ..new_target.clone()
     };
+    let resumed = store
+        .register_member("team-1", "w-4", "zcode-1", &resumed_target)
+        .unwrap();
+    assert_eq!(resumed.member_id, "w-3");
+    assert_eq!(resumed.display_name, "zcode-1");
+    let rebound = store.team("team-1").unwrap().unwrap();
+    assert_eq!(
+        rebound
+            .members
+            .iter()
+            .filter(|m| m.display_name.eq_ignore_ascii_case("zcode-1"))
+            .count(),
+        1
+    );
+
+    // The same name from a DIFFERENT pane is a different agent: rejected.
+    let stolen_target = SessionTarget {
+        session: "sess-w5".into(),
+        pane: Some("pane-w-5".into()),
+        ..new_target.clone()
+    };
     assert!(matches!(
-        store.register_member("team-1", "w-4", "zcode-1", &other_target),
+        store.register_member("team-1", "w-5", "zcode-1", &stolen_target),
         Err(Error::DuplicateDisplayName(_))
     ));
 
     // Session discovery finds the team without knowing team_id.
-    let (found_team, found_member) = store.find_member_team(None, &new_target).unwrap().unwrap();
+    let (found_team, found_member) = store
+        .find_member_team(None, &resumed_target)
+        .unwrap()
+        .unwrap();
     assert_eq!(found_team.team_id, "team-1");
     assert_eq!(found_member.member_id, "w-3");
 

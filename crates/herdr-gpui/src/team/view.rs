@@ -8,6 +8,7 @@ mod board;
 mod bulletin;
 mod findings;
 mod roster;
+mod task_icons;
 
 #[cfg(test)]
 mod perf_tests;

@@ -4,9 +4,11 @@
 
 use super::*;
 use crate::config::{FontConfig, Theme};
-use crate::team::model::{PaneIdentity, TeamFinding, TeamLoadState, TeamMember, TeamSnapshot};
+use crate::team::model::{
+    PaneIdentity, TeamFinding, TeamLoadState, TeamMember, TeamSnapshot, TeamTask,
+};
 use gpui::{FontWeight, px, size};
-use herdr_orchestrator::team_store::{Author, Confidence};
+use herdr_orchestrator::team_store::{Author, Confidence, TaskStatus};
 
 use core::prelude::v1::test;
 
@@ -31,6 +33,36 @@ fn finding(description: &str) -> TeamFinding {
     }
 }
 
+fn task(id: &str, status: TaskStatus, assignee: Option<&str>, blocker: Option<&str>) -> TeamTask {
+    TeamTask {
+        id: id.into(),
+        title: format!("Task {id}").into(),
+        brief: "".into(),
+        assignee: assignee.map(Into::into),
+        status,
+        blocker_reason: blocker.map(Into::into),
+        result: None,
+    }
+}
+
+fn member(id: &str, name: &str, supervisor: bool) -> TeamMember {
+    TeamMember {
+        member_id: id.into(),
+        name: name.into(),
+        role: if supervisor {
+            "supervisor".into()
+        } else {
+            "worker".into()
+        },
+        agent: "zcode".into(),
+        pane: None,
+        target_pane: None,
+        status: "idle".into(),
+        supervisor,
+        paused: false,
+    }
+}
+
 fn team_view(
     cx: &mut TestAppContext,
     findings: Vec<TeamFinding>,
@@ -47,6 +79,73 @@ fn team_view(
         cx.notify();
     });
     (view, cx)
+}
+
+#[gpui::test]
+fn task_rows_show_self_describing_icons_for_status_role_and_gate(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| TeamView::new(font(), Theme::default(), cx));
+    view.update(cx, |view, cx| {
+        view.snapshot = TeamSnapshot {
+            state: TeamLoadState::Ready,
+            team_id: Some("team-test".into()),
+            team_name: Some("herding".into()),
+            members: vec![member("m-sup", "argon", true), member("m-w", "kilo", false)],
+            tasks: vec![
+                task("t-open", TaskStatus::Open, Some("argon"), None),
+                task("t-claimed", TaskStatus::InProgress, Some("kilo"), None),
+                task(
+                    "t-gated",
+                    TaskStatus::Blocked,
+                    Some("kilo"),
+                    Some("waiting on main"),
+                ),
+                task("t-done", TaskStatus::Done, None, None),
+            ],
+            ..TeamSnapshot::default()
+        };
+        view.completed_tasks_open = true;
+        cx.notify();
+    });
+    cx.simulate_resize(size(px(600.), px(900.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // Every task row lays out its status mark, whatever the state.
+    // debug_bounds takes &'static str, so the selectors stay literals.
+    assert!(
+        cx.debug_bounds("team-task-status-icon-t-open").is_some(),
+        "task t-open should lay out its status icon"
+    );
+    assert!(
+        cx.debug_bounds("team-task-status-icon-t-claimed").is_some(),
+        "task t-claimed should lay out its status icon"
+    );
+    assert!(
+        cx.debug_bounds("team-task-status-icon-t-gated").is_some(),
+        "task t-gated should lay out its status icon"
+    );
+    assert!(
+        cx.debug_bounds("team-task-status-icon-t-done").is_some(),
+        "task t-done should lay out its status icon"
+    );
+    // The role mark follows the assignee's roster role, assigned tasks only.
+    assert!(
+        cx.debug_bounds("team-task-role-icon-t-open").is_some(),
+        "a task with a roster assignee should lay out its role icon"
+    );
+    assert!(cx.debug_bounds("team-task-role-icon-t-claimed").is_some());
+    assert!(
+        cx.debug_bounds("team-task-role-icon-t-done").is_none(),
+        "an unassigned task should not lay out a role icon"
+    );
+    // The gate mark appears only where a blocker reason is recorded.
+    assert!(
+        cx.debug_bounds("team-task-gate-icon-t-gated").is_some(),
+        "a task with a blocker reason should lay out its gate icon"
+    );
+    assert!(
+        cx.debug_bounds("team-task-gate-icon-t-open").is_none(),
+        "a task without a blocker reason should not lay out a gate icon"
+    );
 }
 
 #[gpui::test]

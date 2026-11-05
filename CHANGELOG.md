@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatched only after the store write confirms, deduped per assignment
   state, and skipped for a dead session, so handing out work needs no
   supervisor bulletin.
+- Self-describing icons on team task rows (issue #9): a status mark per
+  state (open, in progress, blocked, done, cancelled) from the 16px
+  status-mark family, an assignee-role mark (star for a supervisor, person
+  for a worker), and a gate mark when a blocker reason is recorded; every
+  badge names itself on hover via a tooltip and to screen readers via an
+  accessible label, and none are interactive, so keyboard order is
+  unchanged. Issue-linked and host/machine marks arrive with the issue-ref
+  persistence of the sync contract (issue #2), which is the data source
+  they would render.
 - **SSH Control Tunnel (`1b26ce05`)**:
   - `scripts/control-tunnel.sh`: forwards an SSH host's control socket path back to the local Herdr UI over a single `ssh -R` Unix socket forward (OpenSSH 6.7+, no socat, no TCP), so `herdr-gpui team ...` runs natively from panes on remote hosts with unmodified caller identity.
   - Preflight refuses a live remote UI, recovers stale remote sockets the way the app's own bind does, and passes ssh options through (`--ssh-arg`).

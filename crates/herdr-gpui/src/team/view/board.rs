@@ -6,7 +6,9 @@ use crate::i18n::fl;
 use gpui::{prelude::*, *};
 use herdr_orchestrator::team_store::TaskStatus;
 
-fn truncate_text(text: &str, max_chars: usize) -> String {
+use super::task_icons::{task_icon_badges, task_status_label};
+
+pub(super) fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         text.to_owned()
     } else {
@@ -457,13 +459,7 @@ impl TeamView {
         let theme = &self.theme;
         let task_id = task.id.clone();
         let is_expanded = self.expanded_task_ids.contains(&task.id);
-        let status_label = match task.status {
-            TaskStatus::Open => fl!("team-task-status-open"),
-            TaskStatus::InProgress => fl!("team-task-status-in-progress"),
-            TaskStatus::Blocked => fl!("team-task-status-blocked"),
-            TaskStatus::Done => fl!("team-task-status-done"),
-            TaskStatus::Cancelled => fl!("team-task-status-cancelled"),
-        };
+        let status_label = task_status_label(task.status);
         let assignee_text = task
             .assignee
             .as_ref()
@@ -492,6 +488,7 @@ impl TeamView {
                             .truncate()
                             .child(task.title.clone()),
                     )
+                    .child(task_icon_badges(theme, task, &self.snapshot.members))
                     .child(self.chip(status_label)),
             )
             .child(

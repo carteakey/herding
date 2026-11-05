@@ -232,6 +232,16 @@ impl Bridge {
         self.queued_count()
     }
 
+    /// Test-only: make every queued retry due now, as another five seconds of
+    /// ticks would.
+    #[cfg(test)]
+    pub(crate) fn force_retry_due_for_test(&mut self) {
+        let past = Instant::now() - Duration::from_secs(1);
+        for prompt in &mut self.queued_prompts {
+            prompt.retry_at = past;
+        }
+    }
+
     /// The periodic check behind supervisor follow-through: at most one
     /// attempt per [`SUPERVISOR_FALLBACK`], only for the selected team, and
     /// only while stored task results exist that no wake has covered. A

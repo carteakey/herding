@@ -30,10 +30,20 @@ fn snapshot(
     pane: &str,
     agent: Option<&str>,
 ) -> ClientShellSnapshot {
+    snapshot_with_status(boot_id, workspace, pane, agent, "working")
+}
+
+fn snapshot_with_status(
+    boot_id: &str,
+    workspace: &str,
+    pane: &str,
+    agent: Option<&str>,
+    status: &str,
+) -> ClientShellSnapshot {
     let agents = match agent {
         Some(agent) => vec![serde_json::json!({
             "pane_id": pane, "workspace_id": workspace, "tab_id": "t0",
-            "display_agent": agent, "agent": agent, "agent_status": "working",
+            "display_agent": agent, "agent": agent, "agent_status": status,
             "state_change_seq": 1, "state_labels": [], "tokens": [], "focused": true
         })],
         None => Vec::new(),
@@ -479,11 +489,12 @@ fn a_held_wake_is_recorded_only_after_it_is_delivered(cx: &mut gpui::TestAppCont
     window
         .update(cx, |view, _, _| {
             view.live.status = ConnectionStatus::Connected;
-            view.live.snapshot = Some(Arc::new(snapshot(
+            view.live.snapshot = Some(Arc::new(snapshot_with_status(
                 "boot-local",
                 "w1X",
                 "p_sup",
                 Some("opencode"),
+                "idle",
             )));
             view.endpoints[0].live.status = ConnectionStatus::Connected;
             view.endpoints[0].live.snapshot = view.live.snapshot.clone();
@@ -535,6 +546,72 @@ fn a_held_wake_is_recorded_only_after_it_is_delivered(cx: &mut gpui::TestAppCont
         .update(cx, |view, _, cx| {
             view.dispatch_drained_team_prompts(cx);
             assert_eq!(view.team_bridge.queued_count_for_test(), 0);
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_wake_waits_for_a_busy_agent_to_finish_its_turn(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    let reply = supervisor_wake_reply();
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+            view.team_bridge.pause_member_for_test("m_sup");
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, cx| {
+            view.team_bridge.unpause_all_for_test();
+            // The agent is mid-turn: the wake must wait, not paste into an
+            // input the turn will clear.
+            view.dispatch_drained_team_prompts(cx);
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a busy agent keeps the wake queued"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "a wake that has not landed is not recorded"
+            );
+        })
+        .expect("window open");
+
+    window
+        .update(cx, |view, _, cx| {
+            view.live.snapshot = Some(Arc::new(snapshot_with_status(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+                "idle",
+            )));
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            // The retry is due; the idle pane takes it now.
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts(cx);
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                0,
+                "the idle agent takes the wake"
+            );
+            assert!(
+                view.team_bridge.wake_seen("t-x", signal),
+                "the delivered wake is recorded"
+            );
         })
         .expect("window open");
 }

@@ -33,6 +33,29 @@ impl HerdrWindow {
         })
     }
 
+    /// Whether the agent in `pane_id` is mid-turn, so a wake must wait rather
+    /// than be pasted into an input the program will clear when it finishes.
+    pub(crate) fn team_pane_busy(&self, pane_id: &str) -> bool {
+        self.endpoints.iter().enumerate().any(|(index, endpoint)| {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            let Some(snapshot) = live.snapshot.as_deref() else {
+                return false;
+            };
+            snapshot.agents.iter().any(|agent| {
+                agent.pane_id == pane_id
+                    && matches!(
+                        agent.agent_status,
+                        herdr_client::protocol::AgentStatus::Working
+                            | herdr_client::protocol::AgentStatus::Blocked
+                    )
+            })
+        })
+    }
+
     pub(super) fn team_candidates(&self) -> Vec<PaneCandidate> {
         let mut candidates = Vec::new();
         for (index, endpoint) in self.endpoints.iter().enumerate() {
@@ -241,6 +264,14 @@ impl HerdrWindow {
         }
         let drained = self.team_bridge.drain_unpaused_prompts();
         for item in drained {
+            // A wake pasted while the agent is mid-turn is cleared when the
+            // turn ends, so keep it queued until the pane is idle. The drain
+            // retries it on a later tick.
+            if self.team_pane_busy(&item.pane_id) {
+                self.team_bridge
+                    .requeue_prompt(item, Instant::now() + WAKE_RETRY);
+                continue;
+            }
             let outcome = self.enqueue_or_dispatch_team_prompt(
                 None,
                 &item.pane_id,

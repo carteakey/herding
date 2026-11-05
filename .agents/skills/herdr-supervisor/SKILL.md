@@ -39,7 +39,15 @@ LIVE verification - never on task-done alone.
    "accepted".
 4. Flip the tracker box, post a one-paragraph milestone comment.
 5. Create or unblock the next task (state the gate: "DO NOT START until X").
-6. Go idle. Do not poll; completions wake you.
+6. Before idling, run the **pre-idle gate** (issue #16): every live worker
+   should hold work or there must be no open, unblocked task left. If a
+   live worker is idle next to assignable work, assign or re-trigger the
+   wake NOW - do not assume a completion wake will bring you back, since
+   completion wakes to the supervisor are not guaranteed (#6) and held
+   wakes can be lost (#13). A re-assign of an already-assigned task is a
+   cheap, honest re-trigger of the assignee wake.
+7. Go idle. Do not poll; completions wake you - but only the pre-idle gate
+   makes that assumption safe.
 
 Do not implement worker tasks yourself - strictly supervise. The exception is
 review-and-accept actions: fast-forwarding an already-pushed, diff-reviewed
@@ -112,6 +120,9 @@ switch or session end:
   rebuilt binary changes nothing until the UI quits and relaunches; peer
   bindings are in-memory in that process, so the restart also clears them.
 - `cargo` is not on PATH in agent tool shells; `source ~/.cargo/env` first.
+- A bare `#[test]` in a file whose `use` globs pull in `gpui` resolves to
+  gpui's test macro and can segfault rustc; spell it
+  `#[core::prelude::v1::test]` (finding 26b98a05).
 
 ## Convergence: rebuild -> UI restart -> re-register
 

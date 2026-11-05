@@ -546,9 +546,76 @@ impl HerdrWindow {
         }
     }
 
+    /// Delivers a team wake to a terminal agent, but only when it can be
+    /// pasted now. A busy agent returns `Kept` without queueing: the team
+    /// layer holds and retries it, so the generic notes queue's 120s hold
+    /// cannot swallow a wake the team layer believes it delivered.
+    pub(crate) fn deliver_team_prompt(
+        &mut self,
+        pane_id: &str,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> Delivered {
+        let text = typable(&text);
+        if self.endpoints.is_empty() {
+            return Delivered::Kept;
+        }
+        let index = self.target_endpoint_for_pane(pane_id);
+        let live = if index == self.selected_endpoint {
+            &self.live
+        } else {
+            &self.endpoints[index].live
+        };
+        let Some(snapshot) = live.snapshot.clone() else {
+            return Delivered::Kept;
+        };
+        if !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id) {
+            return Delivered::Kept;
+        }
+        let Some(found) = agent(&snapshot, pane_id) else {
+            return Delivered::Kept;
+        };
+        if matches!(
+            found.agent_status,
+            AgentStatus::Working | AgentStatus::Blocked
+        ) {
+            return Delivered::Kept;
+        }
+        let origin = Origin {
+            endpoint: self.endpoints[index].id.clone(),
+            boot_id: snapshot.boot_id.clone(),
+        };
+        let target = FeedbackKey {
+            scope: crate::browser::scope(&self.endpoints[index]),
+            pane_id: pane_id.to_owned(),
+        };
+        let pasted = self.paste_into_pane(
+            Delivery {
+                target,
+                origin,
+                text,
+                until: Instant::now(),
+                pending: None,
+                copies: None,
+            },
+            cx,
+        );
+        // `paste_into_pane` returns the text only when it could not paste, so
+        // the team layer keeps the wake and retries instead of recording it.
+        match pasted {
+            None => Delivered::Agent,
+            Some(_) => Delivered::Kept,
+        }
+    }
+
     fn paste_into_pane(&mut self, delivery: Delivery, cx: &mut Context<Self>) -> Option<String> {
         let target = InputTarget::Pane(delivery.target.pane_id.clone());
-        let pasted = self.endpoints[self.selected_endpoint]
+        let endpoint = self
+            .endpoints
+            .iter()
+            .position(|endpoint| endpoint.id == delivery.origin.endpoint)
+            .unwrap_or(self.selected_endpoint);
+        let pasted = self.endpoints[endpoint]
             .connection
             .handle
             .as_ref()
@@ -586,10 +653,12 @@ impl HerdrWindow {
                 if !origin.current(this) {
                     return;
                 }
-                let handle = this.endpoints[this.selected_endpoint]
-                    .connection
-                    .handle
-                    .as_ref();
+                let endpoint = this
+                    .endpoints
+                    .iter()
+                    .position(|endpoint| endpoint.id == origin.endpoint)
+                    .unwrap_or(this.selected_endpoint);
+                let handle = this.endpoints[endpoint].connection.handle.as_ref();
                 if let Some(handle) = handle
                     && let Err(error) =
                         ConnectionBridge::send_input(handle, &origin.boot_id, &target, enter())

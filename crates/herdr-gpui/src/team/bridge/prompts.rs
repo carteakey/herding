@@ -316,16 +316,17 @@ impl HerdrWindow {
         cx: &mut Context<Self>,
     ) -> PromptOutcome {
         let team_id = team_id
-            .or_else(|| self.team_bridge.current_team_id())
+            .map(ToOwned::to_owned)
+            .or_else(|| self.team_bridge.current_team_id().map(ToOwned::to_owned))
             .unwrap_or_default();
         // A wake pasted into a busy agent is cleared when its turn ends, so
         // hold it until the pane is idle. The drain retries it on a later
         // tick, which is also how an assignment survives a busy worker.
-        if self.team_bridge.is_pane_paused_for_team(team_id, pane_id)
+        if self.team_bridge.is_pane_paused_for_team(&team_id, pane_id)
             || self.team_pane_busy(pane_id)
         {
             self.team_bridge.enqueue_prompt(
-                team_id.to_owned(),
+                team_id.clone(),
                 pane_id.to_owned(),
                 prompt,
                 summary,
@@ -337,7 +338,24 @@ impl HerdrWindow {
             self.team_bridge.dirty = true;
             return PromptOutcome::Held;
         }
-        let outcome = self.dispatch_team_prompt(pane_id, prompt, cx);
+        let outcome = self.dispatch_team_prompt(pane_id, prompt.clone(), cx);
+        // The dispatch can discover a busy pane the pre-check missed; keep the
+        // wake in the team queue so the drain retries it, never in the notes
+        // queue where its hold expires into a lost paste.
+        if matches!(outcome, PromptOutcome::Held) {
+            self.team_bridge.enqueue_prompt(
+                team_id.clone(),
+                pane_id.to_owned(),
+                prompt,
+                summary,
+                signals,
+            );
+            let held = self.team_bridge.queued_count();
+            self.team_bridge.last_activity =
+                Some(format!("Held prompt for {pane_id} ({held} queued)").into());
+            self.team_bridge.dirty = true;
+            return outcome;
+        }
         self.team_bridge.last_activity = Some(
             match outcome {
                 PromptOutcome::Sent => summary,
@@ -396,19 +414,14 @@ impl HerdrWindow {
         if self.endpoints.is_empty() {
             return PromptOutcome::Unavailable;
         }
-        let target_endpoint_index = self.target_endpoint_for_pane(pane_id);
-        let target = crate::browser::FeedbackKey {
-            scope: crate::browser::scope(&self.endpoints[target_endpoint_index]),
-            pane_id: pane_id.to_owned(),
-        };
-        let outcome = match self.deliver_notes(Some(target), prompt, None, None, cx) {
+        // Team wakes paste only into an idle agent; a busy one comes back as
+        // Held so the team queue retries it, instead of the generic notes
+        // queue holding it for 120s and then pasting into a mid-turn program.
+        match self.deliver_team_prompt(pane_id, prompt, cx) {
             crate::agent_notes::Delivered::Agent => PromptOutcome::Sent,
-            crate::agent_notes::Delivered::Kept | crate::agent_notes::Delivered::Copy(_) => {
-                PromptOutcome::Unavailable
-            }
-        };
-        self.poll_deliveries(cx);
-        outcome
+            crate::agent_notes::Delivered::Kept => PromptOutcome::Held,
+            crate::agent_notes::Delivered::Copy(_) => PromptOutcome::Unavailable,
+        }
     }
 
     fn split_team_pane(&mut self, cx: &mut Context<Self>) {

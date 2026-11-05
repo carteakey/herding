@@ -452,8 +452,13 @@ fn supervisor_wake_on_unreachable_pane_stays_pending_and_honest(cx: &mut gpui::T
                 .last_activity
                 .expect("the wake attempt is recorded");
             assert!(
-                activity.contains("not delivered"),
-                "unreachable pane is reported honestly: {activity}"
+                activity.contains("Held") && activity.contains("queued"),
+                "an unreachable pane keeps the wake queued: {activity}"
+            );
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits for a reachable pane"
             );
             // Fail closed: nothing was marked woken, so the fallback or a
             // later event can still deliver the result.

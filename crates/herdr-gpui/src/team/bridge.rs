@@ -129,6 +129,9 @@ pub(super) struct QueuedPrompt {
     /// ledger entry (bulletin mentions, action prompts). A held prompt keeps
     /// them so the drain can mark them seen only once it actually delivers.
     pub(super) signals: Vec<String>,
+    /// A failed delivery is retried no earlier than this instant, so a pane
+    /// that is briefly unreachable does not spin the drain every tick.
+    pub(super) retry_at: Instant,
 }
 
 impl Bridge {

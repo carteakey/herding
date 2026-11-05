@@ -2,7 +2,12 @@ use super::{PaneCandidate, REFRESH, TeamAction, roster, status_label};
 use crate::{HerdrWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
 use gpui::Context;
 use herdr_orchestrator::team_store::{Task, Team};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long a wake the drain could not deliver waits before it is retried.
+/// Long enough that a reconnecting pane is not hammered every tick, short
+/// enough that a brief gap does not strand an assignment.
+const WAKE_RETRY: Duration = Duration::from_secs(5);
 
 impl HerdrWindow {
     /// Sessions this window can prove across all connected host endpoints:
@@ -226,24 +231,46 @@ impl HerdrWindow {
 
     /// Dispatches prompts whose pause cleared since the last tick. A wake is
     /// recorded only when it actually reaches the agent; a prompt held again
-    /// or undeliverable stays unseen for the next tick or the fallback.
+    /// stays queued, and one the pane could not take is requeued for a later
+    /// tick instead of being swallowed.
     pub(crate) fn dispatch_drained_team_prompts(&mut self, cx: &mut Context<Self>) {
+        // A drain while the daemon is reconnecting has no snapshot to prove a
+        // pane against, so it would fail every delivery. Keep the queue.
+        if !self.live.status.is_connected() || self.live.snapshot.is_none() {
+            return;
+        }
         let drained = self.team_bridge.drain_unpaused_prompts();
         for item in drained {
             let outcome = self.enqueue_or_dispatch_team_prompt(
                 None,
                 &item.pane_id,
-                item.prompt,
-                item.summary,
+                item.prompt.clone(),
+                item.summary.clone(),
                 item.signals.clone(),
                 cx,
             );
-            if matches!(outcome, PromptOutcome::Sent)
-                && !item.signals.is_empty()
-                && let Some(team_id) = self.team_bridge.current_team_id().map(ToOwned::to_owned)
-            {
-                self.team_bridge
-                    .mark_supervisor_woken(&team_id, item.signals);
+            tracing::debug!(
+                pane = %item.pane_id,
+                ?outcome,
+                signals = item.signals.len(),
+                "team wake drain"
+            );
+            match outcome {
+                PromptOutcome::Sent => {
+                    if !item.signals.is_empty()
+                        && let Some(team_id) =
+                            self.team_bridge.current_team_id().map(ToOwned::to_owned)
+                    {
+                        self.team_bridge
+                            .mark_supervisor_woken(&team_id, item.signals);
+                    }
+                }
+                // Held re-enqueued it inside the dispatch.
+                PromptOutcome::Held => {}
+                PromptOutcome::Unavailable | PromptOutcome::Failed => {
+                    self.team_bridge
+                        .requeue_prompt(item, Instant::now() + WAKE_RETRY);
+                }
             }
         }
     }

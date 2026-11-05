@@ -3,6 +3,7 @@
 //! supervisor's pane or the whole team is paused, or because another team is
 //! showing - and that it arrives exactly once.
 use super::*;
+use crate::team::bridge::queue::DrainedPrompt;
 use herdr_orchestrator::team_store::{Author, Member, SessionTarget};
 
 fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
@@ -164,6 +165,47 @@ fn a_team_pause_holds_a_wake_and_unpausing_releases_it() {
         bridge.supervisor_fallback_due(Instant::now()).is_none(),
         "the delivered wake is marked reported"
     );
+}
+
+#[test]
+fn an_undeliverable_wake_is_requeued_and_retried() {
+    let mut bridge = board();
+    bridge.paused_members.insert("sup".into());
+    queue_wake(&mut bridge);
+    bridge.paused_members.clear();
+
+    let item = bridge
+        .drain_unpaused_prompts()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("one held wake"));
+
+    // A future retry time keeps it queued but not offered yet.
+    bridge.requeue_prompt(item, Instant::now() + Duration::from_secs(5));
+    assert_eq!(bridge.queued_count(), 1, "a failed wake is kept");
+    assert!(
+        bridge.drain_unpaused_prompts().is_empty(),
+        "the retry waits for its delay"
+    );
+
+    // A past retry time offers it again.
+    let item = bridge
+        .queued_prompts
+        .pop()
+        .unwrap_or_else(|| panic!("the failed wake is still queued"));
+    bridge.requeue_prompt(
+        DrainedPrompt {
+            team_id: item.team_id,
+            pane_id: item.pane_id,
+            prompt: item.prompt,
+            summary: item.summary,
+            signals: item.signals,
+        },
+        Instant::now() - Duration::from_secs(1),
+    );
+    let retried = bridge.drain_unpaused_prompts();
+    assert_eq!(retried.len(), 1, "a past retry time releases the wake");
+    assert_eq!(retried[0].pane_id, "p_sup");
 }
 
 #[test]

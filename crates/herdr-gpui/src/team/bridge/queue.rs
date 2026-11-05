@@ -5,6 +5,7 @@
 //! it was told to run.
 use super::{Bridge, QueuedPrompt, roster};
 use std::collections::HashSet;
+use std::time::Instant;
 
 /// A prompt to dispatch: the pane to wake, the prompt text, and the one-line
 /// summary the panel shows.
@@ -13,6 +14,7 @@ pub(super) type PromptDispatch = (String, String, String);
 /// A held prompt released for delivery, with the wake signals it reports so
 /// the window can mark them seen only after the delivery succeeds.
 pub(super) struct DrainedPrompt {
+    pub(super) team_id: String,
     pub(super) pane_id: String,
     pub(super) prompt: String,
     pub(super) summary: String,
@@ -31,6 +33,33 @@ impl Bridge {
         prompt: String,
         summary: String,
         signals: Vec<String>,
+    ) {
+        self.push_prompt(team_id, pane_id, prompt, summary, signals, Instant::now());
+    }
+
+    /// Puts a prompt the drain could not deliver back in the queue, to be
+    /// retried after `retry_at`. A wake is only worth dropping when it was
+    /// actually delivered, so an unreachable pane keeps its prompt instead of
+    /// swallowing it.
+    pub(super) fn requeue_prompt(&mut self, prompt: DrainedPrompt, retry_at: Instant) {
+        self.push_prompt(
+            prompt.team_id,
+            prompt.pane_id,
+            prompt.prompt,
+            prompt.summary,
+            prompt.signals,
+            retry_at,
+        );
+    }
+
+    fn push_prompt(
+        &mut self,
+        team_id: String,
+        pane_id: String,
+        prompt: String,
+        summary: String,
+        signals: Vec<String>,
+        retry_at: Instant,
     ) {
         // A wake that is still held must not be queued twice: the event path
         // and the periodic fallback can both offer the same unseen result
@@ -53,6 +82,7 @@ impl Bridge {
             prompt,
             summary,
             signals,
+            retry_at,
         });
     }
 
@@ -76,6 +106,7 @@ impl Bridge {
         if self.is_team_paused() {
             return Vec::new();
         }
+        let now = Instant::now();
         let team_id = team.team_id.as_str();
         let paused_panes: HashSet<String> = roster(team)
             .filter(|m| self.paused_members.contains(&m.member_id))
@@ -85,10 +116,11 @@ impl Bridge {
         let mut held = Vec::new();
         for item in self.queued_prompts.drain(..) {
             if item.team_id == team_id {
-                if paused_panes.contains(&item.pane_id) {
+                if paused_panes.contains(&item.pane_id) || item.retry_at > now {
                     held.push(item);
                 } else {
                     ready.push(DrainedPrompt {
+                        team_id: item.team_id,
                         pane_id: item.pane_id,
                         prompt: item.prompt,
                         summary: item.summary,

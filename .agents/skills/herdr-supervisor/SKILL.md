@@ -28,6 +28,27 @@ task automatic once it lands; until then the supervisor authors tasks by hand
 and references the issue. Closing an issue is always a deliberate act after
 LIVE verification - never on task-done alone.
 
+## Backlog-first sessions
+
+The full playbook, brief template, review checklist, CI triage, and a 300M-token
+budget plan live in [`docs/herding-playbook.md`](../../../docs/herding-playbook.md).
+The short version:
+
+1. Seed or refresh the backlog before assigning anything. Every issue carries
+   problem, current state, a done-when checklist, and file references.
+2. Assign three independent issues per batch, one per worker. The brief is the
+   contract: scope, constraints, exact verification commands, and "no commit".
+3. Review the diff, run the checks yourself, and request follow-ups for real
+   defects. A completion report is a claim until you see the output.
+4. Commit in logical batches by area, push, watch CI, and fix failures before
+   the next batch. Close an issue only when the shipped behavior matches its
+   done-when list; leave partial issues open with what remains.
+5. Stop at a clean checkpoint when the budget runs low: tree clean, tests
+   green, issues commented, workers paused.
+
+Do not let a batch leave a large uncommitted tree. A clean tree at every
+checkpoint is the safety valve for a long session.
+
 ## The supervision loop
 
 1. On a wake: read the bulletin, `team bulletin ack` it.

@@ -125,6 +125,10 @@ pub(super) struct QueuedPrompt {
     pub(super) pane_id: String,
     pub(super) prompt: String,
     pub(super) summary: String,
+    /// Wake signals this prompt reports. Empty for prompts that carry no
+    /// ledger entry (bulletin mentions, action prompts). A held prompt keeps
+    /// them so the drain can mark them seen only once it actually delivers.
+    pub(super) signals: Vec<String>,
 }
 
 impl Bridge {
@@ -177,9 +181,10 @@ impl Bridge {
             .is_some_and(|ledger| ledger.iter().any(|seen| seen == signal))
     }
 
-    /// Records that a wake reached the supervisor (or is held for it), so
-    /// neither the event path nor the fallback repeats it. Unavailable or
-    /// failed dispatches are not recorded: the work stays pending.
+    /// Records that a wake actually reached the supervisor, so neither the
+    /// event path nor the fallback repeats it. Unavailable, failed, or merely
+    /// held dispatches are not recorded: the work stays pending and a held
+    /// prompt carries its signals until the drain delivers it.
     pub(crate) fn mark_supervisor_woken(
         &mut self,
         team_id: &str,
@@ -196,6 +201,32 @@ impl Bridge {
             }
             ledger.push_back(signal.to_owned());
         }
+    }
+
+    /// Test-only: show `team` as the selected team in this bridge.
+    #[cfg(test)]
+    pub(crate) fn set_team_for_test(&mut self, team: Team) {
+        self.selected = Some(team.team_id.clone());
+        self.team = Some(team);
+    }
+
+    /// Test-only: pause a member by id, as the roster's pause action does.
+    #[cfg(test)]
+    pub(crate) fn pause_member_for_test(&mut self, member_id: &str) {
+        self.paused_members.insert(member_id.to_owned());
+    }
+
+    /// Test-only: clear every team and member pause.
+    #[cfg(test)]
+    pub(crate) fn unpause_all_for_test(&mut self) {
+        self.paused_members.clear();
+        self.paused_teams.clear();
+    }
+
+    /// Test-only: how many prompts wait for an unpaused pane.
+    #[cfg(test)]
+    pub(crate) fn queued_count_for_test(&self) -> usize {
+        self.queued_count()
     }
 
     /// The periodic check behind supervisor follow-through: at most one

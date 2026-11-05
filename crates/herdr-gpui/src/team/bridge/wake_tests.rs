@@ -59,20 +59,21 @@ fn board() -> Bridge {
     }
 }
 
-/// The window's own wake step: ask the bridge, mark the result as reported, and
-/// queue the prompt for the supervisor's pane.
+/// The window's own wake step: ask the bridge, queue the prompt for the
+/// supervisor's pane with its signals, and do NOT mark it seen. A held wake is
+/// recorded only when the drain actually delivers it.
 fn queue_wake(bridge: &mut Bridge) -> SupervisorWake {
     bridge.last_fallback = None;
     let wake = match bridge.supervisor_fallback_due(Instant::now()) {
         Some(wake) => wake,
         None => panic!("expected a supervisor wake"),
     };
-    bridge.mark_supervisor_woken(&wake.team_id, wake.signals.clone());
     bridge.enqueue_prompt(
         wake.team_id.clone(),
         wake.pane_id.clone(),
         wake.prompt.clone(),
         wake.summary.clone(),
+        wake.signals.clone(),
     );
     wake
 }
@@ -84,21 +85,47 @@ fn a_wake_held_for_a_paused_supervisor_arrives_once_when_the_pane_resumes() {
     let wake = queue_wake(&mut bridge);
     assert_eq!(wake.pane_id, "p_sup");
     assert_eq!(bridge.queued_count(), 1, "the wake waits for its pane");
+    assert!(
+        !bridge.wake_seen(&wake.team_id, &wake.signals[0]),
+        "a held wake is not marked seen"
+    );
 
     assert!(
         bridge.drain_unpaused_prompts().is_empty(),
         "a paused supervisor pane is not woken"
     );
 
+    // While the wake is still held and unrecorded, the fallback can offer it
+    // again; the queue must not grow a duplicate.
+    bridge.last_fallback = None;
+    assert!(
+        bridge.supervisor_fallback_due(Instant::now()).is_some(),
+        "a held wake stays pending for the fallback"
+    );
+    queue_wake(&mut bridge);
+    assert_eq!(
+        bridge.queued_count(),
+        1,
+        "a still-held wake is queued once, not once per offer"
+    );
+
     bridge.paused_members.clear();
     let delivered = bridge.drain_unpaused_prompts();
     assert_eq!(delivered.len(), 1, "unpausing delivers the held wake");
-    let (pane, prompt, summary) = &delivered[0];
-    assert_eq!(pane, "p_sup");
+    assert_eq!(delivered[0].pane_id, "p_sup");
     assert!(
-        prompt.contains("report 10") && summary.contains("unseen"),
-        "the wake names the result it is about: {prompt:?} / {summary:?}"
+        delivered[0].prompt.contains("report 10") && delivered[0].summary.contains("unseen"),
+        "the wake names the result it is about: {:?} / {:?}",
+        delivered[0].prompt,
+        delivered[0].summary
     );
+    assert_eq!(
+        delivered[0].signals, wake.signals,
+        "the held prompt carries its wake signals"
+    );
+
+    // The window marks the signal only after the delivery succeeds.
+    bridge.mark_supervisor_woken(&wake.team_id, delivered[0].signals.clone());
     assert!(
         bridge.drain_unpaused_prompts().is_empty(),
         "a held wake is delivered once, not every tick after it"
@@ -124,13 +151,19 @@ fn a_team_pause_holds_a_wake_and_unpausing_releases_it() {
     bridge.last_fallback = None;
     assert!(
         bridge.supervisor_fallback_due(Instant::now()).is_none(),
-        "the held wake already counted as reported, so pausing does not re-offer it"
+        "a paused team offers no fallback wake"
     );
 
     bridge.paused_teams.clear();
     let delivered = bridge.drain_unpaused_prompts();
     assert_eq!(delivered.len(), 1, "the team's wake waits out its pause");
-    assert_eq!(delivered[0].0, wake.pane_id);
+    assert_eq!(delivered[0].pane_id, wake.pane_id);
+    bridge.mark_supervisor_woken(&wake.team_id, delivered[0].signals.clone());
+    bridge.last_fallback = None;
+    assert!(
+        bridge.supervisor_fallback_due(Instant::now()).is_none(),
+        "the delivered wake is marked reported"
+    );
 }
 
 #[test]
@@ -217,10 +250,7 @@ fn held_wakes_are_bounded_and_the_oldest_is_the_one_dropped() {
     bridge.paused_members.clear();
     let delivered = bridge.drain_unpaused_prompts();
     assert_eq!(delivered.len(), PAUSE_QUEUE_CAPACITY);
-    let prompts: Vec<&str> = delivered
-        .iter()
-        .map(|(_, prompt, _)| prompt.as_str())
-        .collect();
+    let prompts: Vec<&str> = delivered.iter().map(|item| item.prompt.as_str()).collect();
     let newest = format!("report {}", 10 + PAUSE_QUEUE_CAPACITY);
     let oldest = "report 10".to_string();
     assert!(

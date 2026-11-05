@@ -4,15 +4,15 @@ use crate::control::server::team_worker::Reply;
 use gpui::App;
 use herdr_orchestrator::team_store::{Author, Task, TaskStatus, Team};
 
-/// One prompt prepared from a durable team mutation. `signal` marks a
-/// supervisor result wake: the window bridge dedupes on it so an event and
+/// One prompt prepared from a durable team mutation. `signals` marks a
+/// supervisor result wake: the window bridge dedupes on them so an event and
 /// the periodic fallback deliver each result once.
 pub(crate) struct TeamDispatch {
     pub(crate) team_id: String,
     pub(crate) pane_id: String,
     pub(crate) prompt: String,
     pub(crate) summary: String,
-    pub(crate) signal: Option<String>,
+    pub(crate) signals: Vec<String>,
 }
 
 pub(super) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
@@ -28,8 +28,11 @@ pub(super) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
                     if view.team_session_dead(&dispatch.pane_id) {
                         continue;
                     }
-                    if let Some(signal) = &dispatch.signal
-                        && view.team_bridge.wake_seen(&dispatch.team_id, signal)
+                    if !dispatch.signals.is_empty()
+                        && dispatch
+                            .signals
+                            .iter()
+                            .all(|signal| view.team_bridge.wake_seen(&dispatch.team_id, signal))
                     {
                         continue;
                     }
@@ -38,17 +41,16 @@ pub(super) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
                         &dispatch.pane_id,
                         dispatch.prompt.clone(),
                         dispatch.summary.clone(),
+                        dispatch.signals.clone(),
                         cx,
                     );
-                    if let Some(signal) = &dispatch.signal
-                        && matches!(
-                            outcome,
-                            crate::team::bridge::prompts::PromptOutcome::Sent
-                                | crate::team::bridge::prompts::PromptOutcome::Held
-                        )
+                    // A held or undeliverable wake is not recorded: the queued
+                    // prompt or the fallback still carries it.
+                    if matches!(outcome, crate::team::bridge::prompts::PromptOutcome::Sent)
+                        && !dispatch.signals.is_empty()
                     {
                         view.team_bridge
-                            .mark_supervisor_woken(&dispatch.team_id, [signal]);
+                            .mark_supervisor_woken(&dispatch.team_id, dispatch.signals.clone());
                     }
                 }
             }
@@ -79,7 +81,7 @@ pub(super) fn prompts_for_scoped_reply(reply: &Reply) -> Vec<TeamDispatch> {
                             m.display_name, post.post_id, post.body, post.post_id, post.post_id
                         ),
                         summary: format!("{author_name} mentioned @{} ({pane_id})", m.display_name),
-                        signal: None,
+                        signals: Vec::new(),
                     })
                 })
                 .collect()
@@ -106,7 +108,7 @@ pub(super) fn prompts_for_scoped_reply(reply: &Reply) -> Vec<TeamDispatch> {
                             m.display_name, task.task_id, task.title, task.task_id, task.task_id
                         ),
                         summary: format!("Assigned task \"{}\" to {} ({pane_id})", task.title, m.display_name),
-                        signal: Some(assignee_signal(task)),
+                        signals: vec![assignee_signal(task)],
                     })
                 })
                 .into_iter()
@@ -187,6 +189,6 @@ fn supervisor_wake(team: &Team, task: &Task) -> Vec<TeamDispatch> {
             task.task_id, task.title
         ),
         summary,
-        signal: Some(crate::team::bridge::prompts::wake_signal(task)),
+        signals: vec![crate::team::bridge::prompts::wake_signal(task)],
     }]
 }

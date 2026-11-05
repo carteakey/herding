@@ -120,6 +120,7 @@ fn pause_queue_is_bounded_and_scoped_per_team() {
             format!("pane-{i}"),
             format!("prompt-{i}"),
             format!("summary-{i}"),
+            Vec::new(),
         );
     }
     assert_eq!(bridge.queued_prompts.len(), PAUSE_QUEUE_CAPACITY);
@@ -138,6 +139,7 @@ fn drain_unpaused_prompts_retains_prompts_when_team_is_none() {
         "p1".into(),
         "prompt1".into(),
         "summary1".into(),
+        Vec::new(),
     );
     assert_eq!(bridge.team, None);
     let drained = bridge.drain_unpaused_prompts();
@@ -172,6 +174,7 @@ fn select_team_does_not_flush_paused_prompts() {
         "p1".into(),
         "prompt1".into(),
         "summary1".into(),
+        Vec::new(),
     );
 
     bridge.act(

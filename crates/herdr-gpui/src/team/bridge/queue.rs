@@ -10,6 +10,15 @@ use std::collections::HashSet;
 /// summary the panel shows.
 pub(super) type PromptDispatch = (String, String, String);
 
+/// A held prompt released for delivery, with the wake signals it reports so
+/// the window can mark them seen only after the delivery succeeds.
+pub(super) struct DrainedPrompt {
+    pub(super) pane_id: String,
+    pub(super) prompt: String,
+    pub(super) summary: String,
+    pub(super) signals: Vec<String>,
+}
+
 /// Prompts waiting for the reply that confirms the operation that produced
 /// them, oldest first so a worker that never answers drops them.
 pub(super) type HeldPrompts = std::collections::VecDeque<(u64, Vec<PromptDispatch>)>;
@@ -21,7 +30,20 @@ impl Bridge {
         pane_id: String,
         prompt: String,
         summary: String,
+        signals: Vec<String>,
     ) {
+        // A wake that is still held must not be queued twice: the event path
+        // and the periodic fallback can both offer the same unseen result
+        // while the pane stays paused. Prompts without a signal (mentions,
+        // action prompts) are not deduped because their text may legitimately
+        // repeat.
+        if !signals.is_empty()
+            && self.queued_prompts.iter().any(|queued| {
+                queued.team_id == team_id && queued.pane_id == pane_id && queued.signals == signals
+            })
+        {
+            return;
+        }
         if self.queued_prompts.len() >= super::PAUSE_QUEUE_CAPACITY {
             self.queued_prompts.remove(0);
         }
@@ -30,6 +52,7 @@ impl Bridge {
             pane_id,
             prompt,
             summary,
+            signals,
         });
     }
 
@@ -46,7 +69,7 @@ impl Bridge {
 
     /// Prompts queued for this team whose pane is no longer paused. A paused
     /// pane keeps its prompts; another team's keeps its own.
-    pub(super) fn drain_unpaused_prompts(&mut self) -> Vec<PromptDispatch> {
+    pub(super) fn drain_unpaused_prompts(&mut self) -> Vec<DrainedPrompt> {
         let Some(team) = self.team.as_ref() else {
             return Vec::new();
         };
@@ -65,7 +88,12 @@ impl Bridge {
                 if paused_panes.contains(&item.pane_id) {
                     held.push(item);
                 } else {
-                    ready.push((item.pane_id, item.prompt, item.summary));
+                    ready.push(DrainedPrompt {
+                        pane_id: item.pane_id,
+                        prompt: item.prompt,
+                        summary: item.summary,
+                        signals: item.signals,
+                    });
                 }
             } else {
                 held.push(item);

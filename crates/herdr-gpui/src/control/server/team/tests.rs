@@ -363,32 +363,36 @@ fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
 
 /// A done task completed by its worker on a team whose supervisor pane is
 /// `p_sup`, which the fixture window's daemon does not show.
+fn supervisor_wake_team() -> Team {
+    Team {
+        team_id: "t-x".into(),
+        name: "wake-test".into(),
+        supervisor: Member {
+            member_id: "m_sup".into(),
+            display_name: "supervisor".into(),
+            target: SessionTarget {
+                host: "local".into(),
+                session: "default".into(),
+                workspace: Some("w1X".into()),
+                pane: Some("p_sup".into()),
+            },
+        },
+        members: vec![Member {
+            member_id: "m_w1".into(),
+            display_name: "worker1".into(),
+            target: SessionTarget {
+                host: "local".into(),
+                session: "default".into(),
+                workspace: Some("w1X".into()),
+                pane: Some("w1X:p9".into()),
+            },
+        }],
+    }
+}
+
 fn supervisor_wake_reply() -> Reply {
     Reply::ScopedTask {
-        team: Team {
-            team_id: "t-x".into(),
-            name: "wake-test".into(),
-            supervisor: Member {
-                member_id: "m_sup".into(),
-                display_name: "supervisor".into(),
-                target: SessionTarget {
-                    host: "local".into(),
-                    session: "default".into(),
-                    workspace: Some("w1X".into()),
-                    pane: Some("p_sup".into()),
-                },
-            },
-            members: vec![Member {
-                member_id: "m_w1".into(),
-                display_name: "worker1".into(),
-                target: SessionTarget {
-                    host: "local".into(),
-                    session: "default".into(),
-                    workspace: Some("w1X".into()),
-                    pane: Some("w1X:p9".into()),
-                },
-            }],
-        },
+        team: supervisor_wake_team(),
         task: Task {
             task_id: "task9".into(),
             team_id: "t-x".into(),
@@ -467,6 +471,74 @@ fn supervisor_wake_on_unreachable_pane_stays_pending_and_honest(cx: &mut gpui::T
         .expect("window open");
 }
 
+#[gpui::test]
+fn a_held_wake_is_recorded_only_after_it_is_delivered(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    let reply = supervisor_wake_reply();
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+            view.team_bridge.pause_member_for_test("m_sup");
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the paused supervisor's wake is held"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "a held wake is not recorded as delivered"
+            );
+        })
+        .expect("window open");
+
+    // The pause clears; the drain delivers to the reachable supervisor pane
+    // and only then records the signal.
+    window
+        .update(cx, |view, _, cx| {
+            view.team_bridge.unpause_all_for_test();
+            view.dispatch_drained_team_prompts(cx);
+        })
+        .expect("window open");
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                0,
+                "the held wake is released once"
+            );
+            assert!(
+                view.team_bridge.wake_seen("t-x", signal),
+                "a delivered wake is recorded"
+            );
+        })
+        .expect("window open");
+
+    // A repeated event and a further tick deliver nothing further.
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, cx| {
+            view.dispatch_drained_team_prompts(cx);
+            assert_eq!(view.team_bridge.queued_count_for_test(), 0);
+        })
+        .expect("window open");
+}
+
 fn worker_actor() -> Author {
     Author::Member {
         member_id: "m_w1".into(),
@@ -535,7 +607,7 @@ fn completed_task_wakes_supervisor_with_result_and_signal() {
     assert!(dispatch.prompt.contains("Report drafted and reviewed"));
     assert!(dispatch.prompt.contains("task list t1"));
     assert!(dispatch.prompt.contains("go idle"));
-    assert_eq!(dispatch.signal.as_deref(), Some("task1|done|10000"));
+    assert_eq!(dispatch.signals, vec!["task1|done|10000"]);
 }
 
 #[test]
@@ -586,8 +658,8 @@ fn open_task_wakes_the_assignee_with_a_dedupe_signal() {
     assert_eq!(dispatches.len(), 1);
     assert_eq!(dispatches[0].pane_id, "p_w1");
     assert_eq!(
-        dispatches[0].signal.as_deref(),
-        Some("assignee|task1|m_w1|10000"),
+        dispatches[0].signals,
+        vec!["assignee|task1|m_w1|10000"],
         "the wake dedupes on one stored assignment state"
     );
 }
@@ -606,7 +678,7 @@ fn a_reassigned_task_wakes_once_per_assignment_state() {
         task: wake_task(TaskStatus::Open),
         actor: worker_actor(),
     });
-    assert_eq!(first[0].signal, redelivered[0].signal);
+    assert_eq!(first[0].signals, redelivered[0].signals);
 
     // A genuine re-assign is a new state: a new signal, one further wake.
     let mut reassigned = wake_task(TaskStatus::Open);
@@ -616,7 +688,7 @@ fn a_reassigned_task_wakes_once_per_assignment_state() {
         task: reassigned,
         actor: worker_actor(),
     });
-    assert_ne!(first[0].signal, again[0].signal);
+    assert_ne!(first[0].signals, again[0].signals);
 }
 
 #[test]

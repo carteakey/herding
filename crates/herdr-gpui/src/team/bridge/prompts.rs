@@ -113,7 +113,7 @@ impl HerdrWindow {
         let mut focus = None;
         // Prompts whose write the store confirmed since the last tick: an agent
         // is told about a row only once the row exists.
-        let mut prompts = bridge.take_released_prompts();
+        let prompts = bridge.take_released_prompts();
         let mut spawn_agents = Vec::new();
         let mut split_pane = false;
         for action in actions {
@@ -142,30 +142,34 @@ impl HerdrWindow {
                     if bridge.warning.is_none() {
                         bridge.hold_prompts_for_action(dispatches);
                     }
-                    prompts.extend(bridge.drain_unpaused_prompts());
                 }
             }
         }
+        // A held wake is retried every tick, not only when an action happens
+        // to run: the pause can clear from another window or when a session
+        // returns. The queue keeps it until its pane is unpaused.
         if shown
             && let Some(team_id) = bridge.selected.clone()
             && bridge.last_refresh.is_none_or(|at| at.elapsed() >= REFRESH)
         {
             bridge.refresh(&team_id);
         }
+        self.dispatch_drained_team_prompts(cx);
         // The bounded periodic supervisor check: only the shown team, only
         // unseen results, at most one attempt per SUPERVISOR_FALLBACK.
         if shown && let Some(wake) = self.team_bridge.supervisor_fallback_due(Instant::now()) {
             let team_id = wake.team_id.clone();
+            let signals = wake.signals.clone();
             let outcome = self.enqueue_or_dispatch_team_prompt(
                 Some(team_id.as_str()),
                 &wake.pane_id,
                 wake.prompt,
                 wake.summary,
+                signals.clone(),
                 cx,
             );
-            if matches!(outcome, PromptOutcome::Sent | PromptOutcome::Held) {
-                self.team_bridge
-                    .mark_supervisor_woken(&team_id, wake.signals);
+            if matches!(outcome, PromptOutcome::Sent) {
+                self.team_bridge.mark_supervisor_woken(&team_id, signals);
             }
         }
         for agent in spawn_agents {
@@ -181,6 +185,7 @@ impl HerdrWindow {
                 &pane_id,
                 prompt,
                 summary,
+                Vec::new(),
                 cx,
             );
         }
@@ -219,12 +224,37 @@ impl HerdrWindow {
         }
     }
 
+    /// Dispatches prompts whose pause cleared since the last tick. A wake is
+    /// recorded only when it actually reaches the agent; a prompt held again
+    /// or undeliverable stays unseen for the next tick or the fallback.
+    pub(crate) fn dispatch_drained_team_prompts(&mut self, cx: &mut Context<Self>) {
+        let drained = self.team_bridge.drain_unpaused_prompts();
+        for item in drained {
+            let outcome = self.enqueue_or_dispatch_team_prompt(
+                None,
+                &item.pane_id,
+                item.prompt,
+                item.summary,
+                item.signals.clone(),
+                cx,
+            );
+            if matches!(outcome, PromptOutcome::Sent)
+                && !item.signals.is_empty()
+                && let Some(team_id) = self.team_bridge.current_team_id().map(ToOwned::to_owned)
+            {
+                self.team_bridge
+                    .mark_supervisor_woken(&team_id, item.signals);
+            }
+        }
+    }
+
     pub(crate) fn enqueue_or_dispatch_team_prompt(
         &mut self,
         team_id: Option<&str>,
         pane_id: &str,
         prompt: String,
         summary: String,
+        signals: Vec<String>,
         cx: &mut Context<Self>,
     ) -> PromptOutcome {
         let team_id = team_id
@@ -236,6 +266,7 @@ impl HerdrWindow {
                 pane_id.to_owned(),
                 prompt,
                 summary,
+                signals,
             );
             let held = self.team_bridge.queued_count();
             self.team_bridge.last_activity =

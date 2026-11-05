@@ -104,3 +104,47 @@ switch or session end:
 - A lost supervisor (quota, crash) is replaced by a new session: run
   `team status` first, verify board state against git, then post a handover
   bulletin before assigning anything.
+- Bulletin text must not contain a literal `@word` unless it names a member:
+  the post is refused ("does not match any member"). Write "names no one",
+  not the @-prefixed shorthand.
+- Team ops are served by the **UI app** process (the owner of
+  `~/.local/state/herdr/gpui/control.sock`), not the `herdr server` daemon. A
+  rebuilt binary changes nothing until the UI quits and relaunches; peer
+  bindings are in-memory in that process, so the restart also clears them.
+- `cargo` is not on PATH in agent tool shells; `source ~/.cargo/env` first.
+
+## Convergence: rebuild -> UI restart -> re-register
+
+The auth chain behind every team call (issue #3, fixed 2026-11-04):
+SO_PEERCRED hardening (`de071476`) bound calls to the registering process's
+exact pid, which locked out every CLI agent - each invocation is a fresh
+process. `59b75ae8` + `213da526` fixed the semantics (record the pane's
+agent process, accept it or any descendant, `started_ticks` defeats pid
+reuse), and `e9dc1ea9` fixed the anchor (`agent_lineage` walked for the
+FIRST ancestor whose cmdline carries the agent kind; a ZCode tool shell runs
+`zsh -c . '~/.zcode/cli/...'`, carries the agent kind itself, dies after one
+command - the walk now continues through consecutive matches and anchors the
+topmost before the ancestry leaves the agent's process family). Regression
+arms for all three live in `crates/herdr-gpui/src/control/server/team/tests.rs`.
+
+When a rebuilt binary must take effect:
+
+1. `herdr-gpui app quit` - safe: panes descend from the `herdr server`
+   daemon (checked via `/proc` ppid walk), not the UI; agent sessions
+   survive.
+2. Relaunch detached with the old UI's display env, captured first from
+   `/proc/<old-pid>/environ` (DISPLAY, WAYLAND_DISPLAY, XAUTHORITY,
+   XDG_RUNTIME_DIR): `setsid env ... nohup <binary> >>log 2>&1 < /dev/null &`.
+3. Every member runs `team register <TEAM_ID> --name <name>` from their own
+   pane - the new lineage walk then pins their agent process, and all later
+   fresh invocations descend from it.
+4. Verify with one team call from a fresh process before posting anything.
+
+## Wake verification
+
+Dispatch-on-assign (`8b0e9a54`) is verified live (2026-11-04, team herding):
+both workers claimed assigned tasks within minutes, no manual nudge. To
+re-verify after dispatch-path changes, assign a real task and post the
+kickoff bulletin deliberately without member names - if the assignment wake
+works, nobody needs a nudge; if it does not, the nudge is also evidence.
+Record wake latency and mechanism in the worker's task result, not in chat.

@@ -143,6 +143,12 @@ pub(super) fn task_info(task: Task, team: &Team) -> TaskInfo {
         status,
         blocker_reason: task.blocker_reason,
         result: task.result,
+        created_at: task
+            .created_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        updated_at: task
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     }
 }
 

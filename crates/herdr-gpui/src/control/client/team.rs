@@ -82,6 +82,11 @@ fn task_line(task: &TaskInfo) -> String {
     if let Some(result) = &task.result {
         let _ = write!(line, "  result: {result}");
     }
+    let _ = write!(
+        line,
+        "  created {}  updated {}",
+        task.created_at, task.updated_at
+    );
     line
 }
 

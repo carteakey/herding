@@ -201,6 +201,8 @@ fn task_finding_and_status_wire_forms_round_trip() {
         status: TaskState::InProgress,
         blocker_reason: None,
         result: None,
+        created_at: "2026-11-05T00:17:02.615Z".into(),
+        updated_at: "2026-11-05T00:22:46.556Z".into(),
     };
     let finding = FindingInfo {
         id: "find-1".into(),

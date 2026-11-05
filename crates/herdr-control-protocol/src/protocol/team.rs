@@ -260,6 +260,11 @@ pub struct TaskInfo {
     pub status: TaskState,
     pub blocker_reason: Option<String>,
     pub result: Option<String>,
+    /// Creation time as RFC 3339 with milliseconds, so a caller can measure
+    /// assignment-to-wake latency from the CLI alone.
+    pub created_at: String,
+    /// Last lifecycle transition time as RFC 3339 with milliseconds.
+    pub updated_at: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

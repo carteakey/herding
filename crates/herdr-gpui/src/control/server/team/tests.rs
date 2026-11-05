@@ -591,6 +591,13 @@ fn wake_team() -> Team {
 }
 
 #[test]
+fn task_info_carries_created_and_updated_timestamps() {
+    let info = projection::task_info(wake_task(TaskStatus::Open), &wake_team());
+    assert_eq!(info.created_at, "1970-01-01T00:00:00.000Z");
+    assert_eq!(info.updated_at, "1970-01-01T00:00:10.000Z");
+}
+
+#[test]
 fn completed_task_wakes_supervisor_with_result_and_signal() {
     let mut task = wake_task(TaskStatus::Done);
     task.result = Some("Report drafted and reviewed".into());

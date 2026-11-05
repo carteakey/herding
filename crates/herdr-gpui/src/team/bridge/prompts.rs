@@ -318,7 +318,12 @@ impl HerdrWindow {
         let team_id = team_id
             .or_else(|| self.team_bridge.current_team_id())
             .unwrap_or_default();
-        if self.team_bridge.is_pane_paused_for_team(team_id, pane_id) {
+        // A wake pasted into a busy agent is cleared when its turn ends, so
+        // hold it until the pane is idle. The drain retries it on a later
+        // tick, which is also how an assignment survives a busy worker.
+        if self.team_bridge.is_pane_paused_for_team(team_id, pane_id)
+            || self.team_pane_busy(pane_id)
+        {
             self.team_bridge.enqueue_prompt(
                 team_id.to_owned(),
                 pane_id.to_owned(),
@@ -328,7 +333,7 @@ impl HerdrWindow {
             );
             let held = self.team_bridge.queued_count();
             self.team_bridge.last_activity =
-                Some(format!("Held prompt for paused pane {pane_id} ({held} queued)").into());
+                Some(format!("Held prompt for {pane_id} ({held} queued)").into());
             self.team_bridge.dirty = true;
             return PromptOutcome::Held;
         }

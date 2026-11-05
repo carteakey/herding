@@ -616,6 +616,57 @@ fn a_wake_waits_for_a_busy_agent_to_finish_its_turn(cx: &mut gpui::TestAppContex
         .expect("window open");
 }
 
+#[gpui::test]
+fn a_wake_to_a_busy_pane_is_held_until_it_is_idle(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    let reply = supervisor_wake_reply();
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+        })
+        .expect("window open");
+
+    // The event path must hold for a busy pane too, not only the drain.
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a busy pane holds the event wake"
+            );
+            assert!(!view.team_bridge.wake_seen("t-x", signal));
+        })
+        .expect("window open");
+
+    window
+        .update(cx, |view, _, cx| {
+            view.live.snapshot = Some(Arc::new(snapshot_with_status(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+                "idle",
+            )));
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts(cx);
+            assert_eq!(view.team_bridge.queued_count_for_test(), 0);
+            assert!(view.team_bridge.wake_seen("t-x", signal));
+        })
+        .expect("window open");
+}
+
 fn worker_actor() -> Author {
     Author::Member {
         member_id: "m_w1".into(),

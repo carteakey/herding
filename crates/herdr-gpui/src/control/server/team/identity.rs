@@ -334,32 +334,41 @@ fn proc_cmdline(pid: u32) -> Option<String> {
 const LINEAGE_CAP: usize = 16;
 
 /// Anchors the agent process for a registering CLI on Linux: walks the
-/// caller's ancestry and returns the first ancestor whose command line
-/// carries the agent `kind`. Shells in between carry their own command
-/// line, not the agent's name, so the first match is the agent; the start
-/// time recorded alongside excludes a reused pid. This is the fallback when
-/// the UI's discovered process bindings name no process for the pane.
+/// caller's ancestry and returns the topmost ancestor whose command line
+/// carries the agent `kind`. A wrapping tool shell can carry the agent's
+/// name in its own command line (a ZCode snapshot shell runs `zsh -c
+/// . '~/.zcode/cli/...'`), so the first match is not necessarily the agent
+/// and every later CLI call would miss it; the walk therefore continues
+/// through consecutive matches and stops at the first non-matching
+/// ancestor above the agent's process family, where the start time
+/// recorded alongside excludes a reused pid. This is the fallback when the
+/// UI's discovered process bindings name no process for the pane.
 #[cfg(target_os = "linux")]
 pub(crate) fn agent_lineage(pid: u32, kind: &str) -> Option<ProcessIdentity> {
     let kind = kind.to_lowercase();
     let mut current = pid;
+    let mut anchored: Option<ProcessIdentity> = None;
     for _ in 0..LINEAGE_CAP {
         if let Some(line) = proc_cmdline(current)
             && line.contains(&kind)
             && let Some((_, started)) = process_info(current)
         {
-            return Some(ProcessIdentity {
+            anchored = Some(ProcessIdentity {
                 pid: current,
                 started_ticks: Some(started),
             });
+        } else if anchored.is_some() {
+            // The ancestry left the agent's process family; the last
+            // consecutive match is the agent the later calls descend from.
+            return anchored;
         }
         let (parent, _) = process_info(current)?;
         if parent <= 1 {
-            return None;
+            return anchored;
         }
         current = parent;
     }
-    None
+    anchored
 }
 
 #[cfg(not(target_os = "linux"))]

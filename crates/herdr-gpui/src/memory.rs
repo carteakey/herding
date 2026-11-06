@@ -81,9 +81,9 @@ fn guard_transition(total_kib: u64, limit_kib: Option<u64>, armed: bool) -> (boo
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(target_os = "linux")]
     use super::sampler::{holder_dump, parse_status, self_status};
+    use super::*;
 
     #[test]
     fn a_gauge_is_the_same_counter_for_the_same_name() {

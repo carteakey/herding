@@ -1044,16 +1044,17 @@ mod lineage {
         let wrapper_pid: u32 = line.trim().parse().expect("the wrapper's pid is printed");
 
         let cmdline = |pid: u32| {
-            String::from_utf8_lossy(&std::fs::read(format!("/proc/{pid}/cmdline")).expect(
-                "the process is still alive for its command line to be read",
-            ))
+            String::from_utf8_lossy(
+                &std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .expect("the process is still alive for its command line to be read"),
+            )
             .replace('\0', " ")
         };
         assert!(cmdline(wrapper_pid).contains(marker));
         assert!(cmdline(agent.id()).contains(marker));
 
-        let anchored = agent_lineage(wrapper_pid, marker)
-            .expect("a kind-carrying ancestor anchors the walk");
+        let anchored =
+            agent_lineage(wrapper_pid, marker).expect("a kind-carrying ancestor anchors the walk");
         assert_ne!(
             anchored.pid, wrapper_pid,
             "the ephemeral wrapper must not be the anchor (issue #3)"

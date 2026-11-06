@@ -45,6 +45,7 @@ impl Gauge {
         self.0.store(value, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     pub fn get(&self) -> u64 {
         self.0.load(Ordering::Relaxed)
     }
@@ -81,6 +82,8 @@ fn guard_transition(total_kib: u64, limit_kib: Option<u64>, armed: bool) -> (boo
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     #[cfg(target_os = "linux")]
     use super::sampler::{holder_dump, parse_status, self_status};
     use super::*;

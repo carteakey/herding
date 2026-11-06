@@ -958,6 +958,11 @@ impl Bridge {
     }
 
     pub(crate) fn snapshot(&self, candidates: &[PaneCandidate]) -> TeamSnapshot {
+        // Retained board sizes, so the memory sampler names a growing team
+        // view instead of only the process total.
+        crate::memory::gauge("team.posts").set(self.posts.len() as u64);
+        crate::memory::gauge("team.tasks").set(self.tasks.len() as u64);
+        crate::memory::gauge("team.findings").set(self.findings.len() as u64);
         let state = match (&self.failure, self.started) {
             (Some(message), _) => TeamLoadState::Failed(message.clone()),
             (None, false) => TeamLoadState::Loading,

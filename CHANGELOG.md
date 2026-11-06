@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. Issue-linked and host/machine marks arrive with the issue-ref
   persistence of the sync contract (issue #2), which is the data source
   they would render.
+- **Memory instrumentation for the app process (issue #12)**: a plain
+  sampler thread logs RSS and swap once per interval (`HERDR_MEMORY_SAMPLE_SECS`,
+  30s default) with the running high-water mark, subsystems can register
+  named gauges (`herdr_gpui::memory::gauge`) that the sampler embeds when
+  the mark advances, and a soft guard (`HERDR_MEMORY_SOFT_LIMIT_MB`, 4 GiB
+  default, 0 opts out) warns once per crossing with a dump of the process
+  tree and every gauge, so the next oomd kill is preceded by a log naming
+  the holder instead of a silent 7G peak.
 - **SSH Control Tunnel (`1b26ce05`)**:
   - `scripts/control-tunnel.sh`: forwards an SSH host's control socket path back to the local Herdr UI over a single `ssh -R` Unix socket forward (OpenSSH 6.7+, no socat, no TCP), so `herdr-gpui team ...` runs natively from panes on remote hosts with unmodified caller identity.
   - Preflight refuses a live remote UI, recovers stale remote sockets the way the app's own bind does, and passes ssh options through (`--ssh-arg`).

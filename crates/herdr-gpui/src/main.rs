@@ -89,6 +89,7 @@ mod listening_ports;
 mod log_targets;
 mod log_window;
 mod mark_layer;
+mod memory;
 mod menu;
 mod menus;
 mod merged_cleanup;

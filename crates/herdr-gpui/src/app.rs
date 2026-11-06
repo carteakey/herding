@@ -338,6 +338,8 @@ pub(crate) fn run() -> std::process::ExitCode {
     }
     // After the log, which a panic's record goes to.
     crate::crash::install(APP_VERSION);
+    // The sampler logs through the same log, so it starts after `init`.
+    crate::memory::install();
     // SSH children use the login shell's `ssh` and agent, as the daemon does:
     // launchd's would miss keys such as a security key held by another agent.
     herdr_client::set_command_environment(crate::login_env::apply);

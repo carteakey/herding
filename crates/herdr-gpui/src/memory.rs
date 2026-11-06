@@ -18,7 +18,6 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
 };
 
 static GAUGES: OnceLock<Mutex<BTreeMap<&'static str, Arc<AtomicU64>>>> = OnceLock::new();
@@ -83,6 +82,8 @@ fn guard_transition(total_kib: u64, limit_kib: Option<u64>, armed: bool) -> (boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use super::sampler::{holder_dump, parse_status, self_status};
 
     #[test]
     fn a_gauge_is_the_same_counter_for_the_same_name() {
@@ -155,9 +156,9 @@ mod sampler {
     const DEFAULT_SAMPLE_SECS: u64 = 30;
     /// Soft limit on RSS + swap when the environment names none, in MiB.
     /// The machine that died had 16G total and oomd acted at 90% of both
-    /// memory and swap; warning at a quarter of that leaves time to read
-    /// the dump.
-    const DEFAULT_SOFT_LIMIT_MB: u64 = 4096;
+    /// memory and swap; the app's own cgroup is capped at 3G, so trip well
+    /// below that cap to leave time to read the dump before the kernel acts.
+    const DEFAULT_SOFT_LIMIT_MB: u64 = 2048;
     /// Most processes the holder dump names; the tree is walked from the
     /// app outward, and the interesting growth is the app itself anyway.
     const MAX_HOLDERS: usize = 16;
@@ -249,13 +250,13 @@ mod sampler {
     }
 
     /// The process's own `VmRSS` and `VmSwap`, in KiB.
-    fn self_status() -> Option<(u64, u64)> {
+    pub(super) fn self_status() -> Option<(u64, u64)> {
         let text = std::fs::read_to_string("/proc/self/status").ok()?;
         parse_status(&text)
     }
 
     /// `VmRSS` and `VmSwap` out of a `/proc/<pid>/status` text, in KiB.
-    fn parse_status(text: &str) -> Option<(u64, u64)> {
+    pub(super) fn parse_status(text: &str) -> Option<(u64, u64)> {
         let mut rss = None;
         let mut swap = None;
         for line in text.lines() {
@@ -277,7 +278,7 @@ mod sampler {
 
     /// The app's process tree, self first then descendants, as one bounded
     /// line: the pid, its RSS in MiB, and a trimmed command line per holder.
-    fn holder_dump() -> String {
+    pub(super) fn holder_dump() -> String {
         let mut parents: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut residents: HashMap<u32, u64> = HashMap::new();
         let mut commands: HashMap<u32, String> = HashMap::new();

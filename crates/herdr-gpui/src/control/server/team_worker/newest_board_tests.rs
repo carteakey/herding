@@ -119,6 +119,7 @@ fn a_status_report_counts_tasks_past_one_page() {
         "t",
         &caller,
         ScopedAction::Status { team_id: None },
+        &[],
     )
     .unwrap()
     else {
@@ -139,7 +140,14 @@ fn a_status_report_issues_the_same_queries_whatever_the_task_count() {
 
     let count = |store: &mut TeamStore| {
         store.reset_statement_count();
-        let reply = scoped(store, "t", &caller, ScopedAction::Status { team_id: None }).unwrap();
+        let reply = scoped(
+            store,
+            "t",
+            &caller,
+            ScopedAction::Status { team_id: None },
+            &[],
+        )
+        .unwrap();
         let Reply::ScopedStatus { open_tasks, .. } = reply else {
             panic!("status reply expected");
         };
@@ -210,6 +218,7 @@ fn scoped_task_and_finding_lists_page_behind_a_cursor() {
             before: None,
             limit: page,
         },
+        &[],
     )
     .unwrap() else {
         panic!("tasks reply expected");
@@ -228,6 +237,7 @@ fn scoped_task_and_finding_lists_page_behind_a_cursor() {
             before: Some(before),
             limit: page,
         },
+        &[],
     )
     .unwrap() else {
         panic!("tasks reply expected");
@@ -250,6 +260,7 @@ fn scoped_task_and_finding_lists_page_behind_a_cursor() {
             before: None,
             limit: page,
         },
+        &[],
     )
     .unwrap()
     else {

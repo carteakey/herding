@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default, 0 opts out) warns once per crossing with a dump of the process
   tree and every gauge, so the next oomd kill is preceded by a log naming
   the holder instead of a silent 7G peak.
+- Registration survives a daemon restart (issue #11): the boot id a
+  member recorded is compared against the boots the window's connected
+  endpoints currently report, and a name holder whose boot is gone
+  re-binds to a caller that proves the same workspace and pane - member
+  id preserved, so supervisor status, assignments, and mention history
+  survive the restart without a hand-repaired store. A name claim from a
+  boot that is still live, or from a different pane, stays refused.
 - **SSH Control Tunnel (`1b26ce05`)**:
   - `scripts/control-tunnel.sh`: forwards an SSH host's control socket path back to the local Herdr UI over a single `ssh -R` Unix socket forward (OpenSSH 6.7+, no socat, no TCP), so `herdr-gpui team ...` runs natively from panes on remote hosts with unmodified caller identity.
   - Preflight refuses a live remote UI, recovers stale remote sockets the way the app's own bind does, and passes ssh options through (`--ssh-arg`).

@@ -25,7 +25,8 @@ mod projection;
 
 use dispatch::notify_team_mutation;
 use identity::{
-    PeerBindings, agent_lineage, check_peer, current_identity, pane_agents, process_info,
+    PeerBindings, agent_lineage, check_peer, current_identity, live_boot_ids, pane_agents,
+    process_info,
 };
 pub(crate) use identity::{ProcessIdentity, prove_pane_session_at};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
@@ -368,10 +369,19 @@ pub(super) fn serve(
                 | ScopedAction::TaskCancel { .. }
                 | ScopedAction::FindingAdd { .. }
         );
+        // Registration is the one call that may re-bind a stale name
+        // holder, so it carries the boots the window currently sees: a
+        // holder whose boot is gone was left behind by a daemon restart.
+        let live_hosts = if registering {
+            live_boot_ids(view)
+        } else {
+            Vec::new()
+        };
         let op = Operation::Scoped {
             team_id,
             caller: target,
             action,
+            live_hosts,
         };
         // Saturation and a stopped worker reach the caller through the watch
         // registered inside, so the result carries nothing more to report.

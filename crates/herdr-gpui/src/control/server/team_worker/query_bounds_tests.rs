@@ -98,7 +98,14 @@ fn a_status_report_issues_the_same_queries_whatever_the_post_count() {
 
     let count = |store: &mut TeamStore| {
         store.reset_statement_count();
-        let reply = scoped(store, "t", &caller, ScopedAction::Status { team_id: None }).unwrap();
+        let reply = scoped(
+            store,
+            "t",
+            &caller,
+            ScopedAction::Status { team_id: None },
+            &[],
+        )
+        .unwrap();
         let Reply::ScopedStatus {
             pending_mentions, ..
         } = reply

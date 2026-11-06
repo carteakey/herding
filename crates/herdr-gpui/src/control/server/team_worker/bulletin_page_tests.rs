@@ -55,6 +55,7 @@ fn list(store: &mut TeamStore, after: Option<i64>) -> (Vec<i64>, Option<i64>) {
             pane: Some("p2".into()),
         },
         ScopedAction::BulletinList { after, limit: 100 },
+        &[],
     )
     .unwrap() else {
         panic!("expected a bulletin");

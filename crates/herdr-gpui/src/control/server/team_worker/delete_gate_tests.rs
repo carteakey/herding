@@ -146,6 +146,7 @@ fn a_board_full_of_command_line_work_leaves_the_team_and_its_members() {
                 team_id: "t".into(),
                 caller: worker.clone(),
                 action,
+                live_hosts: Vec::new(),
             },
         );
     }
@@ -196,6 +197,7 @@ fn only_the_confirmed_panel_action_deletes_a_team() {
                 team_id: "t".into(),
                 caller: target(2),
                 action,
+                live_hosts: Vec::new(),
             },
         )
     };

@@ -127,12 +127,15 @@ impl TeamStore {
     }
 
     /// Registers a live session target in `team_id` or updates its display name if already present.
+    /// `live_hosts` names the boot ids the caller's endpoints currently report; a name holder whose
+    /// recorded boot is absent from the set was left behind by a daemon restart and re-binds.
     pub fn register_member(
         &mut self,
         team_id: &str,
         member_id: &str,
         display_name: &str,
         target: &SessionTarget,
+        live_hosts: &[String],
     ) -> Result<Member> {
         validate("team_id", team_id, MAX_ID_BYTES)?;
         let candidate = Member {
@@ -187,15 +190,20 @@ impl TeamStore {
         // member's own name would otherwise be squatted by its dead
         // predecessor forever. One pane hosts one live agent session, and
         // the candidate target was proved against that pane's snapshot, so
-        // re-bind the name holder in the same daemon boot, workspace, and
-        // pane: member_id preserved, so supervisor status, assignments,
-        // and mention history stay intact. A name claim from a different
-        // pane is a different agent and stays refused below.
+        // re-bind the name holder in the same workspace and pane:
+        // member_id preserved, so supervisor status, assignments, and
+        // mention history stay intact. A daemon restart rotates the boot
+        // id as well, so a holder whose recorded boot is not among the
+        // caller's live hosts was left behind by that restart and also
+        // re-binds. A holder whose boot IS still live keeps the name - a
+        // claim from another live boot is identity theft across the fleet,
+        // and a claim from a different pane is a different agent; both
+        // stay refused below.
         let resumed = members.iter().find(|m| {
             m.display_name.eq_ignore_ascii_case(&candidate.display_name)
-                && m.target.host == candidate.target.host
                 && m.target.workspace == candidate.target.workspace
                 && m.target.pane == candidate.target.pane
+                && (m.target.host == candidate.target.host || !live_hosts.contains(&m.target.host))
         });
         if let Some(existing) = resumed {
             let updated = Member {

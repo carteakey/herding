@@ -126,6 +126,43 @@ fn proves_a_caller_on_a_host_the_window_is_not_showing(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn live_boot_ids_collect_the_boots_connected_endpoints_report(cx: &mut gpui::TestAppContext) {
+    with_window(cx, |view| {
+        view.endpoints[0].live.status = ConnectionStatus::Connected;
+        view.endpoints[0].live.snapshot = Some(Arc::new(snapshot(
+            "boot-local",
+            "w1X",
+            "w1X:p9",
+            Some("opencode"),
+        )));
+        let mut selected = LiveState::default();
+        selected.status = ConnectionStatus::Connected;
+        show_remote_host(view, selected);
+        view.live.snapshot = Some(Arc::new(snapshot(
+            "boot-remote",
+            "w2",
+            "w2:p1",
+            Some("zcode"),
+        )));
+
+        let boots = live_boot_ids(view);
+        assert_eq!(
+            boots,
+            vec!["boot-local".to_owned(), "boot-remote".to_owned()]
+        );
+
+        // A disconnected endpoint's snapshot may show the boot that just
+        // died, so it does not count as live; neither does an empty boot.
+        view.endpoints[0].live.status = ConnectionStatus::Disconnected;
+        view.live.snapshot = Some(Arc::new(snapshot("", "w2", "w2:p1", Some("zcode"))));
+        assert!(
+            live_boot_ids(view).is_empty(),
+            "a disconnected host and an empty boot id name no live boot"
+        );
+    });
+}
+
+#[gpui::test]
 fn proves_a_caller_on_the_selected_host(cx: &mut gpui::TestAppContext) {
     with_window(cx, |view| {
         view.live.status = ConnectionStatus::Connected;

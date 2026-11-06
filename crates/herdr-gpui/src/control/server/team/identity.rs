@@ -153,6 +153,29 @@ pub(super) fn live_at(view: &HerdrWindow, index: usize) -> Option<&LiveState> {
     }
 }
 
+/// The boot ids the window currently sees across its connected endpoints.
+/// A member whose recorded boot is absent from this set registered before
+/// the last daemon restart of its machine, so its name may re-bind to a
+/// caller that proves the same pane on a live boot. A disconnected
+/// endpoint's snapshot may still show the boot that just died, so only
+/// connected projections count.
+pub(super) fn live_boot_ids(view: &HerdrWindow) -> Vec<String> {
+    let mut hosts = Vec::new();
+    for index in 0..view.endpoints.len() {
+        let Some(snapshot) = live_at(view, index)
+            .filter(|live| live.status.is_connected())
+            .and_then(|live| live.snapshot.as_deref())
+            .filter(|snapshot| !snapshot.boot_id.is_empty())
+        else {
+            continue;
+        };
+        if !hosts.contains(&snapshot.boot_id) {
+            hosts.push(snapshot.boot_id.clone());
+        }
+    }
+    hosts
+}
+
 pub(super) fn current_identity(
     view: &HerdrWindow,
     caller: &crate::control::protocol::Caller,

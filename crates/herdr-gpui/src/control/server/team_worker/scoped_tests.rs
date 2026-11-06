@@ -45,6 +45,7 @@ fn post(
             text: "hello".into(),
             mentions,
         },
+        &[],
     )
 }
 
@@ -59,7 +60,7 @@ fn a_session_that_is_not_a_member_is_refused_for_every_action() {
     };
     for caller in [&stranger, &reused] {
         assert!(matches!(
-            scoped(&mut store, "t", caller, ScopedAction::Roster),
+            scoped(&mut store, "t", caller, ScopedAction::Roster, &[]),
             Err(Error::NotMember)
         ));
         assert!(matches!(
@@ -68,7 +69,7 @@ fn a_session_that_is_not_a_member_is_refused_for_every_action() {
         ));
     }
     assert!(matches!(
-        scoped(&mut store, "missing", &target(1), ScopedAction::Roster),
+        scoped(&mut store, "missing", &target(1), ScopedAction::Roster, &[]),
         Err(Error::NotMember)
     ));
 }
@@ -89,6 +90,7 @@ fn a_member_post_is_pending_for_the_recipient_until_it_acknowledges() {
                 after: Some(0),
                 limit: 10,
             },
+            &[],
         )
         .unwrap() else {
             panic!("expected a bulletin");
@@ -106,6 +108,7 @@ fn a_member_post_is_pending_for_the_recipient_until_it_acknowledges() {
         ScopedAction::BulletinAck {
             message_id: post.post_id.clone(),
         },
+        &[],
     )
     .unwrap();
     assert!(matches!(
@@ -131,6 +134,7 @@ fn only_a_recipient_can_acknowledge_a_directed_post() {
             ScopedAction::BulletinAck {
                 message_id: post.post_id,
             },
+            &[],
         )
         .is_err()
     );
@@ -147,6 +151,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         ScopedAction::Register {
             name: "investigator".into(),
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected registered reply");
@@ -160,6 +165,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         ScopedAction::GoalSet {
             goal: "Ship herding".into(),
         },
+        &[],
     )
     .unwrap();
 
@@ -173,6 +179,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
             brief: "Check code".into(),
             assignee: Some("investigator".into()),
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected task reply");
@@ -189,6 +196,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         "",
         &newcomer,
         ScopedAction::Status { team_id: None },
+        &[],
     )
     .unwrap()
     else {
@@ -205,6 +213,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         ScopedAction::TaskClaim {
             task_id: "task-1".into(),
         },
+        &[],
     )
     .unwrap();
 
@@ -216,6 +225,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
             task_id: "task-1".into(),
             result: "Verified".into(),
         },
+        &[],
     )
     .unwrap();
 
@@ -231,6 +241,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
             confidence: Confidence::High,
             supersedes: None,
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected finding reply");

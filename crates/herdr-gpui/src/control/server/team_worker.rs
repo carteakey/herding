@@ -115,6 +115,7 @@ pub(crate) enum Operation {
         team_id: String,
         caller: SessionTarget,
         action: ScopedAction,
+        live_hosts: Vec<String>,
     },
 }
 
@@ -589,7 +590,8 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             team_id,
             caller,
             action,
-        } => scoped(store, &team_id, &caller, action)?,
+            live_hosts,
+        } => scoped(store, &team_id, &caller, action, &live_hosts)?,
     };
     Ok(reply)
 }
@@ -747,10 +749,11 @@ fn scoped(
     team_id: &str,
     caller: &SessionTarget,
     action: ScopedAction,
+    live_hosts: &[String],
 ) -> Result<Reply, Error> {
     if let ScopedAction::Register { name } = action {
         let member_id = uuid::Uuid::new_v4().to_string();
-        let member = store.register_member(team_id, &member_id, &name, caller)?;
+        let member = store.register_member(team_id, &member_id, &name, caller, live_hosts)?;
         let team = store.team(team_id)?.ok_or(Error::NotMember)?;
         return Ok(Reply::ScopedRegistered { team, member });
     }

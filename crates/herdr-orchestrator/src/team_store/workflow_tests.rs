@@ -225,7 +225,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
         pane: Some("pane-w-3".into()),
     };
     let registered = store
-        .register_member("team-1", "w-3", "ZCode-1", &new_target)
+        .register_member("team-1", "w-3", "ZCode-1", &new_target, &[])
         .unwrap();
     assert_eq!(registered.display_name, "ZCode-1");
 
@@ -237,7 +237,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
         ..new_target.clone()
     };
     let resumed = store
-        .register_member("team-1", "w-4", "zcode-1", &resumed_target)
+        .register_member("team-1", "w-4", "zcode-1", &resumed_target, &[])
         .unwrap();
     assert_eq!(resumed.member_id, "w-3");
     assert_eq!(resumed.display_name, "zcode-1");
@@ -258,7 +258,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
         ..new_target.clone()
     };
     assert!(matches!(
-        store.register_member("team-1", "w-5", "zcode-1", &stolen_target),
+        store.register_member("team-1", "w-5", "zcode-1", &stolen_target, &[]),
         Err(Error::DuplicateDisplayName(_))
     ));
 
@@ -291,4 +291,73 @@ fn team_goal_registration_discovery_and_mention_validation() {
         resolve_recipients(&team, &w1_author, &[], "Contact dev@example.com").unwrap(),
         Recipients::All
     );
+}
+
+#[test]
+fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = TeamStore::open(&dir.path().join("team").join("team.sqlite3")).unwrap();
+    setup_team(&mut store);
+
+    let target = SessionTarget {
+        host: "boot-old".into(),
+        session: "sess-w3".into(),
+        workspace: Some("ws-1".into()),
+        pane: Some("pane-w-3".into()),
+    };
+    store
+        .register_member("team-1", "w-3", "ZCode-1", &target, &[])
+        .unwrap();
+
+    // The daemon rebooted: the caller proves the same workspace and pane
+    // under a new boot id, and no live endpoint reports boot-old any more,
+    // so the name holder re-binds with its member id intact.
+    let restarted = SessionTarget {
+        host: "boot-new".into(),
+        session: "sess-w4".into(),
+        ..target.clone()
+    };
+    let live = vec!["boot-new".to_owned()];
+    let rebound = store
+        .register_member("team-1", "w-9", "zcode-1", &restarted, &live)
+        .unwrap();
+    assert_eq!(rebound.member_id, "w-3");
+    assert_eq!(rebound.display_name, "zcode-1");
+    let roster = store.team("team-1").unwrap().unwrap();
+    assert_eq!(
+        roster
+            .members
+            .iter()
+            .filter(|m| m.display_name.eq_ignore_ascii_case("zcode-1"))
+            .count(),
+        1,
+        "the re-bind keeps one member under the name"
+    );
+
+    // A holder whose boot IS live keeps the name: the same pane id claimed
+    // from another live boot is identity theft across the fleet, not drift.
+    let stolen = SessionTarget {
+        host: "boot-other".into(),
+        session: "sess-w5".into(),
+        ..target.clone()
+    };
+    let live = vec!["boot-new".to_owned(), "boot-other".to_owned()];
+    assert!(matches!(
+        store.register_member("team-1", "w-10", "zcode-1", &stolen, &live),
+        Err(Error::DuplicateDisplayName(_))
+    ));
+
+    // A different pane is a different agent even when the holder's boot
+    // has drifted away.
+    let other_pane = SessionTarget {
+        host: "boot-new".into(),
+        session: "sess-w6".into(),
+        pane: Some("pane-w-6".into()),
+        ..target.clone()
+    };
+    let live = vec!["boot-new".to_owned()];
+    assert!(matches!(
+        store.register_member("team-1", "w-11", "zcode-1", &other_pane, &live),
+        Err(Error::DuplicateDisplayName(_))
+    ));
 }

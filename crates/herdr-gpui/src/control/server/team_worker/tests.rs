@@ -282,6 +282,7 @@ fn status_reports_pending_mentions_with_one_count_query() {
                 pane: Some("pane-2".into()),
             },
             action: ScopedAction::Status { team_id: None },
+            live_hosts: Vec::new(),
         },
     )
     .unwrap();

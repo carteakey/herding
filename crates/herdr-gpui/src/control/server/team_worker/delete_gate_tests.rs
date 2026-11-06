@@ -72,7 +72,7 @@ fn cli_actions() -> Vec<ScopedAction> {
             goal: "ship it".into(),
         },
         ScopedAction::BulletinList {
-            after: 0,
+            after: Some(0),
             limit: 20,
         },
         ScopedAction::BulletinPost {

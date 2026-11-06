@@ -15,7 +15,8 @@ and assigned tasks. Use `herdr-gpui team task list TEAM_ID` to inspect work and
 finished task with `herdr-gpui team task complete TEAM_ID TASK_ID --result
 "RESULT"`; if blocked, use `team task block` with a concise reason.
 
-Read messages with `herdr-gpui team bulletin list TEAM_ID`. Acknowledge a
+Read messages with `herdr-gpui team bulletin list TEAM_ID` (the newest page;
+`--from 0` reads history from the beginning). Acknowledge a
 message addressed to you with `herdr-gpui team bulletin ack TEAM_ID MESSAGE_ID`.
 Post concise progress, evidence, and questions with `team bulletin post`.
 Use `herdr-gpui team finding add` when a durable finding needs evidence and a

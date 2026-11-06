@@ -46,11 +46,14 @@ pub enum TeamOp {
         /// Goal text, at most [`MAX_BULLETIN_TEXT_BYTES`] bytes.
         goal: String,
     },
-    /// Read bulletin entries after an optional opaque cursor.
+    /// Read a page of bulletin entries. Without a cursor this is the newest
+    /// page (the last [`MAX_PAGE_SIZE`] entries, oldest first); with a cursor
+    /// it pages forward from there.
     BulletinList {
         /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
         team_id: String,
         /// Last sequence already read; entries after this value are returned.
+        /// `None` requests the newest page.
         #[serde(default)]
         after: Option<u64>,
     },
@@ -327,7 +330,8 @@ pub enum Reply {
     },
     Bulletin {
         entries: Vec<BulletinEntry>,
-        /// Last sequence in this page; pass as `after` to continue.
+        /// Last sequence in a full page; pass as `after` to continue. `None`
+        /// means the store ran out, so the page is the last one this way.
         next: Option<u64>,
     },
     Posted {

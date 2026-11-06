@@ -25,6 +25,27 @@ fn parses_roster_list_post_and_ack() {
         }
     );
     assert_eq!(
+        parse(&["bulletin", "list", "team-1"]),
+        TeamCommand::BulletinList {
+            team_id: "team-1".into(),
+            after: None
+        }
+    );
+    assert_eq!(
+        parse(&["bulletin", "list", "team-1", "--from", "0"]),
+        TeamCommand::BulletinList {
+            team_id: "team-1".into(),
+            after: Some(0)
+        }
+    );
+    assert_eq!(
+        parse(&["bulletin", "list", "team-1", "--from", "7"]),
+        TeamCommand::BulletinList {
+            team_id: "team-1".into(),
+            after: Some(7)
+        }
+    );
+    assert_eq!(
         parse(&[
             "bulletin",
             "post",
@@ -282,6 +303,7 @@ fn rejects_invalid_bounds_and_missing_text() {
     for words in [
         vec!["roster", ""],
         vec!["bulletin", "list", "team", "--after", "-1"],
+        vec!["bulletin", "list", "team", "--after", "1", "--from", "2"],
         vec!["bulletin", "post", "team", "--mention", "", "body"],
         vec!["bulletin", "post", "team"],
         vec!["register", "team"],

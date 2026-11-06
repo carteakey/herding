@@ -130,7 +130,8 @@ pub(crate) enum ScopedAction {
         goal: String,
     },
     BulletinList {
-        after: i64,
+        /// `None` reads the newest page; `Some(cursor)` pages forward from it.
+        after: Option<i64>,
         limit: usize,
     },
     BulletinPost {
@@ -227,6 +228,8 @@ pub(crate) enum Reply {
         team: Team,
         member_id: String,
         entries: Vec<(i64, Post, Option<RecipientStatus>)>,
+        /// Pass as `after` for the next page when this one came back full.
+        next: Option<i64>,
     },
     ScopedPosted {
         team: Team,
@@ -792,7 +795,17 @@ fn scoped(
             Reply::ScopedGoalUpdated { team, goal }
         }
         ScopedAction::BulletinList { after, limit } => {
-            let page = store.posts(team_id, after, limit)?;
+            // The default read is the newest page so posts past the page
+            // bound stay visible; `--after` pages forward from a cursor.
+            let page = match after {
+                Some(cursor) => store.posts(team_id, cursor, limit)?,
+                None => store.latest_posts(team_id, None, limit)?,
+            };
+            let next = if page.len() == limit {
+                page.last().map(|(sequence, _)| *sequence)
+            } else {
+                None
+            };
             let ids: Vec<String> = page.iter().map(|(_, post)| post.post_id.clone()).collect();
             let statuses = store.recipient_statuses_for_posts(&ids)?;
             let mut entries = Vec::new();
@@ -810,6 +823,7 @@ fn scoped(
                 team,
                 member_id,
                 entries,
+                next,
             }
         }
         ScopedAction::BulletinPost {
@@ -961,6 +975,10 @@ mod query_bounds_tests;
 #[cfg(test)]
 #[path = "team_worker/scoped_tests.rs"]
 mod scoped_tests;
+
+#[cfg(test)]
+#[path = "team_worker/bulletin_page_tests.rs"]
+mod bulletin_page_tests;
 
 #[cfg(test)]
 #[path = "team_worker/delete_gate_tests.rs"]

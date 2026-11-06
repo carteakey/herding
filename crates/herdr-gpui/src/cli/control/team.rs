@@ -189,6 +189,13 @@ fn parse_bulletin(args: &mut Args) -> Result<TeamCommand, CliError> {
     match action.to_str() {
         Some("list") => {
             let after = args.number("--after", 0..=u64::MAX)?;
+            let from = args.number("--from", 0..=u64::MAX)?;
+            if after.is_some() && from.is_some() {
+                return Err(CliError::InvalidValue("--after and --from"));
+            }
+            // `--from 0` asks for the beginning of history, which is the
+            // same forward walk `--after` already does.
+            let after = after.or(from);
             let team_id = team_id(args)?;
             Ok(TeamCommand::BulletinList { team_id, after })
         }

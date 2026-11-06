@@ -13,8 +13,9 @@ duplicated, or incomplete.
 1. Run `herdr-gpui team status --json` to discover your team and member
    identity. Use the actual `TEAM_ID` from the result. Read messages with
    `herdr-gpui team bulletin list TEAM_ID --json` and inspect assigned work with
-   `herdr-gpui team task list TEAM_ID --json`. Use `--after SEQUENCE` to page
-   bulletin entries when needed.
+   `herdr-gpui team task list TEAM_ID --json`. The bulletin list defaults to
+   the newest page; `--after SEQUENCE` pages forward from a cursor and
+   `--from 0` reads history from the beginning.
 2. After reading a message addressed to you, acknowledge it with
    `herdr-gpui team bulletin ack TEAM_ID MESSAGE_ID`. Acknowledgement means you
    received it, not that you accepted or completed the work. Reply in context

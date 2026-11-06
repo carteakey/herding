@@ -150,7 +150,8 @@ pub(super) fn serve(
                     return invalid("team ID must be nonempty and at most 128 UTF-8 bytes");
                 }
                 let after = match after.map(i64::try_from).transpose() {
-                    Ok(after) => after.unwrap_or(0),
+                    // `None` means the newest page; `Some(cursor)` pages forward.
+                    Ok(after) => after,
                     Err(_) => return invalid("cursor exceeds the supported sequence range"),
                 };
                 (

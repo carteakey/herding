@@ -248,12 +248,13 @@ pub(super) fn reply_response(reply: Reply, pane_agents: &HashMap<String, String>
             team,
             member_id,
             entries,
+            next,
         } => {
             let entries = entries
                 .into_iter()
                 .map(|(sequence, post, status)| entry(sequence, post, &team, &member_id, status))
                 .collect::<Vec<_>>();
-            let next = entries.last().map(|entry| entry.sequence);
+            let next = next.and_then(|sequence| u64::try_from(sequence).ok());
             Response::Team {
                 reply: WireReply::Bulletin { entries, next },
             }

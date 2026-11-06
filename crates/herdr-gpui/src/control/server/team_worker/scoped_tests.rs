@@ -86,7 +86,7 @@ fn a_member_post_is_pending_for_the_recipient_until_it_acknowledges() {
             "t",
             &target(2),
             ScopedAction::BulletinList {
-                after: 0,
+                after: Some(0),
                 limit: 10,
             },
         )

@@ -72,7 +72,9 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
   - A team older than that window now shows its newest posts: at 4,000 posts
     the old window ended at `post00999` while the newest was `post03999`.
   - `TeamStore::posts` keeps its forward cursor, so `herdr-gpui bulletin list
-    --after SEQ` still walks forwards from a post.
+    --after SEQ` still walks forwards from a post; the default `bulletin list`
+    now reads that newest page through `latest_posts` so entries past the page
+    bound stay visible (issue #14).
 - **Board newest-page reads and exact counts (task `7e1f19a7`, finding
   `271faf33`):**
   - `TeamStore::latest_tasks(team_id, Some(sequence), limit)` and

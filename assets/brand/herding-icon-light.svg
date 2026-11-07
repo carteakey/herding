@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Herding app icon, light">
+  <!-- Herding app icon, light context. Plate = brand.surface.base (light)
+       with a hairline border; mark colors = brand.accent (light).
+       See docs/herding-brand.md. -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="#F5F2EE" stroke="#E5E0D8" stroke-width="4"/>
+  <g transform="rotate(-30 256 256)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M -60 196 L 0 256 L -60 316" stroke="#C25E1E" stroke-width="36" opacity="0.45"/>
+    <path d="M 60 196 L 120 256 L 60 316" stroke="#C25E1E" stroke-width="36" opacity="0.65"/>
+    <path d="M 180 196 L 240 256 L 180 316" stroke="#C25E1E" stroke-width="36"/>
+  </g>
+</svg>

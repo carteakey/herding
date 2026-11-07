@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Herding mark, runtime form: three chevrons in a flock, one color.
+       Tinted by the consumer (svg text_color); trailing opacity echoes the
+       two-tone concept set in assets/brand/. See docs/herding-brand.md. -->
+  <g transform="rotate(-30 12 12)" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 3.2 9.2 L 5.4 12 L 3.2 14.8" opacity="0.45"/>
+    <path d="M 6.8 9.2 L 9 12 L 6.8 14.8" opacity="0.68"/>
+    <path d="M 10.4 9.2 L 12.6 12 L 10.4 14.8"/>
+  </g>
+</svg>

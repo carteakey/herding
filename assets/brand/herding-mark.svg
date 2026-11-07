@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Herding mark">
+  <!-- Herding mark: three chevrons in a flock, converging on a goal.
+       Bare form (no plate) for favicons and avatars. See docs/herding-brand.md. -->
+  <g transform="rotate(-30 256 256)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M -60 196 L 0 256 L -60 316" stroke="#E8823C" stroke-width="36" opacity="0.55"/>
+    <path d="M 60 196 L 120 256 L 60 316" stroke="#E8823C" stroke-width="36" opacity="0.75"/>
+    <path d="M 180 196 L 240 256 L 180 316" stroke="#E8823C" stroke-width="36"/>
+  </g>
+</svg>

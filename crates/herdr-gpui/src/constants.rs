@@ -3,7 +3,9 @@
 //! any credential store key off.
 
 // Every window carries the product name; the focused space follows it.
-pub(crate) const WINDOW_TITLE: &str = "Herdr";
+// Herding is this app; Herdr remains the daemon it is a client of
+// (docs/herding-brand.md).
+pub(crate) const WINDOW_TITLE: &str = "Herding";
 
 // The bundle identifier and release version are the updater's, defined once
 // beside the code that keys off them.

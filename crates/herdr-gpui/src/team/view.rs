@@ -752,10 +752,27 @@ impl Render for TeamView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(px(16.))
-                        .truncate()
-                        .child(team_name.clone()),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        // The product mark leads the team home header: the
+                        // team's name is the headline, Herding is the frame
+                        // around it (docs/herding-brand.md).
+                        .child(
+                            svg()
+                                .path("icons/brand/herding-mark.svg")
+                                .size(px(18.))
+                                .flex_shrink_0()
+                                .text_color(rgb(crate::brand::Brand::accent(theme))),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(16.))
+                                .truncate()
+                                .child(team_name.clone()),
+                        ),
                 )
                 .child(
                     div()

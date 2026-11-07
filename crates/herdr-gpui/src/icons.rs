@@ -278,6 +278,7 @@ embedded_icons! {
     "beads.svg",
     "bell-off.svg",
     "bell.svg",
+    "brand/herding-mark.svg",
     "chart.svg",
     "check.svg",
     "chevron-down.svg",

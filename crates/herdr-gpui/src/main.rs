@@ -17,6 +17,7 @@ mod automations;
 mod avatars;
 mod backdrop;
 mod bell;
+mod brand;
 mod browser;
 mod bundled;
 mod caffeine;

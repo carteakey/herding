@@ -2,6 +2,12 @@
 # Ship the current main: gate it, tag a calendar release, build the binary,
 # swap the local UI, and clean up merged branches and worktrees.
 #
+# This is a HELPER, not the workflow. The authoritative process is the
+# `herding-ship` skill (.agents/skills/herding-ship/SKILL.md): it covers the
+# judgment calls this script cannot make (a red gate, a rebase conflict, an
+# unreachable host, a dirty tree, unmerged WIP). Run the skill's steps and use
+# this script only for the mechanical parts, verifying each step's output.
+#
 # Usage: scripts/ship.sh [--version VERSION] [--no-deploy] [--fleet]
 #
 # The fleet step is opt-in and expects the host list in HERDR_FLEET_HOSTS

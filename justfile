@@ -356,8 +356,9 @@ release-check:
     zizmor .github/
     git diff --check
 
-# Owner-only: gate main, tag a calendar release, build, deploy locally, and
-# clean up merged branches/worktrees. `just ship --fleet` also deploys the
-# hosts in HERDR_FLEET_HOSTS.
+# Helper for the `herding-ship` skill: gate main, tag a calendar release,
+# build, deploy locally, and clean up merged branches/worktrees. The skill is
+# authoritative; verify each step. `just ship --fleet` also deploys the hosts
+# in HERDR_FLEET_HOSTS.
 ship *ARGS:
     bash scripts/ship.sh {{ARGS}}

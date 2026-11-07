@@ -68,6 +68,7 @@ pub(super) fn worker_error(error: WorkerError) -> Response {
                 | team_store::Error::DuplicateRecipient(_)
                 | team_store::Error::UnknownMention(_)
                 | team_store::Error::AmbiguousMention(_)
+                | team_store::Error::AmbiguousId { .. }
                 | team_store::Error::NotMentioned { .. }
                 | team_store::Error::TaskUnavailable(_)
                 | team_store::Error::InvalidTaskTransition { .. } => ErrorCode::InvalidRequest,

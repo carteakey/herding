@@ -267,8 +267,9 @@ impl TeamStore {
 /// Resolves explicit mention tokens and/or `@tokens` embedded in `body` against `team`.
 ///
 /// Supports `@team` (broadcast), `@supervisor` (team supervisor), exact `member_id`,
-/// or unique case-insensitive `display_name`. Unknown or ambiguous tokens fail
-/// explicitly rather than silently falling back to a broadcast.
+/// unique case-insensitive `display_name`, or a unique hexadecimal `member_id`
+/// prefix as the last resort. Unknown or ambiguous tokens fail explicitly
+/// rather than silently falling back to a broadcast.
 pub fn resolve_recipients(
     team: &Team,
     author: &Author,
@@ -322,7 +323,7 @@ pub fn resolve_recipients(
                 .collect();
             match matches.as_slice() {
                 [single] => single.member_id.clone(),
-                [] => return Err(Error::UnknownMention(token.to_owned())),
+                [] => resolve_member_prefix(&all_members, token)?,
                 _ => return Err(Error::AmbiguousMention(token.to_owned())),
             }
         };
@@ -336,7 +337,8 @@ pub fn resolve_recipients(
     Ok(Recipients::Explicit(resolved))
 }
 
-/// Resolves a single member reference (`supervisor`, `member_id`, or unique `display_name`).
+/// Resolves a single member reference (`supervisor`, `member_id`, unique
+/// `display_name`, or a unique hexadecimal `member_id` prefix as the last resort).
 pub fn resolve_member_ref(team: &Team, token: &str) -> Result<String> {
     let clean = token.trim().trim_start_matches('@');
     if clean.is_empty() {
@@ -361,8 +363,19 @@ pub fn resolve_member_ref(team: &Team, token: &str) -> Result<String> {
         .collect();
     match matches.as_slice() {
         [single] => Ok(single.member_id.clone()),
-        [] => Err(Error::UnknownMention(clean.to_owned())),
+        [] => resolve_member_prefix(&all_members, clean),
         _ => Err(Error::AmbiguousMention(clean.to_owned())),
+    }
+}
+
+/// Last-resort member resolution by unique hexadecimal ID prefix; a token that
+/// does not prefix-match anyone comes back unchanged, so the caller reports
+/// its usual unknown-mention error.
+fn resolve_member_prefix(all_members: &[&Member], token: &str) -> Result<String> {
+    let ids: Vec<String> = all_members.iter().map(|m| m.member_id.clone()).collect();
+    match super::resolve_id_prefix("member", &ids, token)? {
+        resolved if resolved == token => Err(Error::UnknownMention(token.to_owned())),
+        resolved => Ok(resolved),
     }
 }
 

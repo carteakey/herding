@@ -103,6 +103,12 @@ pub enum Error {
     UnknownMention(String),
     #[error("Mention {0:?} matches more than one member in this team")]
     AmbiguousMention(String),
+    #[error("{kind} id {token:?} matches more than one record; candidates: {candidates}")]
+    AmbiguousId {
+        kind: &'static str,
+        token: String,
+        candidates: String,
+    },
     #[error("Recipient {recipient_id:?} was not mentioned in post {post_id:?}")]
     NotMentioned {
         post_id: String,
@@ -117,6 +123,71 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Shortest accepted hexadecimal prefix when referencing a team-scoped ID.
+pub const MIN_ID_PREFIX_CHARS: usize = 4;
+
+/// Candidates shown in an [`Error::AmbiguousId`] message before eliding.
+const AMBIGUOUS_CANDIDATES_SHOWN: usize = 8;
+
+/// Lowercased token with UUID dashes stripped — the key hex-prefix matching
+/// runs over, so dashed and undashed prefixes are equivalent.
+fn id_prefix_key(token: &str) -> String {
+    token
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| *c != '-')
+        .collect()
+}
+
+fn candidate_list(candidates: &[&String]) -> String {
+    let shown = candidates
+        .iter()
+        .take(AMBIGUOUS_CANDIDATES_SHOWN)
+        .map(|id| id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if candidates.len() > AMBIGUOUS_CANDIDATES_SHOWN {
+        format!(
+            "{shown}, … +{} more",
+            candidates.len() - AMBIGUOUS_CANDIDATES_SHOWN
+        )
+    } else {
+        shown
+    }
+}
+
+/// Resolves a user-supplied reference against the IDs of one entity kind.
+///
+/// An exact ID passes through unchanged, as does anything that is not a
+/// hexadecimal token of at least [`MIN_ID_PREFIX_CHARS`] characters after
+/// dashes are stripped (display names and aliases are resolved by their own
+/// rules). A hex token that prefix-matches exactly one candidate resolves to
+/// it, case-insensitively, whether or not it carries UUID dashes; several
+/// matches are refused with the candidates listed, and no match passes through
+/// unchanged so the caller reports its usual not-found error.
+fn resolve_id_prefix(kind: &'static str, candidates: &[String], token: &str) -> Result<String> {
+    if candidates.iter().any(|id| id == token) {
+        return Ok(token.to_owned());
+    }
+    let needle = id_prefix_key(token);
+    if needle.len() < MIN_ID_PREFIX_CHARS || !needle.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(token.to_owned());
+    }
+    let matches: Vec<&String> = candidates
+        .iter()
+        .filter(|id| id_prefix_key(id).starts_with(&needle))
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(token.to_owned()),
+        [single] => Ok((*single).clone()),
+        many => Err(Error::AmbiguousId {
+            kind,
+            token: token.to_owned(),
+            candidates: candidate_list(many),
+        }),
+    }
+}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct SessionTarget {
@@ -759,6 +830,36 @@ impl TeamStore {
         let mut stmt = self.prep(PENDING_MENTIONS_SQL)?;
         Ok(stmt.query_row(params![team_id, recipient_id], |r| r.get::<_, i64>(0))? as usize)
     }
+
+    /// Resolves a task reference: full ID as-is, otherwise a unique
+    /// hexadecimal prefix (issue #26).
+    pub fn resolve_task_ref(&self, team_id: &str, token: &str) -> Result<String> {
+        let mut stmt = self.prep("SELECT task_id FROM tasks WHERE team_id=?1")?;
+        let ids = stmt
+            .query_map([team_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        resolve_id_prefix("task", &ids, token)
+    }
+
+    /// Resolves a bulletin post reference: full ID as-is, otherwise a unique
+    /// hexadecimal prefix (issue #26).
+    pub fn resolve_post_ref(&self, team_id: &str, token: &str) -> Result<String> {
+        let mut stmt = self.prep("SELECT post_id FROM posts WHERE team_id=?1")?;
+        let ids = stmt
+            .query_map([team_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        resolve_id_prefix("post", &ids, token)
+    }
+
+    /// Resolves a finding reference: full ID as-is, otherwise a unique
+    /// hexadecimal prefix (issue #26).
+    pub fn resolve_finding_ref(&self, team_id: &str, token: &str) -> Result<String> {
+        let mut stmt = self.prep("SELECT finding_id FROM findings WHERE team_id=?1")?;
+        let ids = stmt
+            .query_map([team_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        resolve_id_prefix("finding", &ids, token)
+    }
 }
 
 pub(super) fn validate(field: &'static str, value: &str, max: usize) -> Result<()> {
@@ -862,6 +963,10 @@ mod departure_tests;
 #[cfg(test)]
 #[path = "team_store/page_tests.rs"]
 mod page_tests;
+
+#[cfg(test)]
+#[path = "team_store/prefix_id_tests.rs"]
+mod prefix_id_tests;
 
 #[cfg(test)]
 #[path = "team_store/status_tests.rs"]

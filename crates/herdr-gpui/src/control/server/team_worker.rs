@@ -835,6 +835,10 @@ fn scoped(
             text,
             mentions,
         } => {
+            let reply_to = reply_to
+                .as_deref()
+                .map(|raw| store.resolve_post_ref(team_id, raw))
+                .transpose()?;
             let recipients = team_store::resolve_recipients(&team, &actor, &mentions, &text)?;
             let post = store.add_post_with_recipients(
                 &post_id,
@@ -846,9 +850,12 @@ fn scoped(
             )?;
             Reply::ScopedPosted { team, post }
         }
-        ScopedAction::BulletinAck { message_id } => Reply::ScopedAcknowledged {
-            acknowledgement: store.acknowledge(&message_id, &member_id)?,
-        },
+        ScopedAction::BulletinAck { message_id } => {
+            let message_id = store.resolve_post_ref(team_id, &message_id)?;
+            Reply::ScopedAcknowledged {
+                acknowledgement: store.acknowledge(&message_id, &member_id)?,
+            }
+        }
         ScopedAction::TaskList { before, limit } => {
             let page = store.latest_tasks(team_id, before, limit)?;
             let older = page_cursor(&page, limit);
@@ -883,6 +890,7 @@ fn scoped(
             }
         }
         ScopedAction::TaskAssign { task_id, assignee } => {
+            let task_id = store.resolve_task_ref(team_id, &task_id)?;
             let assignee_id = team_store::resolve_member_ref(&team, &assignee)?;
             let task = store.assign_task(team_id, &task_id, &actor, &assignee_id)?;
             Reply::ScopedTask {
@@ -892,6 +900,7 @@ fn scoped(
             }
         }
         ScopedAction::TaskClaim { task_id } => {
+            let task_id = store.resolve_task_ref(team_id, &task_id)?;
             let task = store.claim_task(team_id, &task_id, &member_id)?;
             Reply::ScopedTask {
                 team,
@@ -900,6 +909,7 @@ fn scoped(
             }
         }
         ScopedAction::TaskBlock { task_id, reason } => {
+            let task_id = store.resolve_task_ref(team_id, &task_id)?;
             let task = store.block_task(team_id, &task_id, &actor, &reason)?;
             Reply::ScopedTask {
                 team,
@@ -908,6 +918,7 @@ fn scoped(
             }
         }
         ScopedAction::TaskComplete { task_id, result } => {
+            let task_id = store.resolve_task_ref(team_id, &task_id)?;
             let task = store.complete_task(team_id, &task_id, &actor, &result)?;
             Reply::ScopedTask {
                 team,
@@ -916,6 +927,7 @@ fn scoped(
             }
         }
         ScopedAction::TaskCancel { task_id } => {
+            let task_id = store.resolve_task_ref(team_id, &task_id)?;
             let task = store.cancel_task(team_id, &task_id, &actor)?;
             Reply::ScopedTask {
                 team,
@@ -940,6 +952,14 @@ fn scoped(
             confidence,
             supersedes,
         } => {
+            let task_id = task_id
+                .as_deref()
+                .map(|raw| store.resolve_task_ref(team_id, raw))
+                .transpose()?;
+            let supersedes = supersedes
+                .as_deref()
+                .map(|raw| store.resolve_finding_ref(team_id, raw))
+                .transpose()?;
             let finding = store.add_finding(
                 &finding_id,
                 team_id,
@@ -982,6 +1002,10 @@ mod scoped_tests;
 #[cfg(test)]
 #[path = "team_worker/bulletin_page_tests.rs"]
 mod bulletin_page_tests;
+
+#[cfg(test)]
+#[path = "team_worker/prefix_id_tests.rs"]
+mod prefix_id_tests;
 
 #[cfg(test)]
 #[path = "team_worker/delete_gate_tests.rs"]

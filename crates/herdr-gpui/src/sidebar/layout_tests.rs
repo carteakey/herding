@@ -623,6 +623,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         wsl_paste: None,
         editor_open: None,
         editor_panes: Vec::new(),
+        editor_returns: Vec::new(),
         teleport: None,
         teleport_marks: crate::teleport::Marks::detached(),
         teleport_follow: None,

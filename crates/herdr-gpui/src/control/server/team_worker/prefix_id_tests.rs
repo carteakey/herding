@@ -49,6 +49,7 @@ fn created_task_id(store: &mut TeamStore, caller: &SessionTarget, title: &str) -
             brief: "brief".into(),
             assignee: None,
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected a created task");
@@ -70,11 +71,11 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
     // A second task sharing task_a's first seven hex chars: distinguishable
     // by an eight-char prefix, ambiguous at the shared head.
     let shared_head = &task_a[..7];
-    let mut bumped = shared_head.to_owned();
-    let last = bumped.pop().unwrap();
-    bumped.push(if last == '0' { '1' } else { '0' });
+    // Keep the first seven chars shared and change the eighth, so the
+    // seven-char head is ambiguous and the eight-char prefix is unique.
+    let eighth = task_a.as_bytes()[7];
     let mut task_b = task_a.clone();
-    task_b.replace_range(..shared_head.len(), &bumped);
+    task_b.replace_range(7..8, if eighth == b'0' { "1" } else { "0" });
     let Reply::ScopedTask {
         task: created_b, ..
     } = scoped(
@@ -87,6 +88,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
             brief: "brief".into(),
             assignee: None,
         },
+        &[],
     )
     .unwrap()
     else {
@@ -102,6 +104,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         ScopedAction::TaskClaim {
             task_id: task_a[..8].to_owned(),
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected a claimed task");
@@ -116,6 +119,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         ScopedAction::TaskClaim {
             task_id: shared_head.to_owned(),
         },
+        &[],
     ) else {
         panic!("expected an ambiguous-prefix refusal");
     };
@@ -134,6 +138,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
             task_id: task_a[..8].to_owned(),
             result: "done".into(),
         },
+        &[],
     )
     .unwrap();
     let Reply::ScopedTask { task, .. } = scoped(
@@ -141,6 +146,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         "t",
         &sup,
         ScopedAction::TaskCancel { task_id: task_b },
+        &[],
     )
     .unwrap() else {
         panic!("expected a cancelled task");
@@ -161,6 +167,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
             text: "parent".into(),
             mentions: vec![],
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected a posted reply");
@@ -176,6 +183,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
             text: "child".into(),
             mentions: vec![],
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected a posted reply");
@@ -190,6 +198,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         ScopedAction::BulletinAck {
             message_id: parent.post_id[..8].to_owned(),
         },
+        &[],
     )
     .unwrap();
 
@@ -203,6 +212,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
             task_id: task[..8].to_owned(),
             assignee: "aabb0000-5555".into(),
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected an assigned task");
@@ -218,6 +228,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
             text: "ping".into(),
             mentions: vec!["aabb0000-5555".into()],
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected a posted reply");
@@ -235,6 +246,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
             text: "ping".into(),
             mentions: vec!["aabb0000".into()],
         },
+        &[],
     );
     let Err(error) = ambiguous_post else {
         panic!("expected an ambiguous-mention refusal");
@@ -262,6 +274,7 @@ fn finding_links_accept_prefixes_and_unknown_prefixes_stay_not_found() {
             confidence: Confidence::Medium,
             supersedes: None,
         },
+        &[],
     )
     .unwrap() else {
         panic!("expected a recorded finding");
@@ -276,6 +289,7 @@ fn finding_links_accept_prefixes_and_unknown_prefixes_stay_not_found() {
         ScopedAction::TaskClaim {
             task_id: "cafe9".into(),
         },
+        &[],
     ) else {
         panic!("expected a not-found refusal");
     };

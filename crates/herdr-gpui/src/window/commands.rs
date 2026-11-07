@@ -202,14 +202,16 @@ impl HerdrWindow {
         if !self.input_ready() {
             return false;
         }
-        let queued =
-            self.request_focus_change("Navigate", Some((&target).into()), |handle, boot| {
-                match target {
-                    NavigationTarget::Workspace(id) => handle.focus_workspace(boot, id),
-                    NavigationTarget::Tab(id) => handle.focus_tab(boot, id),
-                    NavigationTarget::Pane(id) => handle.focus_pane(boot, id),
-                }
-            });
+        self.note_editor_navigation(target.as_deref());
+        let queued = self.request_focus_change(
+            &fl!("window-notices-navigate"),
+            Some((&target).into()),
+            |handle, boot| match target {
+                NavigationTarget::Workspace(id) => handle.focus_workspace(boot, id),
+                NavigationTarget::Tab(id) => handle.focus_tab(boot, id),
+                NavigationTarget::Pane(id) => handle.focus_pane(boot, id),
+            },
+        );
         self.discard_composition(cx);
         cx.notify();
         queued

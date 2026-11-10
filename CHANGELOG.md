@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Memory instrumentation for the app process (issue #12)**: a plain
   sampler thread logs RSS and swap once per interval (`HERDR_MEMORY_SAMPLE_SECS`,
   30s default) with the running high-water mark, subsystems can register
-  named gauges (`herdr_gpui::memory::gauge`) that the sampler embeds when
+  named gauges (`sheprd_gpui::memory::gauge`) that the sampler embeds when
   the mark advances, and a soft guard (`HERDR_MEMORY_SOFT_LIMIT_MB`, 4 GiB
   default, 0 opts out) warns once per crossing with a dump of the process
   tree and every gauge, so the next oomd kill is preceded by a log naming

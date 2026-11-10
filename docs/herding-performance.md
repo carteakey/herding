@@ -10,9 +10,9 @@ Benchmarks in the tree:
 
 ```sh
 # Projection and frame timings (printed, never asserted in CI)
-cargo test --release -p herdr-gpui --bin herdr-gpui perf_tests -- --nocapture
+cargo test --release -p sheprd-gpui --bin herding perf_tests -- --nocapture
 # SQLite store costs (opt-in, ignored in CI)
-cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
+cargo test -p sheprd-orchestrator --test team_store_perf -- --ignored --nocapture
 ```
 
 ## Data flow, and where it can get slow
@@ -71,7 +71,7 @@ cargo test -p herdr-orchestrator --test team_store_perf -- --ignored --nocapture
     scanning a 1,000-post window and dropping all but its last 200.
   - A team older than that window now shows its newest posts: at 4,000 posts
     the old window ended at `post00999` while the newest was `post03999`.
-  - `TeamStore::posts` keeps its forward cursor, so `herdr-gpui bulletin list
+  - `TeamStore::posts` keeps its forward cursor, so `herding bulletin list
     --after SEQ` still walks forwards from a post; the default `bulletin list`
     now reads that newest page through `latest_posts` so entries past the page
     bound stay visible (issue #14).
@@ -110,7 +110,7 @@ queue 64 prompts, wake ledger 512 signals, `REFRESH` 2s, supervisor fallback 600
 ## Known hotspots left open
 
 - **The board's older pages are not reachable yet:** the store can page
-  tasks and findings backwards, but `herdr-gpui team task list` and
+  tasks and findings backwards, but `herding team task list` and
   `team finding list` take no cursor, and the panel has no show-earlier
   control, so a person can see the newest `MAX_PAGE_SIZE` of each and nothing
   older (finding `271faf33`, store and worker half done).

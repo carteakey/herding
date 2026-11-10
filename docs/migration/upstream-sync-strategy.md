@@ -1,68 +1,99 @@
-# Upstream Synchronization Strategy: Cherry-Picking vs. Rebrand Churn
+# Upstream Synchronization Strategy: Merge and Rebrand at the Edge
 
-**Status**: Active Fork Policy  
-**Date**: 2026-11-04  
-**Base Commit**: `b93958f5` (Pre-rebrand upstream fork point)  
-**Historical Milestone**: `v0-herding` (Tag `v0`)
-
----
-
-## 1. Context & Architectural Decision
-
-Upstream landed PR #1021 (`3b9800ff7cff`), executing an exhaustive repo-wide renaming from `herdr` to `sheprd` across 6,051 files. It renamed all crates (`crates/herdr-gpui` -> `crates/sheprd-gpui`, `herdr-orchestrator` -> `sheprd-orchestrator`), binaries, config directories (`~/.config/herdr` -> `~/.config/sheprd`), environment variables (`HERDR_*`), and website assets.
-
-**Decision**:
-We reject a blind git merge of upstream `main`. Merging PR #1021 directly introduces massive merge conflicts, breaks existing daemon socket paths and agent skills across our homelab fleet (KPC, FX505, M1 Mac), and offers zero functional or performance improvement to the core workbench engine.
-
-Instead, our repository policy follows the **Strata / Ada Headroom Policy**:
-1. Maintain our stable fork foundation on the canonical `herdr` architecture.
-2. Isolate functional improvements from upstream via selective cherry-picks.
-3. Merge `v0-herding` cleanly into `main` after cherry-picking functional fixes.
+**Status**: Active Fork Policy
+**Date**: 2026-11-10
+**Merge Base**: `389a55138` (upstream `main`, the `sheprd` rename)
+**Proof Merge**: `9a8893775` (merge of `389a55138` into the Herding fork)
 
 ---
 
-## 2. Upstream Audit: Commits Landed Since PR #1021
+## 1. Context
 
-An audit of upstream commits between `3b9800ff` and `d8db7e83` reveals that 95% of commits were website and marketing copy. Only 8 commits contain actual bugfixes or functional improvements:
+Upstream renamed the project from `herdr` to `sheprd` in PR #1021
+(`3b9800ff7cff`): crates, binaries, package names, and website copy changed
+across thousands of files. The fork's original policy rejected that merge and
+cherry-picked individual fixes instead, to keep the `herdr` crate layout and
+the Herding layer untouched.
 
-### A. Candidate Commits for Cherry-Picking
+That policy has been retired. Upstream now carries the terminal, daemon,
+browser, review, chat, and platform work Herding depends on, and isolating
+each change as a cherry-pick costs more than one merge per upstream release.
+The fork therefore merges upstream `main` directly and accepts its internal
+`sheprd-*` names.
 
-#### 1. Remote SSH Agent Discovery on macOS
-- **Commit**: `56f6bad9` (`fix(chat): show the agent view for chats on a Mac reached over SSH`)
-- **Impact**: Resolves `herdr-acp` inside `~/Applications` and `/Applications` app bundles when reaching an M1/M2 Mac over SSH. Fixes exit 127 when starting new chats or listing remote agents.
-- **Verdict**: **Recommended for cherry-pick**. Directly benefits our cross-host M1 Mac agent fleet.
+## 2. Identity Boundary
 
-#### 2. Linux Packaging CI Checks
-- **Commit**: `ee3d3f63` (`ci: install diffutils for Fedora package smoke checks`)
-- **Commit**: `3c12204b` (`ci: install diffutils for Arch package smoke checks`)
-- **Impact**: Installs `diffutils` (`cmp`) in minimal container smoke checks before testing binary aliases.
-- **Verdict**: **Cherry-pick if building native packages**.
+Herding is a product identity layered on the upstream codebase, not a second
+rename of it.
 
-#### 3. iOS Remote Client UX & Bluetooth Stability
-- **Commit**: `2b55f1ac` (`fix(ios): keep nearby pairing progress when an iPad sheet closes`)
-- **Commit**: `021c3140` (`fix(ios): keep the pairing card reachable on iPad and stop idle Bluetooth scans`)
-- **Commit**: `c960bd55` (`feat(ios): offer nearby computers in a banner and keep pairing in Settings`)
-- **Commit**: `c193dbf0` (`feat(ios): collapse computers and scroll workspaces with a section index`)
-- **Commit**: `9f473930` (`fix(ios): close the connection toast with a tap anywhere on it`)
-- **Impact**: Significant stability and UX improvements for iPad/iPhone pairing and Bluetooth battery drain.
-- **Verdict**: **Cherry-pick as an isolated iOS batch** when testing the iOS remote companion.
+**Changed to Herding:**
 
-### B. Rejected Commits (Marketing & Rebrand Churn)
-- Website landing pages and mockups (`6d545a58`, `a00410ae`, `5829a753`, `83f1ddd5`, `2efa54a9`, `d3aa69be`, `8e5c027c`, `bf22ed94`, `f47cb88c`, `80f995f1`, `2139f2b2`).
-- Cloudflare worker sources for `herdrui.dev` redirects.
+- Product name, window title, About text, notifications, and user-facing docs.
+- The application binary: `herding`.
+- Release and development paths for that binary (`target/{debug,release}/herding`,
+  `Herding.app`, `Contents/MacOS/herding`).
+- CLI command examples: `herding <command>`, including the Team commands.
+- `Source::Herding` in the app's configuration model.
 
----
+**Kept from upstream:**
 
-## 3. Execution Plan: Cherry-Pick & Merge to Main
+- Crate, package, and type names (`sheprd-gpui`, `SheprdWindow`,
+  `Owner::Sheprd`), so future merges remain mechanical.
+- Companion binaries and helper paths (`sheprd-acp`, `sheprd-automate`,
+  `sheprd-remote-control`, `sheprd-nearby`, `sheprd-launcher.exe`,
+  `~/.local/state/herdr/gpui/bin/herdr-gpui`).
+- Stable state, config, and protocol identifiers: `~/.local/state/herdr`,
+  `~/.config/herdr`, `HERDR_*` environment variables, socket names, the
+  `sheprd://` URL scheme, skill names, and macOS app and bundle IDs.
+- Upstream release packaging, installers, website, and the iOS companion. Those
+  still say Sheprd/Herdr UI and build the `sheprd` executable, and are a
+  separate follow-up; they are not part of the application identity change.
 
-1. **Step 1: Reset `main` to `b93958f5` (Fork Point)**
-   Reset `origin/main` back to the pre-rebrand fork base `b93958f5`.
+The upstream workflows gate every code job on `penso/herdr-gpui` or
+`sheprd-labs/sheprd`, so they do not run on this fork. The fork ships with
+`scripts/ship.sh`, which builds and deploys `herding`. Rebranding the
+packaging therefore means updating the executable paths in
+`.github/workflows/{ci,release}.yml` and `scripts/release/*` (the app binary
+becomes `herding`, the `sheprd-*` companions keep their names) together with
+the bundle, installer, tap, and winget identities. Until then those scripts
+describe upstream's artifacts, not this fork's.
 
-2. **Step 2: Cherry-Pick Functional Fixes**
-   Cherry-pick commit `56f6bad9` (Mac SSH agent discovery) onto `main` (adapting path names to `herdr-gpui` if necessary).
+## 3. Sync Procedure
 
-3. **Step 3: Merge `v0-herding` to `main`**
-   Merge the complete, verified Herding multi-agent engine (`v0-herding`, commit `5f4bd41a`) cleanly into `main`.
+1. Fetch `upstream/main` and inspect the range since the last sync.
+2. Create a dedicated branch and merge upstream into it, never rebase the
+   fork's history onto upstream.
+3. Resolve conflicts by responsibility:
+   - Keep upstream refactors and new modules wholesale.
+   - Reapply Herding-only additions on top: the Team view, control commands,
+     orchestrator records, localization keys, and docs.
+   - Preserve the identity boundary in section 2. Do not rename internal
+     `sheprd-*` items while resolving conflicts.
+4. Run the workspace gates (`just format`, `just ci`, plus the platform lints
+   and file-size, i18n, and sorted checks the change touches).
+5. Run focused Team and CLI tests, then merge the sync branch into `main`
+   through the normal pull request flow.
 
-4. **Step 4: Tag & Deploy**
-   Push `origin/main` as the authoritative, stable release of Herding.
+## 4. Conflict Hotspots
+
+- `crates/sheprd-gpui/src/app.rs`, `cli.rs`, and `control/client/help.rs`:
+  upstream adds commands and flags continuously; Herding adds the Team
+  commands and identity strings. Keep upstream's structure and append the Team
+  rows in their own match arms and help sections.
+- `crates/sheprd-gpui/locales/en-US/`: add Herding strings as new keys in the
+  owning catalog rather than rewriting upstream keys; the `settings-source-*`
+  keys stay upstream-owned.
+- `crates/sheprd-orchestrator/`: Herding's Team records sit beside upstream's
+  issue and pull request records. Keep the two schemas separate.
+- `docs/cli.md`: rebuild from upstream and re-add the Team section, rather than
+  resolving the file line by line.
+- `Cargo.lock`: regenerate with `cargo metadata` after resolving
+  `Cargo.toml`; do not hand-merge.
+
+## 5. Why Not Cherry-Pick?
+
+Cherry-picking fixed individual commits no longer isolates the fork from the
+rename: every subsequent upstream change already assumes the `sheprd` layout,
+so each pick needs the same path and symbol adaptation. A merge resolves that
+adaptation once per sync and keeps the fork's history connected to upstream,
+which is what makes the next sync tractable.

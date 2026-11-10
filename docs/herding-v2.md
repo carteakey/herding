@@ -22,9 +22,9 @@ a team panel bolted to one sidebar slot.
 Concretely, in today's shell:
 
 - **The team is the smallest surface in its own app.** `ActivityPanel`
-  (`crates/herdr-control-protocol/src/protocol/app.rs:8`) lists eight equal
+  (`crates/sheprd-control-protocol/src/protocol/app.rs:8`) lists eight equal
   entries, and Team is the only one that does not even own the body:
-  `render_activity` (`crates/herdr-gpui/src/sidebar/activity.rs:383`) swaps the
+  `render_activity` (`crates/sheprd-gpui/src/sidebar/activity.rs:383`) swaps the
   *sidebar column* for `render_team_section` while the body stays terminal
   editor-groups (`window/render.rs:96`). The optional bulletin adds a 340 px
   right panel (`team/view/bulletin.rs:465`) — beside the terminals, again.
@@ -170,7 +170,7 @@ in one click (already true via FocusWorker).
 `HerdrWindow` (`window.rs:98`). Add the smallest thing that can carry V2:
 
 ```rust
-// crates/herdr-gpui/src/window.rs
+// crates/sheprd-gpui/src/window.rs
 enum Route {
     Terminals,                    // today's body, bit-for-bit
     TeamHome,

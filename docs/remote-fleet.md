@@ -51,7 +51,7 @@ SSH control tunnel runbook, and the live verification record on M1 Mac hardware.
 ### 1. Prerequisites
 - SSH key authentication to remote host (`ssh m1` connects without prompts).
 - OpenSSH 6.7+ on both client and host (supports native Unix domain socket forwarding).
-- Local Herdr UI running with the active team.
+- Local Herding running with the active team.
 
 ### 2. Establishing the Control Tunnel
 Run the tunnel script on the supervisor machine:

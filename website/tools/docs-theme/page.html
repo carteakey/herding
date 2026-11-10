@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:image" content="https://sheprd.org/assets/sheprd-social-preview.png?v=2">
+<meta property="og:site_name" content="Sheprd">
+<meta property="og:url" content="{{canonical}}">
+<meta property="og:type" content="article">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="{{canonical}}">
+<link rel="icon" href="/assets/paw.svg">
+<link rel="stylesheet" href="/assets/base.css">
+<link rel="stylesheet" href="/docs/docs.css">
+<script src="/docs/docs.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/paw.svg" alt="" width="30" height="30">Sheprd</a>
+  <a class="sec" href="/docs/">Docs</a>
+  <button class="search" type="button" data-search aria-label="Search the docs"><span>Search the docs…</span><kbd>⌘K</kbd></button>
+  <button class="menu" type="button" data-menu aria-expanded="false" aria-controls="side">Contents</button>
+  <nav class="r" aria-label="Site"><a href="/">Home</a><a href="/docs/cli/">CLI</a><a href="/docs/configuration/">Config</a><a href="https://github.com/sheprd-labs/sheprd">GitHub</a></nav>
+</header>
+<div class="layout">
+  <nav class="side" id="side" aria-label="Docs">
+{{nav}}
+  </nav>
+  <main id="main">
+    <p class="crumb">{{crumb}}</p>
+    <h1>{{h1}}</h1>
+    <p class="lead">{{lead}}</p>
+    {{meta}}
+    <article class="prose">
+{{body}}
+    </article>
+    <nav class="pager" aria-label="Previous and next">{{pager}}</nav>
+  </main>
+  <nav class="toc" aria-label="On this page">{{toc}}</nav>
+</div>
+</body>
+</html>

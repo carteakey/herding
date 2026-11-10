@@ -13,15 +13,16 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text()
 SECTIONS = re.split(r"^  ([a-z-]+):\n", WORKFLOW.split("\njobs:\n", 1)[1], flags=re.M)
 JOBS = dict(zip(SECTIONS[1::2], SECTIONS[2::2]))
-PR_JOBS = ("zizmor", "commits", "checks", "windows", "windows-native", "build-macos", "checks-passed")
+PR_JOBS = ("zizmor", "commits", "checks", "windows", "windows-native", "build-macos", "website",
+           "checks-passed")
 # Jobs that never run on main: the release workflow builds those targets.
 PR_ONLY_JOBS = ("build-macos",)
 
 
-def condition_matches(job, context):
+def condition_matches(job, context, jobs=JOBS):
     # Interpret only the boolean/equality subset used by these job conditions.
     # Unsupported syntax fails rather than executing workflow text as Python.
-    expression = re.search(r"^    if: >-\n((?:      .+\n)+)", JOBS[job], re.M)[1]
+    expression = re.search(r"^    if: >-\n((?:      .+\n)+)", jobs[job], re.M)[1]
     expression = " ".join(expression.split()).replace("&&", "and").replace("||", "or")
 
     def evaluate(node):
@@ -48,7 +49,7 @@ def condition_matches(job, context):
 class CiPolicy(unittest.TestCase):
     def context(self, **overrides):
         return {
-            "github.repository": "penso/herdr-gpui",
+            "github.repository": "sheprd-labs/sheprd",
             "github.event_name": "pull_request",
             "github.ref": "refs/pull/456/merge",
             "github.actor": "larry0x",
@@ -57,6 +58,7 @@ class CiPolicy(unittest.TestCase):
             "github.event.pull_request.head.repo.full_name": "larry0x/herdr-gpui",
             "needs.commits.outputs.code": "true",
             "needs.commits.outputs.windows_package": "true",
+            "needs.commits.outputs.website": "true",
             **overrides,
         }
 
@@ -74,7 +76,7 @@ class CiPolicy(unittest.TestCase):
         context = self.context(**{
             "github.actor": "penso", "github.triggering_actor": "penso",
             "github.event.pull_request.user.login": "penso",
-            "github.event.pull_request.head.repo.full_name": "penso/herdr-gpui",
+            "github.event.pull_request.head.repo.full_name": "sheprd-labs/sheprd",
         })
         for job in PR_JOBS:
             self.assertTrue(condition_matches(job, context), job)
@@ -106,6 +108,30 @@ class CiPolicy(unittest.TestCase):
             for job in JOBS:
                 self.assertFalse(condition_matches(job, context), (job, event))
 
+    def test_pretransfer_repository_still_runs_pull_request_checks(self):
+        context = self.context(**{"github.repository": "penso/herdr-gpui"})
+        for job in PR_JOBS:
+            self.assertTrue(condition_matches(job, context), job)
+
+    def test_owner_only_workflows_allow_both_repository_locations_but_not_forks(self):
+        for workflow in ("nix.yml", "supply-chain.yml"):
+            text = (ROOT / ".github/workflows" / workflow).read_text()
+            sections = re.split(r"^  ([a-z-]+):\n", text.split("\njobs:\n", 1)[1], flags=re.M)
+            jobs = dict(zip(sections[1::2], sections[2::2]))
+            for repository, head in itertools.product(
+                    ("penso/herdr-gpui", "sheprd-labs/sheprd", "other/sheprd"),
+                    ("penso/herdr-gpui", "sheprd-labs/sheprd", "other/sheprd")):
+                context = self.context(**{
+                    "github.repository": repository, "github.actor": "penso",
+                    "github.triggering_actor": "penso",
+                    "github.event.pull_request.user.login": "penso",
+                    "github.event.pull_request.head.repo.full_name": head,
+                })
+                expected = repository != "other/sheprd" and head == repository
+                for job in jobs:
+                    with self.subTest(workflow=workflow, job=job, repository=repository, head=head):
+                        self.assertEqual(condition_matches(job, context, jobs), expected)
+
     def test_path_selection_only_skips_platform_jobs(self):
         for code in ("false", ""):
             context = self.context(**{"needs.commits.outputs.code": code})
@@ -113,6 +139,10 @@ class CiPolicy(unittest.TestCase):
                 self.assertEqual(condition_matches(job, context),
                                  job not in ("checks", "windows", "windows-native", "build-macos"),
                                  (job, code))
+        for website in ("false", ""):
+            context = self.context(**{"needs.commits.outputs.website": website})
+            for job in PR_JOBS:
+                self.assertEqual(condition_matches(job, context), job != "website", (job, website))
 
     def test_required_gate_rejects_failures_skips_and_missing_detection(self):
         # Run the actual shell gate, including the docs-only exception.
@@ -120,7 +150,7 @@ class CiPolicy(unittest.TestCase):
         script = "\n".join(line[10:] for line in script.splitlines() if line.startswith("          "))
 
         def gate(code, checks, windows, native, commits, package_inputs="false", package="skipped",
-                 event="push", macos=None):
+                 event="push", macos=None, site_inputs="false", site="skipped"):
             if macos is None:
                 macos = "success" if code == "true" and event == "pull_request" else "skipped"
             return subprocess.run(
@@ -128,7 +158,8 @@ class CiPolicy(unittest.TestCase):
                 env={**os.environ, "CODE": code, "RESULT": checks, "WINDOWS": windows,
                      "NATIVE": native, "COMMITS": commits,
                      "PACKAGE_INPUTS": package_inputs, "PACKAGE": package,
-                     "EVENT": event, "MACOS_RELEASE": macos},
+                     "EVENT": event, "MACOS_RELEASE": macos,
+                     "SITE_INPUTS": site_inputs, "SITE": site},
             ).returncode == 0
 
         for code, checks, windows, commits in itertools.product(
@@ -160,6 +191,15 @@ class CiPolicy(unittest.TestCase):
             expected = macos == ("success" if code == "true" and event == "pull_request" else "skipped")
             self.assertEqual(gate(code, platform, platform, platform, "success", event=event, macos=macos),
                              expected, (code, event, macos))
+        # The website job runs when the site or docs change, and must then
+        # succeed; missing detection fails like the platform jobs'.
+        for inputs, site in itertools.product(
+                ("true", "false", ""), ("success", "failure", "cancelled", "skipped")):
+            expected = ((inputs == "true" and site == "success")
+                        or (inputs == "false" and site == "skipped"))
+            self.assertEqual(gate("true", "success", "success", "success", "success",
+                                  site_inputs=inputs, site=site),
+                             expected, (inputs, site))
 
     def test_ci_has_no_privileged_trigger_or_credentials(self):
         triggers = WORKFLOW.split("\npermissions:", 1)[0]
@@ -180,7 +220,7 @@ class CiPolicy(unittest.TestCase):
         self.assertEqual(re.findall(r"^    runs-on: (.+)$", WORKFLOW, re.M), [
             "ubuntu-latest", "ubuntu-24.04", "${{ matrix.runner }}",
             "${{ matrix.runner }}", "${{ matrix.runner }}", "windows-2025",
-            "ubuntu-24.04", "${{ matrix.runner }}", "macos-15",
+            "ubuntu-24.04", "ubuntu-24.04", "${{ matrix.runner }}", "macos-15",
         ])
         self.assertEqual(re.findall(r"^        runner: (.+)$", WORKFLOW, re.M), [
             "[macos-15, ubuntu-24.04, ubuntu-24.04-arm]",

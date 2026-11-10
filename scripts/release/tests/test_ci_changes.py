@@ -51,17 +51,17 @@ class GitFixture(unittest.TestCase):
 
 class CiChanges(GitFixture):
     def test_documentation_and_setup_skip_native_jobs(self):
-        for path in ("setup.sh", "README.md", "crates/herdr-gpui/README.md",
+        for path in ("setup.sh", "README.md", "crates/sheprd-gpui/README.md",
                      "scripts/release/README.md", "assets/social-preview-dark.png",
-                     "assets/social-preview-light.svg", "assets/icons/herdr-ui-icon-badge.png",
-                     "assets/icons/herdr-ui-icon-badge.svg", "site/index.html",
+                     "assets/social-preview-light.svg", "assets/icons/sheprd-icon-badge.png",
+                     "assets/icons/sheprd-icon-badge.svg", "site/index.html",
                      "site/assets/site.js", ".github/workflows/site.yml"):
             self.commit_path(path)
             self.assertEqual(self.detect(), "code=false", path)
 
     def test_build_inputs_trigger_native_jobs(self):
-        for path in ("crates/herdr-gpui/src/main.rs", "Cargo.lock", "Cargo.toml",
-                     "assets/icon.png", "assets/icons/herdr-ui-icon-clean.png",
+        for path in ("crates/sheprd-gpui/src/main.rs", "Cargo.lock", "Cargo.toml",
+                     "assets/icon.png", "assets/icons/sheprd-icon-clean.png",
                      ".cargo/config.toml", "rust-toolchain.toml",
                      "scripts/release/build.sh", ".github/workflows/ci.yml"):
             self.base = self.git("rev-parse", "HEAD").strip()
@@ -99,17 +99,17 @@ class WindowsPackageChanges(GitFixture):
 
     def test_windows_packaging_inputs_run_the_installer_check(self):
         for path in ("scripts/release/package-windows.py", "scripts/release/windows-installer.py",
-                     "scripts/release/herdr-gpui.iss", "scripts/release/installer/en-US.isl",
+                     "scripts/release/sheprd.iss", "scripts/release/installer/en-US.isl",
                      "site/install.ps1",
-                     "crates/herdr-gpui-launcher/src/main.rs", "crates/herdr-gpui/windows_resource.rs",
-                     "assets/icons/Herdr.ico", "assets/icons/windows/wizard-128.png",
+                     "crates/sheprd-launcher/src/main.rs", "crates/sheprd-gpui/windows_resource.rs",
+                     "assets/icons/Sheprd.ico", "assets/icons/windows/wizard-128.png",
                      ".github/workflows/ci.yml"):
             self.base = self.git("rev-parse", "HEAD").strip()
             self.commit_path(path)
             self.assertEqual(self.outputs()["windows_package"], "true", path)
 
     def test_other_changes_skip_the_installer_check(self):
-        for path in ("crates/herdr-gpui/src/app.rs", "Cargo.lock", "README.md",
+        for path in ("crates/sheprd-gpui/src/app.rs", "Cargo.lock", "README.md",
                      "scripts/release/package-linux.sh"):
             self.base = self.git("rev-parse", "HEAD").strip()
             self.commit_path(path)
@@ -118,3 +118,36 @@ class WindowsPackageChanges(GitFixture):
     def test_manual_and_unknown_base_run_the_installer_check(self):
         self.assertEqual(self.outputs("workflow_dispatch")["windows_package"], "true")
         self.assertEqual(self.outputs("push", "0" * 40)["windows_package"], "true")
+
+
+class WebsiteChanges(GitFixture):
+    """The Python-only website job, and what a website-only change skips."""
+
+    def test_website_only_changes_skip_native_jobs(self):
+        for path in ("website/docs/install.md", "website/site/index.html",
+                     "website/tools/docs.py", "website/tools/docs-theme/docs.js",
+                     "website/requirements.txt", "website/netlify.toml",
+                     "docs/cli.md", "site/tests/test_website.py"):
+            self.base = self.git("rev-parse", "HEAD").strip()
+            self.commit_path(path)
+            outputs = self.outputs()
+            self.assertEqual((outputs["code"], outputs["website"]), ("false", "true"), path)
+
+    def test_markdown_anywhere_checks_the_docs(self):
+        # Docs pages link to READMEs and other guides, so moving one can break them.
+        for path in ("README.md", "crates/sheprd-gpui/README.md"):
+            self.base = self.git("rev-parse", "HEAD").strip()
+            self.commit_path(path)
+            self.assertEqual(self.outputs()["website"], "true", path)
+
+    def test_build_inputs_also_check_the_docs(self):
+        self.commit_path("crates/sheprd-gpui/config-gpui.example.toml")
+        self.assertEqual(self.outputs()["website"], "true")
+
+    def test_other_changes_skip_the_website_job(self):
+        self.commit_path("setup.sh")
+        self.assertEqual(self.outputs()["website"], "false")
+
+    def test_manual_and_unknown_base_check_the_website(self):
+        self.assertEqual(self.outputs("workflow_dispatch")["website"], "true")
+        self.assertEqual(self.outputs("push", "0" * 40)["website"], "true")

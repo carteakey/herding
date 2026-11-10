@@ -1,0 +1,547 @@
+//! The activity bar's Overview: one page across the window's body for what
+//! needs the user on every host this window connects to. Agents waiting on
+//! the user and failed orchestrator runs lead, in a card of their own; then
+//! finished ones ready for review, working agents by host, and idle ones.
+//! Rows can be pinned, snoozed until a time, or settled as finished
+//! (`marks`); agents that closed wait under Closed to be started again
+//! (`closed`, `reopen`); a column beside the list shows each host's load
+//! and ports, and folds away.
+//!
+//! The page also acts on agents without opening them: a blocked row shows
+//! the end of its pane (`excerpt`), a follow-up waits for the agent to be
+//! back at its prompt (`replies`), and several rows can be handled at once
+//! (`selection`, `batch`). Recent alerts wait in a shelf of their own
+//! (`alerts`).
+//!
+//! Everything it shows is already in the window: the endpoints' snapshots,
+//! the orchestrator views' runs, the pull request prefetch, and the system
+//! load and port monitors. Drawing reads that prepared state only.
+// i18n: migrated
+
+mod alerts;
+mod batch;
+mod closed;
+mod core;
+mod excerpt;
+mod hosts;
+mod inputs;
+mod marks;
+mod model;
+mod notes;
+mod presets;
+mod reopen;
+mod replies;
+mod selection;
+mod view;
+
+#[cfg(test)]
+mod tests;
+
+pub(crate) use marks::Marks;
+pub(crate) use model::{Key, Open, Row, Sections, State};
+pub(crate) use replies::MAX_TEXT as MAX_REPLY;
+
+use crate::{SheprdWindow, i18n::fl, orchestrator::RunState, sidebar::ActivityPanel};
+use gpui::{prelude::*, *};
+use std::{
+    collections::{HashMap, HashSet},
+    time::SystemTime,
+};
+
+/// Below this window width the host column starts folded, leaving the
+/// list room for its titles.
+const NARROW: f32 = 1000.;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Invalid saved overview marks")]
+    InvalidMarks,
+    #[error("Cannot read saved overview marks: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    ReopenRequest(#[source] std::sync::Arc<crate::Error>),
+    #[error("Unexpected daemon response while opening the agent's tab")]
+    ReopenResponse,
+    #[error(transparent)]
+    ReplyHost(crate::pane_move::Error),
+    /// Herdr's own refusal: `code` is its wire code, `message` remote text.
+    #[error("{message}")]
+    ReplyRefused { code: String, message: String },
+    #[error("Cannot reach herdr-core: {0}")]
+    ReplyCore(#[source] sheprd_core_client::Error),
+    #[error("The agent left its terminal before the reply was typed")]
+    ReplyGone,
+    #[error("Cannot run the host's herdr command: {0}")]
+    ReplyScript(#[source] sheprd_client::Error),
+}
+
+/// The page's own state in a window.
+pub(crate) struct Page {
+    /// When each agent entered its state.
+    since: model::Since,
+    /// Hosts folded to one line in the host column, by endpoint id.
+    folded: HashSet<String>,
+    /// Whether the host column was folded to a strip of load dots, or None
+    /// to fold it only while the window is narrow.
+    hosts_closed: Option<bool>,
+    /// The row whose snooze menu is open.
+    menu: Option<Key>,
+    snoozed_open: bool,
+    settled_open: bool,
+    closed: closed::Closed,
+    closed_open: bool,
+    reopen: Option<reopen::Job>,
+    scroll: ScrollHandle,
+    /// What the page last drew from: the minute its elapsed times were
+    /// counted in, the marks' revision, how many rows needed the user and
+    /// worked, and the closed agents' revision, so the tick redraws only
+    /// when one of them moves.
+    drawn: (u64, u64, usize, usize, u64),
+    /// When the latest row needing the user entered its state, on the last
+    /// tick, so the bar's count can tell new from already seen.
+    needing_since: Option<SystemTime>,
+    /// Whether agents idle for over an hour are unfolded.
+    idle_open: bool,
+    alerts_open: bool,
+    /// How many alerts the page last drew from, across its hosts.
+    alerts_drawn: u64,
+    /// The end of each blocked agent's pane, while the page is shown.
+    excerpts: Vec<excerpt::Excerpt>,
+    selection: selection::Selection,
+    /// Whether the batch bar's snooze menu is open.
+    batch_menu: bool,
+    replies: replies::Replies,
+    /// The agents the open reply dialog answers.
+    reply_to: Vec<replies::Target>,
+    /// What the rows were last rebuilt from.
+    inputs: inputs::Inputs,
+}
+
+impl Default for Page {
+    fn default() -> Self {
+        Self {
+            since: Default::default(),
+            folded: Default::default(),
+            hosts_closed: None,
+            menu: None,
+            snoozed_open: false,
+            settled_open: false,
+            closed: Default::default(),
+            closed_open: false,
+            reopen: None,
+            scroll: ScrollHandle::new(),
+            drawn: (0, 0, 0, 0, 0),
+            needing_since: None,
+            idle_open: false,
+            alerts_open: false,
+            alerts_drawn: 0,
+            excerpts: Vec::new(),
+            selection: Default::default(),
+            batch_menu: false,
+            replies: Default::default(),
+            reply_to: Vec::new(),
+            inputs: Default::default(),
+        }
+    }
+}
+
+impl SheprdWindow {
+    /// Every row the page could list: each reachable host's agents, in
+    /// sidebar order, then the open orchestrators' failed runs.
+    pub(crate) fn overview_rows(&self, cx: &App) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for (index, endpoint) in self.endpoints.iter().enumerate() {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            // Each device's answers are its own: another host may have the
+            // same checkout path and branch.
+            let view = self.endpoint_pr_view(index);
+            let pr = |key: &str, branch: &str| {
+                view.as_ref()
+                    .and_then(|view| self.menu.pr_cache.peek(view, key, branch))
+                    .map(|pr| model::Pr {
+                        number: pr.number,
+                        checks: pr.checks_outcome(),
+                    })
+            };
+            rows.extend(model::agent_rows(
+                endpoint,
+                live,
+                &self.overview.since,
+                pr,
+                crate::notification_mutes::Mutes::any(cx),
+            ));
+            // This computer's Herdr 2 agents follow its Herdr 1 ones.
+            if self.is_core_overview_host(&endpoint.id) {
+                rows.extend(self.core_overview_rows(&self.overview.since));
+            }
+        }
+        if !self
+            .endpoints
+            .iter()
+            .any(|endpoint| self.is_core_overview_host(&endpoint.id))
+        {
+            rows.extend(self.core_overview_rows(&self.overview.since));
+        }
+        let mut runs = HashSet::new();
+        for (tab, view) in self.orchestrator_views() {
+            for (target, items, listed) in view.read(cx).listed() {
+                let host = self
+                    .endpoints
+                    .iter()
+                    .find(|endpoint| endpoint.connection.target == *target)
+                    .map(|endpoint| (endpoint.label.clone(), endpoint.id.clone()))
+                    .unwrap_or_default();
+                for run in listed {
+                    if run.state != RunState::Failed || !runs.insert(run.id.clone()) {
+                        continue;
+                    }
+                    let item = items
+                        .iter()
+                        .find(|item| item.key.canonical() == run.item_key);
+                    let title = item.map_or_else(
+                        || crate::orchestrator::key_label(&run.item_key),
+                        |item| format!("{} {}", item.identifier, item.title),
+                    );
+                    rows.push(Row {
+                        key: Key::Run { id: run.id.clone() },
+                        state: State::Failed,
+                        title: fl!("overview-run-failed", title = title),
+                        detail: run
+                            .message
+                            .as_deref()
+                            .map(|message| crate::notifications::safe_text(message, 200))
+                            .unwrap_or_else(|| run.agent.clone()),
+                        identity: None,
+                        workspace: run
+                            .workspace
+                            .as_ref()
+                            .and_then(|workspace| workspace.path.as_deref())
+                            .and_then(|path| path.file_name())
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        branch: run
+                            .workspace
+                            .as_ref()
+                            .map(|workspace| workspace.branch.clone()),
+                        host: host.0.clone(),
+                        endpoint: host.1.clone(),
+                        since: Some(run.updated_at.into()),
+                        pr: None,
+                        open: Open::Run(tab),
+                        muted: false,
+                    });
+                }
+            }
+        }
+        rows
+    }
+
+    pub(crate) fn overview_sections(&self, cx: &App) -> Sections {
+        Sections::of(self.overview_rows(cx), Marks::of(cx), SystemTime::now())
+    }
+
+    /// What the rows read now, to compare with the last rebuild's.
+    fn overview_inputs(&self, now: SystemTime, cx: &App) -> inputs::Inputs {
+        let hosts = self.endpoints.iter().enumerate().map(|(index, endpoint)| {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            (endpoint.enabled, live)
+        });
+        let revisions = (
+            Marks::of(cx).map_or(0, Marks::revision),
+            crate::notification_mutes::Mutes::of(cx)
+                .map_or(0, crate::notification_mutes::Mutes::revision),
+            self.overview.closed.revision(),
+        );
+        inputs::Inputs::new(hosts, revisions, now)
+    }
+
+    /// Runs every window tick: advances a reopen and, when the rows could
+    /// have moved, notes agents that changed state or closed, wakes snoozes
+    /// whose time came, and redraws the page or the bar's count when what
+    /// they show moved.
+    pub(crate) fn poll_overview(&mut self, cx: &mut Context<Self>) {
+        self.poll_overview_at(SystemTime::now(), cx);
+    }
+
+    fn poll_overview_at(&mut self, now: SystemTime, cx: &mut Context<Self>) {
+        if self.overview_inputs(now, cx) == self.overview.inputs {
+            self.poll_overview_reopen(cx);
+            return;
+        }
+        let core = self.observe_core_overview(now);
+        let mut live: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (index, endpoint) in self.endpoints.iter().enumerate() {
+            let state = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            let Some(snapshot) = state
+                .snapshot
+                .as_deref()
+                .filter(|_| state.status.is_connected())
+            else {
+                continue;
+            };
+            self.overview
+                .since
+                .observe(&endpoint.id, &snapshot.agents, now);
+            live.insert(
+                &endpoint.id,
+                snapshot
+                    .agents
+                    .iter()
+                    .map(|agent| agent.pane_id.as_str())
+                    .collect(),
+            );
+        }
+        live.insert(core::ENDPOINT, core.iter().map(String::as_str).collect());
+        self.overview.since.retain(&live);
+        let rows = self.overview_rows(cx);
+        for (index, endpoint) in self.endpoints.iter().enumerate() {
+            let state = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            if let Some(snapshot) = state
+                .snapshot
+                .as_deref()
+                .filter(|_| endpoint.enabled && state.status.is_connected())
+            {
+                self.overview
+                    .closed
+                    .observe(&endpoint.id, snapshot, &rows, now);
+            }
+        }
+        self.observe_closed_core_agents(&rows, now, cx);
+        let endpoints = &self.endpoints;
+        self.overview.closed.retain_hosts(|id| {
+            id == core::ENDPOINT || endpoints.iter().any(|endpoint| endpoint.id == id)
+        });
+        self.poll_overview_reopen(cx);
+        self.poll_overview_replies(cx);
+        self.refresh_overview_excerpts(&rows, cx);
+        Marks::update(cx, |marks| {
+            marks.wake(rows.iter().map(|row| (&row.key, row.state)), now)
+        });
+        let revision = Marks::of(cx).map_or(0, Marks::revision);
+        let sections = Sections::of(rows, Marks::of(cx), now);
+        let unfolded = self.overview.idle_open;
+        if self
+            .overview
+            .selection
+            .retain(&sections.active(unfolded).map(Row::pick).collect::<Vec<_>>())
+        {
+            if self.overview.selection.is_empty() {
+                self.overview.batch_menu = false;
+            }
+            cx.notify();
+        }
+        let (needing, working) = (sections.needing(), sections.working.len());
+        let minute = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() / 60);
+        let shown = self.activity_section() == Some(ActivityPanel::Overview);
+        let drawn = (
+            if shown { minute } else { 0 },
+            revision,
+            needing,
+            working,
+            self.overview.closed.revision(),
+        );
+        let needing_since = sections.needing_since();
+        // After the work above, whose own changes to the marks and the
+        // closed agents need no second pass.
+        self.overview.inputs = self.overview_inputs(now, cx);
+        if drawn != self.overview.drawn || needing_since != self.overview.needing_since {
+            self.overview.drawn = drawn;
+            self.overview.needing_since = needing_since;
+            cx.notify();
+        }
+        let alerts = self.overview_alerts_revision();
+        if alerts != self.overview.alerts_drawn {
+            self.overview.alerts_drawn = alerts;
+            if shown {
+                cx.notify();
+            }
+        }
+    }
+
+    /// Reads the end of each blocked agent's pane while the page is shown.
+    fn refresh_overview_excerpts(&mut self, rows: &[Row], cx: &mut Context<Self>) {
+        if self.activity_section() != Some(ActivityPanel::Overview) {
+            return;
+        }
+        let mut excerpts = Vec::new();
+        for row in rows.iter().filter(|row| row.state == State::Blocked) {
+            let Some((id, pane)) = row.pane() else {
+                continue;
+            };
+            let Some((index, endpoint)) = self
+                .endpoints
+                .iter()
+                .enumerate()
+                .find(|(_, endpoint)| endpoint.id == id)
+            else {
+                continue;
+            };
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            let Some(boot) = live.snapshot.as_deref().map(|s| s.boot_id.as_str()) else {
+                continue;
+            };
+            let surface = live.surface.as_ref();
+            if let Some(lines) =
+                excerpt::of_pane(surface, &endpoint.last_seen, boot, pane, row.since)
+            {
+                excerpts.push(excerpt::Excerpt {
+                    endpoint: id.to_owned(),
+                    pane: pane.to_owned(),
+                    lines,
+                });
+            }
+        }
+        if excerpts != self.overview.excerpts {
+            self.overview.excerpts = excerpts;
+            cx.notify();
+        }
+    }
+
+    /// How many rows needed the user on the last tick, for the bar's count.
+    pub(crate) fn overview_needing(&self) -> usize {
+        self.overview.drawn.2
+    }
+
+    /// When the latest row [`Self::overview_needing`] counts entered its
+    /// state, on the last tick.
+    pub(crate) fn overview_needing_since(&self) -> Option<SystemTime> {
+        self.overview.needing_since
+    }
+
+    /// How many agents were working on the last tick, which animates the
+    /// bar's Overview icon.
+    pub(crate) fn overview_working(&self) -> usize {
+        self.overview.drawn.3
+    }
+
+    /// Whether the page is shown, so every host's load is sampled for its
+    /// host column.
+    pub(crate) fn overview_shown(&self) -> bool {
+        self.activity_section() == Some(ActivityPanel::Overview) && !self.overview_hosts_closed()
+    }
+
+    /// Whether the host column shows as a strip: as the user left it, else
+    /// while the window is too narrow for it beside the list.
+    pub(crate) fn overview_hosts_closed(&self) -> bool {
+        self.overview
+            .hosts_closed
+            .unwrap_or(self.viewport_width < NARROW)
+    }
+
+    /// Shows what a row stands for: an agent's pane among the terminals, or
+    /// a run's item in the Issues section.
+    fn open_overview_row(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) {
+        self.overview.menu = None;
+        self.overview.selection.clear();
+        self.overview.batch_menu = false;
+        Marks::update(cx, |marks| marks.seen(&row.key));
+        match &row.open {
+            Open::Pane {
+                endpoint,
+                pane,
+                tab,
+                workspace,
+            } => {
+                // Read before navigating, which may switch devices.
+                let on_screen = self.endpoints[self.selected_endpoint].id == *endpoint
+                    && self
+                        .browser_key()
+                        .is_some_and(|(_, shown)| shown == *workspace);
+                self.show_activity_panel(ActivityPanel::Workspaces, window, cx);
+                self.activity.return_to = Some(ActivityPanel::Overview);
+                self.navigate_endpoint(endpoint, crate::NavigationTarget::Pane(pane), cx);
+                // An agent in the tab already focused moves nothing, so show
+                // it here, as the Devices overview does.
+                if on_screen {
+                    self.terminal_focus_moved(tab, false, cx);
+                }
+                window.focus(&self.focus, cx);
+            }
+            Open::Run(_) => self.show_activity_panel(ActivityPanel::Issues, window, cx),
+            Open::Core { tab, terminal } => {
+                self.show_activity_panel(ActivityPanel::Workspaces, window, cx);
+                self.activity.return_to = Some(ActivityPanel::Overview);
+                self.open_core_overview_row(*tab, terminal, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Shows the workspace a closed agent ran in.
+    fn open_closed_agent(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.overview.menu = None;
+        let Some(agent) = self.overview.closed.get(id).cloned() else {
+            return;
+        };
+        let (endpoint, workspace) = match &agent.row.open {
+            Open::Pane {
+                endpoint,
+                workspace,
+                ..
+            } => (endpoint, workspace),
+            Open::Core { .. } => return self.open_closed_core_agent(&agent, window, cx),
+            Open::Run(_) => return,
+        };
+        let current = self.endpoints.iter().enumerate().any(|(index, host)| {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &host.live
+            };
+            host.id == *endpoint
+                && host.enabled
+                && live.status.is_connected()
+                && live
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.boot_id == agent.boot)
+        });
+        if !current {
+            self.show_flash(
+                crate::window::Flash::warning(fl!("overview-session-gone")),
+                cx,
+            );
+            return;
+        }
+        self.show_activity_panel(ActivityPanel::Workspaces, window, cx);
+        self.activity.return_to = Some(ActivityPanel::Overview);
+        self.navigate_endpoint(endpoint, crate::NavigationTarget::Workspace(workspace), cx);
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Whether a closed agent is being started again, which holds the
+    /// connection's script slot.
+    pub(crate) fn overview_reopening(&self) -> bool {
+        self.overview.reopen.is_some()
+    }
+
+    fn mark_overview_row(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Marks) -> bool) {
+        self.overview.menu = None;
+        self.overview.batch_menu = false;
+        Marks::update(cx, f);
+        cx.notify();
+    }
+}

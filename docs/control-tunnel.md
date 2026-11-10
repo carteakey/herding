@@ -1,13 +1,13 @@
 # Control tunnel: `team` commands from SSH hosts
 
-Herdr UI serves team coordination through a Unix domain socket on the
+Herding serves team coordination through a Unix domain socket on the
 machine it runs on:
 
     ${XDG_STATE_HOME:-$HOME/.local/state}/herdr/gpui/control.sock
 
 An agent in a pane on this machine reaches it because the socket sits in
 its own filesystem. An agent in a pane on an SSH host (`m1`, `m2`, ...)
-does not: its `herdr-gpui team ...` dies with "Herdr UI is not running,
+does not: its `herdr-gpui team ...` dies with "Herding is not running,
 or its control socket is unreachable". `scripts/control-tunnel.sh` closes
 that gap: it binds the host's own control socket path and carries every
 request back to the UI here, so the remote agent runs the native CLI
@@ -15,7 +15,7 @@ subcommands against the team as itself.
 
 ## Quick start
 
-On the machine Herdr UI runs on:
+On the machine Herding runs on:
 
 ```sh
 scripts/control-tunnel.sh m1
@@ -83,7 +83,7 @@ scripts/control-tunnel.sh --ssh-arg -p 2222 ops@jump.example
   has the same standing the audit logged (finding c2686543): it can act
   as that pane's member, locally and through the tunnel alike. The sprint
   tracks hardening that separately.
-- If a Herdr UI actually runs on the host, its socket is live and the
+- If a Herding actually runs on the host, its socket is live and the
   script refuses to replace it. Stop that UI or forward a different path
   with `--remote-socket`.
 
@@ -91,7 +91,7 @@ scripts/control-tunnel.sh --ssh-arg -p 2222 ops@jump.example
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `no control socket at ...; is Herdr UI running?` | The UI here is down. Start it, rerun. |
+| `no control socket at ...; is Herding running?` | The UI here is down. Start it, rerun. |
 | `Administratively prohibited` / forward refused | sshd on the host forbids forwarding (`AllowTcpForwarding`, `PermitListen` for TCP; unix forwards need OpenSSH 6.7+ sshd). Ask the host's admin or check `sshd_config`. |
 | `ExitOnForwardFailure` right after connecting | The remote path could not be bound: a stale socket created between pre-flight and bind, or a non-socket file there. The script prints the path to remove; delete it on the host, rerun. |
 | Requests time out through the tunnel | The ssh link dropped mid-session; the script exits on link loss, rerun it. |

@@ -31,9 +31,9 @@ For every branch to land:
   mechanism, the tests, and the docs.
 - Run the gates **on the rebased tree**:
   - `cargo fmt --check`
-  - `cargo clippy -p herdr-gpui -p herdr-orchestrator --all-targets`
-  - `cargo test -p herdr-orchestrator`
-  - `cargo test -p herdr-gpui team` (and the affected module for a scoped fix)
+  - `cargo clippy -p sheprd-gpui -p sheprd-orchestrator --all-targets`
+  - `cargo test -p sheprd-orchestrator`
+  - `cargo test -p sheprd-gpui team` (and the affected module for a scoped fix)
 - A red gate is a stop. Fix forward with evidence, or send it back. Never merge
   on "all green" without counts, and never skip a gate because the box is slow.
 - A rebase can expose a real bug (a fixture that no longer matches, a call site
@@ -50,15 +50,15 @@ For every branch to land:
 
 ## 4. Build and verify the binary
 
-- `cargo build --release --bin herdr-gpui`.
-- `./target/release/herdr-gpui --version` must print the new tag and short SHA.
+- `cargo build --release --bin herding`.
+- `./target/release/herding --version` must print the new tag and short SHA.
 - `--build-info` must not be a worktree/PR build for a release.
 
 ## 5. Deploy
 
-**Local:** `herdr-gpui app quit`, then relaunch with the session's display
+**Local:** `herding app quit`, then relaunch with the session's display
 environment (`DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `XDG_RUNTIME_DIR`,
-`DBUS_SESSION_BUS_ADDRESS`). Verify with `herdr-gpui status --json`.
+`DBUS_SESSION_BUS_ADDRESS`). Verify with `herding status --json`.
 
 **Fleet:** per host, fetch the tag, check it out, build with
 `PATH="$HOME/.cargo/bin:$PATH"`, verify `--version`, then restart the UI. Hosts
@@ -84,7 +84,7 @@ alone, or rely on the sampler's soft guard.
 
 ## 7. Verify and report
 
-- `herdr-gpui team status` and `team task list` show the expected board.
+- `herding team status` and `team task list` show the expected board.
 - The release tag, every host's `--version`, and the gate counts are in the
   report. State what was not run.
 - Watch memory for a few minutes after the deploy; if the session is under

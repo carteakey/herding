@@ -23,7 +23,7 @@ child process with no terminal streams; failures are ignored so Herdr cannot
 interrupt ZCode. Prompt and tool contents are not forwarded.
 
 The plugin includes the `herdr-team` skill. From a Herdr pane, the agent can use
-`herdr-gpui team status`, inspect tasks and bulletin messages, claim and
+`herding team status`, inspect tasks and bulletin messages, claim and
 complete work, and record findings. The Team CLI currently derives its caller
 from pane environment values and daemon state; those values alone do not
 authenticate the calling process or prove that a replacement agent is the

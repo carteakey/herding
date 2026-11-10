@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatched only after the store write confirms, deduped per assignment
   state, and skipped for a dead session, so handing out work needs no
   supervisor bulletin.
+- Zero-touch dispatch for the rest of the task lifecycle (issue #4): a
+  claim wakes the supervisor with who is working (a visibility ping, not an
+  action request), and a block recorded by someone other than the assignee
+  wakes the assignee with the blocker reason; both dedupe per stored task
+  state, and neither wakes its own author about a state they just recorded.
+  Gated task starts stay operator-modeled on purpose: a gated task waits
+  Open (or Blocked with its gate in the reason) and starts when the
+  supervisor's board-driven idle check assigns it (issue #16); there is no
+  depends_on primitive.
 - Self-describing icons on team task rows (issue #9): a status mark per
   state (open, in progress, blocked, done, cancelled) from the 16px
   status-mark family, an assignee-role mark (star for a supervisor, person

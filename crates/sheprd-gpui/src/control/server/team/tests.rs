@@ -869,13 +869,71 @@ fn a_reassigned_task_wakes_once_per_assignment_state() {
 }
 
 #[test]
-fn claimed_task_does_not_wake_anyone() {
+fn a_claim_wakes_the_supervisor_with_who_is_working() {
     let dispatches = prompts_for_scoped_reply(&Reply::ScopedTask {
         team: wake_team(),
         task: wake_task(TaskStatus::InProgress),
         actor: worker_actor(),
     });
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].pane_id, "p_sup");
+    assert!(dispatches[0].prompt.contains("was claimed by worker1"));
+    assert!(dispatches[0].prompt.contains("No action is needed"));
+    assert_eq!(
+        dispatches[0].signals,
+        vec!["task1|in_progress|10000"],
+        "one stored claimed state, one supervisor wake"
+    );
+}
+
+#[test]
+fn supervisors_own_claim_does_not_wake_itself() {
+    let dispatches = prompts_for_scoped_reply(&Reply::ScopedTask {
+        team: wake_team(),
+        task: wake_task(TaskStatus::InProgress),
+        actor: Author::Member {
+            member_id: "m_sup".into(),
+        },
+    });
     assert!(dispatches.is_empty());
+}
+
+#[test]
+fn a_block_by_someone_else_wakes_the_assignee_with_the_reason() {
+    let mut task = wake_task(TaskStatus::Blocked);
+    task.blocker_reason = Some("waiting on credentials".into());
+    let dispatches = prompts_for_scoped_reply(&Reply::ScopedTask {
+        team: wake_team(),
+        task,
+        actor: Author::Member {
+            member_id: "m_sup".into(),
+        },
+    });
+    assert_eq!(dispatches.len(), 2, "supervisor and assignee both wake");
+    let assignee = dispatches
+        .iter()
+        .find(|d| d.pane_id == "p_w1")
+        .expect("the assignee wake");
+    assert!(assignee.prompt.contains("waiting on credentials"));
+    assert!(assignee.prompt.contains("do not poll"));
+    assert_eq!(
+        assignee.signals,
+        vec!["assignee|task1|m_w1|10000"],
+        "one stored blocked state, one assignee wake"
+    );
+}
+
+#[test]
+fn an_assignees_own_block_does_not_wake_itself() {
+    let mut task = wake_task(TaskStatus::Blocked);
+    task.blocker_reason = Some("waiting on credentials".into());
+    let dispatches = prompts_for_scoped_reply(&Reply::ScopedTask {
+        team: wake_team(),
+        task,
+        actor: worker_actor(),
+    });
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].pane_id, "p_sup");
 }
 
 /// The lineage contract against the real /proc reader, with live processes:

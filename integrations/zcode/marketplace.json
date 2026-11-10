@@ -1,10 +1,10 @@
 {
-  "name": "herdr-zcode",
+  "name": "herdr-team",
   "plugins": [
     {
-      "description": "Report ZCode CLI sessions and provide Herdr Team guidance.",
-      "name": "herdr-zcode",
-      "source": "./plugins/herdr-zcode",
+      "description": "Teach a ZCode agent to use the Herding Team CLI.",
+      "name": "herdr-team",
+      "source": "./plugins/herdr-team",
       "version": "0.1.1"
     }
   ]

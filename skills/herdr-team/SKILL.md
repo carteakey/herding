@@ -95,6 +95,16 @@ push ..."). Post the branch tip and the gate counts; the supervisor lands it
 fast-forward. The repository's "only commit/push when requested" rule applies
 to you as a worker; the supervisor's review-and-land authority is separate.
 
+## Multi-machine
+
+The team store and wake queue live in the UI app on the supervisor's machine.
+For a remote member, the UI must be connected to that host's endpoint and the
+pane must be in the endpoint snapshot; register the member from its own pane
+through the control tunnel (`scripts/control-tunnel.sh`), not against the
+remote host's own store. The local `herdr pane run` cannot reach a remote pane:
+use `herdr --remote <target> pane run` or SSH in and use the host's local
+`herdr pane run`. See `docs/control-tunnel.md` and issue #35.
+
 ## File issues in this fork, not upstream
 
 Open issues and PRs in `carteakey/herding` (the fork). `penso/herdr-gpui` is

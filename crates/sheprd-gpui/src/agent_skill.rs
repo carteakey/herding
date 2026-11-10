@@ -175,13 +175,17 @@ pub(crate) fn install(home: &Path, text: &str) -> crate::Result<Vec<PathBuf>> {
         });
     }
     let executable = executable();
-    place(
-        home,
-        AUTOMATIONS_NAME,
-        &automations_text(executable.as_deref()),
-    )?;
-    place(home, MODS_NAME, &mods_text(executable.as_deref()))?;
-    place(home, TEAM_NAME, &team_text(executable.as_deref()))?;
+    // One unreadable file must not stop the others: a missing team skill is
+    // what makes a Team notification point at nothing.
+    for (name, text) in [
+        (AUTOMATIONS_NAME, automations_text(executable.as_deref())),
+        (MODS_NAME, mods_text(executable.as_deref())),
+        (TEAM_NAME, team_text(executable.as_deref())),
+    ] {
+        if let Err(error) = place(home, name, &text) {
+            tracing::warn!(%error, "Cannot install the {name} skill");
+        }
+    }
     Ok(placed)
 }
 
@@ -268,6 +272,10 @@ pub(crate) struct AgentSkill {
     path: Option<PathBuf>,
     /// Rewrite the installed skill once the settings allow it.
     refresh: bool,
+    /// Place the team skill once the settings allow it. Team notifications
+    /// tell agents to load it, so it does not wait for the offer, and it is
+    /// not limited to release builds.
+    team: bool,
 }
 
 impl Global for AgentSkill {}
@@ -296,12 +304,18 @@ impl AgentSkill {
         let ask =
             crate::RELEASE_BUILD && choice.is_none() && home.as_deref().is_some_and(agents_present);
         let refresh = crate::RELEASE_BUILD && choice == Some(Choice::Installed);
+        // The team skill is not an optional convenience: every Team
+        // notification tells the agent to load it. Place it whatever the
+        // offer answered and whatever this build is, so a development build
+        // cannot point agents at a skill it will never write.
+        let team = home.as_deref().is_some_and(agents_present);
         Self {
             choice,
             ask,
             install: None,
             path,
             refresh,
+            team,
         }
     }
 
@@ -314,6 +328,7 @@ impl AgentSkill {
             install: Some(SkillInstall::Ask),
             path: None,
             refresh: false,
+            team: false,
         }
     }
 
@@ -345,8 +360,16 @@ impl AgentSkill {
     fn allow(cx: &mut App, install: SkillInstall) {
         let skill = cx.global_mut::<Self>();
         skill.install = Some(install);
-        if install != SkillInstall::Off && std::mem::take(&mut skill.refresh) {
+        if install == SkillInstall::Off {
+            return;
+        }
+        let refresh = std::mem::take(&mut skill.refresh);
+        let team = std::mem::take(&mut skill.team);
+        if refresh {
+            // Places every skill, the team one included.
             refresh_installed(cx);
+        } else if team_alone(install, refresh, team) {
+            ensure_team_skill(cx);
         }
     }
 
@@ -418,6 +441,28 @@ fn refresh_installed(cx: &mut App) {
             let text = text(executable().as_deref());
             if let Err(error) = install(&home, &text) {
                 tracing::warn!(%error, "Cannot refresh the agent skill");
+            }
+        })
+        .detach();
+}
+
+/// Whether the team skill is placed on its own: the settings allow it, the
+/// full refresh is not already placing it, and an agent directory exists.
+fn team_alone(install: SkillInstall, refresh: bool, team: bool) -> bool {
+    install != SkillInstall::Off && !refresh && team
+}
+
+/// Places the team skill alone, for the Team workflow that depends on it.
+/// Blocking; runs off the UI thread.
+fn ensure_team_skill(cx: &mut App) {
+    let Ok(home) = crate::config::home() else {
+        return;
+    };
+    cx.background_executor()
+        .spawn(async move {
+            let text = team_text(executable().as_deref());
+            if let Err(error) = place(&home, TEAM_NAME, &text) {
+                tracing::warn!(%error, "Cannot install the team skill");
             }
         })
         .detach();

@@ -38,6 +38,7 @@ fn the_skill_description_is_a_quoted_scalar() {
     assert!(!description(SKILL).contains('"'));
     assert!(!description(AUTOMATIONS).contains('"'));
     assert!(!description(MODS).contains('"'));
+    assert!(!description(TEAM).contains('"'));
 }
 
 #[test]
@@ -110,7 +111,7 @@ fn both_skills_install_and_go_together() {
 /// agents such as Pi refuse a skill over it.
 #[test]
 fn the_skill_description_fits_the_agent_skills_limit() {
-    for skill in [SKILL, AUTOMATIONS, MODS] {
+    for skill in [SKILL, AUTOMATIONS, MODS, TEAM] {
         let length = description(skill).chars().count();
         assert!((1..=1024).contains(&length), "{length} characters");
     }

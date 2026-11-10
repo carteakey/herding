@@ -7,6 +7,7 @@ fn installed() -> AgentSkill {
         install: None,
         path: None,
         refresh: false,
+        team: false,
     }
 }
 
@@ -69,4 +70,18 @@ fn removing_the_skill_cancels_the_refresh_off_held_back(cx: &mut gpui::TestAppCo
         AgentSkill::allow(cx, SkillInstall::Ask);
         assert_eq!(AgentSkill::choice(cx), Some(Choice::Declined));
     });
+}
+
+#[test]
+fn the_team_skill_does_not_wait_for_the_offer_or_a_release_build() {
+    // A declined offer and a development build still get the skill: every
+    // Team notification tells the agent to load it.
+    assert!(team_alone(SkillInstall::Ask, false, true));
+    assert!(team_alone(SkillInstall::Local, false, true));
+    // The full refresh already places it.
+    assert!(!team_alone(SkillInstall::Ask, true, true));
+    // An explicit opt-out wins.
+    assert!(!team_alone(SkillInstall::Off, false, true));
+    // Nothing to place without an agent directory.
+    assert!(!team_alone(SkillInstall::Ask, false, false));
 }

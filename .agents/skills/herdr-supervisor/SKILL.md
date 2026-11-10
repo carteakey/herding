@@ -74,13 +74,21 @@ registration), use the member ID, and if that fails too the member is not
 targetable - post team-wide instead. `team roster --json` shows only
 targetable members; the plain roster shows history too.
 
-## Push and merge authority
+## Commit and push authority: supervisor vs worker
 
-- Workers push branches on the supervisor's word ("AUTHORIZED: push ...").
-- main lands fast-forward only, no force-push, after diff review.
-- Land a reviewed one-line fix branch immediately when machines are waiting
-  on convergence; log the decision in the reply bulletin.
-- Tag cuts are the human's call, not the supervisor's.
+The repository's "only commit, push, or create/update a PR when requested" rule
+is a **worker guardrail**, not a supervisor prohibition. The distinction:
+
+| Role | Authority |
+| --- | --- |
+| Worker | Branch only. No commit, push, or PR without the supervisor's explicit "AUTHORIZED: push ..." message. Post the branch tip and gate counts; the supervisor lands it. |
+| Supervisor | May commit documentation and fast-forward a reviewed, already-pushed fix branch to main as part of supervision. The team's operating model is the standing request. |
+| Human | Owns tag cuts, release/deploy, and any upstream report. The supervisor asks before those. |
+
+Hard limits for the supervisor: never force-push `main`, never commit
+unreviewed worker code, never tag or deploy a release, and never open issues,
+PRs, or comments upstream (`penso/herdr-gpui`). Land fast-forward only, after
+diff review; log the decision in the reply bulletin.
 
 ## Verification discipline
 

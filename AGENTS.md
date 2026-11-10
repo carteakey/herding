@@ -302,7 +302,7 @@ just test-perf
 
 ## Git And Handoff
 
-- Only commit, push, or create/update a PR when requested. Do not amend, force-push, discard changes, or clean up other worktrees without explicit authorization.
+- Only commit, push, or create/update a PR when requested. This is a worker guardrail: the team supervisor may commit documentation and fast-forward a reviewed, already-pushed fix branch to main as part of supervision, but still must not force-push main, commit unreviewed worker code, tag releases, or touch upstream. Do not amend, force-push, discard changes, or clean up other worktrees without explicit authorization.
 - Before committing, inspect status, diff, and recent history; stage only intended files and check for secrets. Do not bypass hooks or signing when they fail.
 - Use conventional commit subjects (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`). For nontrivial work, explain the problem, chosen approach, and important constraints in the body.
 - Never add AI attribution, assistant-session links, or tool vanity lines to

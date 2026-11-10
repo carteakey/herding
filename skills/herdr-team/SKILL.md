@@ -78,6 +78,14 @@ Root cause: `deliver_team_prompt` returns `Kept` for a pane it cannot prove,
 and the #17 path maps that to `Held` and re-enqueues with no backoff; the
 direct dispatch path also logs nothing on failure. Tracked in issue #35.
 
+## Commit and push
+
+Work on a branch and keep `main` untouched. Do not commit, push, or open a PR
+until the supervisor explicitly authorizes it in the bulletin ("AUTHORIZED:
+push ..."). Post the branch tip and the gate counts; the supervisor lands it
+fast-forward. The repository's "only commit/push when requested" rule applies
+to you as a worker; the supervisor's review-and-land authority is separate.
+
 ## File issues in this fork, not upstream
 
 Open issues and PRs in `carteakey/herding` (the fork). `penso/herdr-gpui` is

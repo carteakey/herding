@@ -1,6 +1,0 @@
-{
-  "name": "herdr-team",
-  "version": "0.1.1",
-  "description": "Teach a ZCode agent to use the Herding Team CLI.",
-  "skills": "skills"
-}

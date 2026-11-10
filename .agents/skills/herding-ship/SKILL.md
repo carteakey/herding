@@ -12,6 +12,9 @@ resolved correctly, or whether a host actually came up.
 
 ## 1. Preflight (never skip)
 
+- This checkout is `~/repos/forks/herding`; the GitHub repo is
+  `carteakey/herding`. `origin` is the fork, `upstream` is
+  `penso/herdr-gpui` and is read-only. File issues and PRs in the fork only.
 - `git status` must be clean and the branch must be `main`. A dirty tree is a
   stop: commit or stash it, never force.
 - `git fetch origin --prune`.
@@ -21,6 +24,12 @@ resolved correctly, or whether a host actually came up.
   never deleted.
 - Check the box: `free -h`, `swapon --show`. If swap is nearly full, serialize
   builds (`CARGO_BUILD_JOBS=1`) and pause idle workers before starting.
+- Kill local inference before gating: `pgrep -af 'strata|llama-swap'`. Those
+  servers hold 40+ GB RSS and restart on demand; ask before killing, then
+  build. `/tmp` here is a 31 GB tmpfs, so a `target/` under it eats RAM.
+- The fork's CI is inert: upstream's workflows gate every code job on
+  `penso/herdr-gpui` / `sheprd-labs/sheprd`, so nothing runs here. The local
+  gates below are the only evidence a change has; record their counts.
 
 ## 2. Gate each ready branch at the exact commit
 
@@ -34,6 +43,10 @@ For every branch to land:
   - `cargo clippy -p sheprd-gpui -p sheprd-orchestrator --all-targets`
   - `cargo test -p sheprd-orchestrator`
   - `cargo test -p sheprd-gpui team` (and the affected module for a scoped fix)
+  - `python3 scripts/check-i18n.py`, `python3 scripts/check-sorted.py`, and
+    `bash scripts/check-file-size.sh` when the change touches user strings,
+    sorted lists, or file sizes. `check-file-size` currently fails on three
+    Team files that predate the limit; do not let it hide a new offender.
 - A red gate is a stop. Fix forward with evidence, or send it back. Never merge
   on "all green" without counts, and never skip a gate because the box is slow.
 - A rebase can expose a real bug (a fixture that no longer matches, a call site
@@ -45,6 +58,9 @@ For every branch to land:
 - Push `main`, then derive the version:
   `git tag -l | python3 scripts/release/next-version.py $(date -u +%Y%m%d)`.
 - `git tag -a v<version> -m v<version>` and `git push origin v<version>`.
+- The tag is a **source** release: packaging still builds and expects
+  `sheprd` (see the follow-up issue), so no installer or updater artifact
+  comes out of it yet. Say so in the release notes rather than implying one.
 - Update the linked issues with the SHA and gate counts; close only shipped
   issues, leave partials open with what remains.
 

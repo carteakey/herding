@@ -12,7 +12,7 @@
 #
 # The fleet step is opt-in and expects the host list in HERDR_FLEET_HOSTS
 # (space-separated ssh targets). Each host is expected to have the repo at
-# HERDR_FLEET_REPO (default: ~/repos/forks/herdr-gpui) and a working cargo.
+# HERDR_FLEET_REPO (default: ~/repos/forks/herding) and a working cargo.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -47,6 +47,8 @@ cargo fmt --check
 cargo clippy -p sheprd-gpui -p sheprd-orchestrator --all-targets
 cargo test -p sheprd-orchestrator
 cargo test -p sheprd-gpui team
+python3 scripts/check-i18n.py
+python3 scripts/check-sorted.py
 
 say "version"
 if [[ -z "$version" ]]; then
@@ -86,9 +88,17 @@ fi
 if [[ "$fleet" == 1 ]]; then
     say "deploy fleet"
     : "${HERDR_FLEET_HOSTS:?set HERDR_FLEET_HOSTS to the ssh targets}"
-    repo="${HERDR_FLEET_REPO:-~/repos/forks/herdr-gpui}"
     for host in $HERDR_FLEET_HOSTS; do
         echo "-- $host"
+        # Hosts renamed their checkout at different times, so resolve it there
+        # unless HERDR_FLEET_REPO names one path for every host.
+        repo="${HERDR_FLEET_REPO:-}"
+        if [[ -z "$repo" ]]; then
+            repo=$(ssh "$host" 'for d in ~/repos/forks/herding ~/repos/forks/herdr-gpui; do [ -d "$d/.git" ] && { printf %s "$d"; exit 0; }; done; exit 1') || {
+                echo "$host: no herding checkout under ~/repos/forks" >&2
+                continue
+            }
+        fi
         ssh "$host" "cd $repo && git fetch origin --tags && git checkout $tag && \
             export PATH=\$HOME/.cargo/bin:\$PATH && \
             cargo build --release --bin herding && \

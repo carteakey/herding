@@ -285,7 +285,7 @@ def print_table(reports: List[MemberHealth]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Supervisor liveliness ping & PTO heartbeat detector")
     parser.add_argument("--team", help="Team ID (defaults to HERDR_TEAM_ID or discovers from team status)")
-    parser.add_argument("--gpui-bin", default="/home/kchauhan/repos/forks/herdr-gpui/target/debug/herdr-gpui", help="Path to herdr-gpui binary")
+    parser.add_argument("--gpui-bin", default="/home/kchauhan/repos/forks/herding/target/debug/herding", help="Path to the herding binary")
     parser.add_argument("--herdr-bin", default="herdr", help="Path to herdr CLI binary")
     parser.add_argument("--ping", action="store_true", help="Send a lightweight heartbeat ping to idle workers")
     parser.add_argument("--json", action="store_true", help="Output health report as JSON")

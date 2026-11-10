@@ -4,6 +4,11 @@ Herding coordinates autonomous agent workers across multiple physical and virtua
 machines in a unified team. This document details the cross-host architecture, the
 SSH control tunnel runbook, and the live verification record on M1 Mac hardware.
 
+> **Fleet path transition:** the checkout is moving from
+> `~/repos/forks/herdr-gpui` to `~/repos/forks/herding`. fx505 is renamed;
+> m1/m2 keep the old path until renamed. `scripts/ship.sh` probes both names
+> per host, so either layout deploys.
+
 ## Architecture
 
 ```
@@ -28,7 +33,7 @@ SSH control tunnel runbook, and the live verification record on M1 Mac hardware.
 |  - Workspace wA:                                            |
 |      * wA:p1: ZCode worker ('zcode-m1')                     |
 |      * wA:p4: Agy worker ('agy-m1')                         |
-|  - CLI Binary: target/debug/herdr-gpui                      |
+|  - CLI Binary: target/release/herding                       |
 +-------------------------------------------------------------+
 ```
 
@@ -42,7 +47,7 @@ SSH control tunnel runbook, and the live verification record on M1 Mac hardware.
 2. **Remote SSH Host (`m1`)**:
    - Runs headless `herdr server` managing persistent agent panes (`wA:p1` through
      `wA:p4`).
-   - The remote `herdr-gpui` CLI binary resolves its default control socket path
+   - The remote `herding` CLI binary resolves its default control socket path
      (`${HOME}/.local/state/herdr/gpui/control.sock`).
    - Requests made inside remote panes forward back to the local UI transparently.
 
@@ -82,7 +87,7 @@ ssh -N \
 From within any pane on the remote machine (or over SSH specifying environment variables):
 
 ```sh
-ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/herdr-gpui/target/debug/herdr-gpui team status <TEAM_ID>'
+ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/herding/target/release/herding team status <TEAM_ID>'
 ```
 
 ## Live Verification Record (2026-11-04)
@@ -97,14 +102,14 @@ ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/he
 1. **Registration of Remote Worker `zcode-m1`**:
    - Command:
      ```sh
-     ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/herdr-gpui/target/debug/herdr-gpui team register c48cfdff-0422-4299-b03c-804ac19f94f3 --name zcode-m1'
+     ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/herding/target/release/herding team register c48cfdff-0422-4299-b03c-804ac19f94f3 --name zcode-m1'
      ```
    - Result: Registered `zcode-m1` with member ID `4975ba01-685e-4237-b417-010d24309f16`.
 
 2. **Remote Status Query**:
    - Command:
      ```sh
-     ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/herdr-gpui/target/debug/herdr-gpui team status c48cfdff-0422-4299-b03c-804ac19f94f3'
+     ssh m1 'HERDR_PANE_ID=wA:p1 HERDR_WORKSPACE_ID=wA /Users/kchauhan/repos/forks/herding/target/release/herding team status c48cfdff-0422-4299-b03c-804ac19f94f3'
      ```
    - Result:
      ```

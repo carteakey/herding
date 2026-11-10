@@ -136,11 +136,11 @@ FIRST ancestor whose cmdline carries the agent kind; a ZCode tool shell runs
 `zsh -c . '~/.zcode/cli/...'`, carries the agent kind itself, dies after one
 command - the walk now continues through consecutive matches and anchors the
 topmost before the ancestry leaves the agent's process family). Regression
-arms for all three live in `crates/herdr-gpui/src/control/server/team/tests.rs`.
+arms for all three live in `crates/sheprd-gpui/src/control/server/team/tests.rs`.
 
 When a rebuilt binary must take effect:
 
-1. `herdr-gpui app quit` - safe: panes descend from the `herdr server`
+1. `herding app quit` - safe: panes descend from the `herdr server`
    daemon (checked via `/proc` ppid walk), not the UI; agent sessions
    survive.
 2. Relaunch detached with the old UI's display env, captured first from

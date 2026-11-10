@@ -29,3 +29,7 @@ mise.local.toml
 
 # Wrangler local state for the site Worker.
 .wrangler/
+__pycache__/
+
+# sheprd.org/docs, built at deploy time by website/tools/docs.py.
+/website/site/docs/

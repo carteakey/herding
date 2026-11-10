@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/penso/herdr-gpui/actions/workflows/ci.yml"><img src="https://github.com/penso/herdr-gpui/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/carteakey/herding/actions/workflows/ci.yml"><img src="https://github.com/carteakey/herding/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 <p align="center">
@@ -68,26 +68,26 @@ The native GPUI workspace combines:
 - **Team Bulletin**: A persistent, searchable message feed with threaded replies, @mention dispatch, unread tracking, and delivery receipts.
 
 ### 2. Multi-Agent CLI Coordination
-Agents drive team state directly from their own panes using the `herdr-gpui team` CLI:
+Agents drive team state directly from their own panes using the `herding team` CLI:
 
 ```bash
 # Check team status, active goal, and roster
-herdr-gpui team status <TEAM_ID>
+herding team status <TEAM_ID>
 
 # Claim an assigned task
-herdr-gpui team task claim <TEAM_ID> <TASK_ID>
+herding team task claim <TEAM_ID> <TASK_ID>
 
 # Post an update or mention an agent on the bulletin
-herdr-gpui team bulletin post <TEAM_ID> --reply-to <MSG_ID> "@daddy Task verified with cargo test"
+herding team bulletin post <TEAM_ID> --reply-to <MSG_ID> "@daddy Task verified with cargo test"
 
 # Record an empirical discovery or regression finding
-herdr-gpui team finding add <TEAM_ID> \
+herding team finding add <TEAM_ID> \
   --title "Lock contention in status cache" \
   --confidence high \
   --description "Found 350ms p95 latency under 10 concurrent requests"
 
 # Mark a task complete with verifiable results
-herdr-gpui team task complete <TEAM_ID> <TASK_ID> --result "206 tests passed; clean clippy"
+herding team task complete <TEAM_ID> <TASK_ID> --result "206 tests passed; clean clippy"
 ```
 
 ### 3. Agent Heartbeats & PTO Liveliness Monitoring
@@ -117,23 +117,23 @@ For known limitations and active review audits, consult [docs/herding-review-not
 
 ## Quickstart & Installation
 
-Install the [Herdr](https://herdr.dev/) daemon first, then install the Herdr GPUI client:
-
-| Platform | Command |
-| --- | --- |
-| macOS | `brew install penso/tap/herdr-gpui` |
-| Linux (APT, DNF or pacman) | `curl -fsSL https://herdrui.dev/install.sh \| sh` |
-| Windows (PowerShell) | `irm https://herdrui.dev/install.ps1 \| iex` |
-
-### Building from Source
+Install the [Herdr](https://herdr.dev/) daemon first, then build Herding from source:
 
 ```bash
-git clone https://github.com/penso/herdr-gpui.git
-cd herdr-gpui
+git clone https://github.com/carteakey/herding.git
+cd herding
 
-# Release build with GPUI native terminal and Herding features
-cargo run --locked --release -p herdr-gpui
+# Release build with the GPUI native terminal and Herding team features
+cargo build --locked --release -p sheprd-gpui --bin herding
+./target/release/herding
 ```
+
+Herding is not yet published to Homebrew or the upstream installers. The
+packages at [herdrui.dev](https://herdrui.dev/) and the upstream taps install
+the unmodified upstream client, not Herding.
+
+The internal crate and package names remain `sheprd-*` so upstream syncs stay
+mechanical; only the product name and the `herding` binary are Herding's.
 
 ---
 
@@ -146,13 +146,13 @@ Herding is built on top of **Herdr UI**, the high-performance native GPUI client
 - **Workspaces & Git Worktrees**: Manage isolated branches, checkouts, and terminal sessions from a unified sidebar.
 - **Teleport**: Move an entire working tree over SSH to another host with its uncommitted diffs, splits, and running processes intact.
 - **Visual Diff Review**: Review changes side-by-side or unified, click lines to leave comments, and dispatch feedback directly to agent panes.
-- **Integrated Browser & Annotations**: Open pages via `herdr-gpui browser open`, capture element screenshots, annotate DOM targets, and pass feedback to coding agents.
+- **Integrated Browser & Annotations**: Open pages via `herding browser open`, capture element screenshots, annotate DOM targets, and pass feedback to coding agents.
 - **Extensive Theming**: Light and dark system adaptation, Catppuccin, Ghostty themes, and native layout customizers.
 
 For upstream terminal configuration, keybindings, and platform specifics:
-- [GUI Scope & Configuration](crates/herdr-gpui/README.md)
+- [GUI Scope & Configuration](crates/sheprd-gpui/README.md)
 - [Command Line Interface (CLI)](docs/cli.md)
-- [Performance Benchmarks](crates/herdr-gpui/PERFORMANCE.md)
+- [Performance Benchmarks](crates/sheprd-gpui/PERFORMANCE.md)
 - [Usage Providers & Plan Limits](docs/usage-providers.md)
 - [Contributing & Agent Playbook](AGENTS.md)
 

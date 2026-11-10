@@ -44,9 +44,9 @@ git fetch origin --prune
 
 say "gates"
 cargo fmt --check
-cargo clippy -p herdr-gpui -p herdr-orchestrator --all-targets
-cargo test -p herdr-orchestrator
-cargo test -p herdr-gpui team
+cargo clippy -p sheprd-gpui -p sheprd-orchestrator --all-targets
+cargo test -p sheprd-orchestrator
+cargo test -p sheprd-gpui team
 
 say "version"
 if [[ -z "$version" ]]; then
@@ -60,8 +60,8 @@ fi
 echo "releasing $tag on $(git rev-parse --short HEAD)"
 
 say "build"
-cargo build --release --bin herdr-gpui
-./target/release/herdr-gpui --version
+cargo build --release --bin herding
+./target/release/herding --version
 
 say "tag and push"
 git tag -a "$tag" -m "$tag"
@@ -70,7 +70,7 @@ git push origin "$tag"
 
 if [[ "$deploy" == 1 ]]; then
     say "deploy local"
-    ./target/release/herdr-gpui app quit || true
+    ./target/release/herding app quit || true
     sleep 2
     # Reuse the running session's display environment when present.
     env_args=(XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}")
@@ -78,9 +78,9 @@ if [[ "$deploy" == 1 ]]; then
     [[ -n "${WAYLAND_DISPLAY:-}" ]] && env_args+=(WAYLAND_DISPLAY="$WAYLAND_DISPLAY")
     [[ -n "${XAUTHORITY:-}" ]] && env_args+=(XAUTHORITY="$XAUTHORITY")
     [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] && env_args+=(DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS")
-    setsid env "${env_args[@]}" nohup ./target/release/herdr-gpui >>/tmp/herdr-gpui-ship.log 2>&1 </dev/null &
+    setsid env "${env_args[@]}" nohup ./target/release/herding >>/tmp/herding-ship.log 2>&1 </dev/null &
     sleep 6
-    ./target/release/herdr-gpui status --json >/dev/null
+    ./target/release/herding status --json >/dev/null
 fi
 
 if [[ "$fleet" == 1 ]]; then
@@ -91,8 +91,8 @@ if [[ "$fleet" == 1 ]]; then
         echo "-- $host"
         ssh "$host" "cd $repo && git fetch origin --tags && git checkout $tag && \
             export PATH=\$HOME/.cargo/bin:\$PATH && \
-            cargo build --release --bin herdr-gpui && \
-            ./target/release/herdr-gpui --version"
+            cargo build --release --bin herding && \
+            ./target/release/herding --version"
     done
 fi
 

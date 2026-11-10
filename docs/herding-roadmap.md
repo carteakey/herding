@@ -26,13 +26,13 @@ including team switching, multiple windows, restart, and real-agent behavior.
 
 ## 1. Baseline Implementation Summary
 
-- **Durable SQLite Team Store (`crates/herdr-orchestrator/src/team_store.rs`)**:
+- **Durable SQLite Team Store (`crates/sheprd-orchestrator/src/team_store.rs`)**:
   - Stores `teams`, `members`, `posts`, `mentions`, and `acknowledgements` in `<state_dir>/team/team.sqlite3` with `0600` permissions.
   - Enforces immutable member session targets (`MemberTargetChanged`), input bounds, human vs. member attribution, and idempotent per-recipient acknowledgements.
-- **Background Worker & Control Socket (`crates/herdr-gpui/src/control/server/team*.rs`)**:
+- **Background Worker & Control Socket (`crates/sheprd-gpui/src/control/server/team*.rs`)**:
   - Non-blocking serialized worker (`herdr-team-store`) with bounded queue capacity (`16`).
-  - Control protocol (`crates/herdr-control-protocol/src/protocol/team.rs`) and CLI (`crates/herdr-gpui/src/cli/control/team.rs`).
-- **Native GPUI View (`crates/herdr-gpui/src/team/`)**:
+  - Control protocol (`crates/sheprd-control-protocol/src/protocol/team.rs`) and CLI (`crates/sheprd-gpui/src/cli/control/team.rs`).
+- **Native GPUI View (`crates/sheprd-gpui/src/team/`)**:
   - Activity bar entry (`ActivityPanel::Team`), team creation, roster display, worker addition, supervisor promotion, pane focus, and bulletin posts/replies.
 
 ## 2. Phase A Gaps & Bugs Addressed
@@ -45,7 +45,7 @@ including team switching, multiple windows, restart, and real-agent behavior.
 3. **Unified Shared Worker & SQLite WAL Mode**:
    - Enable `PRAGMA journal_mode = WAL;` in `TeamStore::open` and share the worker across the control socket and UI `Service` so CLI mutations immediately reflect in the UI without SQLite lock contention.
 4. **Team Discovery (`team status` / `team register`) & Goal Metadata**:
-   - Support `herdr-gpui team status` (discovering the caller pane's active team, member identity, goal, pending mentions, and assigned tasks without requiring a known `TEAM_ID`) and `herdr-gpui team register`.
+   - Support `herding team status` (discovering the caller pane's active team, member identity, goal, pending mentions, and assigned tasks without requiring a known `TEAM_ID`) and `herding team register`.
    - Persist team `goal` and optional `working_dir` (supporting plain directories without requiring Git), plus member `agent` harness kind and `role`.
 5. **UI Team Switching & Navigation**:
    - Allow switching or creating teams even when a team is already selected, and allow setting the team goal and supervisor display name.
@@ -58,13 +58,13 @@ including team switching, multiple windows, restart, and real-agent behavior.
   - Distinct assignment (`assign_task`) vs. atomic worker claim (`claim_task` where `status = 'open'` and assignee is unset or matches caller).
   - Record blocker reasons and completion results/evidence.
 - **CLI & Protocol**:
-  - `herdr-gpui team task list TEAM_ID`
-  - `herdr-gpui team task create TEAM_ID --title TITLE [--brief BRIEF] [--assign MEMBER_ID]`
-  - `herdr-gpui team task assign TEAM_ID TASK_ID --to MEMBER_ID`
-  - `herdr-gpui team task claim TEAM_ID TASK_ID`
-  - `herdr-gpui team task block TEAM_ID TASK_ID --reason REASON`
-  - `herdr-gpui team task complete TEAM_ID TASK_ID --result RESULT`
-  - `herdr-gpui team task cancel TEAM_ID TASK_ID`
+  - `herding team task list TEAM_ID`
+  - `herding team task create TEAM_ID --title TITLE [--brief BRIEF] [--assign MEMBER_ID]`
+  - `herding team task assign TEAM_ID TASK_ID --to MEMBER_ID`
+  - `herding team task claim TEAM_ID TASK_ID`
+  - `herding team task block TEAM_ID TASK_ID --reason REASON`
+  - `herding team task complete TEAM_ID TASK_ID --result RESULT`
+  - `herding team task cancel TEAM_ID TASK_ID`
 - **UI**:
   - Render the compact Task Board inside `TeamView` with task creation, status badges, assignee labels, blocker details, and completion results.
 
@@ -73,8 +73,8 @@ including team switching, multiple windows, restart, and real-agent behavior.
 - **Invariants**:
   - Findings are append-only durable knowledge; corrections link via `superseded_by` without erasing prior claims.
 - **CLI & Protocol**:
-  - `herdr-gpui team finding list TEAM_ID`
-  - `herdr-gpui team finding add TEAM_ID --confidence low|medium|high --evidence EVIDENCE [--task TASK_ID] [--supersedes FINDING_ID] DESCRIPTION...`
+  - `herding team finding list TEAM_ID`
+  - `herding team finding add TEAM_ID --confidence low|medium|high --evidence EVIDENCE [--task TASK_ID] [--supersedes FINDING_ID] DESCRIPTION...`
 - **UI**:
   - Render Findings & Evidence in `TeamView` with confidence badges, evidence references, task links, and supersession indicators, plus a UI form to record findings.
 
@@ -83,7 +83,7 @@ including team switching, multiple windows, restart, and real-agent behavior.
 - Surface whether a member session is live, busy, or unavailable from the daemon snapshot without injecting raw keystrokes into busy or permission-blocked PTYs.
 
 ### 3.4 Agent Skill & Supervisor Bootstrap
-- Update the managed skill documentation (`docs/cli.md` and `skills/herdr-gpui-browser/SKILL.md`) so supervisor and worker agents know how to discover their team (`herdr-gpui team status`), manage tasks (`team task ...`), exchange bulletin updates (`team bulletin ...`), and record evidence (`team finding ...`).
+- Update the managed skill documentation (`docs/cli.md` and `skills/herdr-gpui-browser/SKILL.md`) so supervisor and worker agents know how to discover their team (`herding team status`), manage tasks (`team task ...`), exchange bulletin updates (`team bulletin ...`), and record evidence (`team finding ...`).
 
 ---
 
@@ -148,7 +148,7 @@ Workers may or may not want to use git worktrees depending on the task and role:
   - Zero setup overhead and shared Cargo `target/` cache.
   - Ideal for `Supervisor`, `Researcher`, `Reviewer`, or `Implementer` agents working on disjoint files/docs (e.g., `README.md` vs. `team_store`), or small sequential fixes where branch merging would add unnecessary friction.
 - **Opt-In Git Worktrees (Isolated Compilation & Parallel Branches)**:
-  - Prevents mid-edit compile errors in one worker's crate (e.g. an in-progress UI edit in `herdr-gpui`) from blocking another worker's `cargo test` run in the same repository.
+  - Prevents mid-edit compile errors in one worker's crate (e.g. an in-progress UI edit in `sheprd-gpui`) from blocking another worker's `cargo test` run in the same repository.
   - Ideal for larger parallel feature work (like `worker bee`'s `zcode` CLI integration or multi-file refactors).
 - **Herdr Support**:
   - Keep worktrees strictly **optional** (per-worker or per-task opt-in via UI spawn toggle or agent choice) rather than forced.
@@ -196,15 +196,15 @@ as notified. Exercise the flow with real agents separately.
 
 ## 6. Remote agent teams (planned)
 
-Build on a reliable local team first. Herdr UI can already show panes from an
+Build on a reliable local team first. Herding can already show panes from an
 SSH host, but showing a pane is not the same as giving its agent access to the
-team's board. The current SSH-side `herdr-gpui` shim supports browser commands;
+team's board. The current SSH-side `herding` shim supports browser commands;
 it does not provide the Team CLI. Do not describe remote teams as working until
 their coordination path is implemented and tested.
 
 ### 6.1 First milestone: one team on one remote machine
 
-Let the user select an existing SSH host in Herdr UI and create a team whose
+Let the user select an existing SSH host in Herding and create a team whose
 supervisor and workers run on that host. Keep one authoritative team record in
 the coordinating UI, and let the remote agents use the same task, bulletin,
 acknowledgement, and finding operations as local agents through a deliberately

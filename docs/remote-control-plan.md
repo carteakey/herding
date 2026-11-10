@@ -1,7 +1,7 @@
 # Plan: Remote control
 
 A phone (or any browser) controls the chats running on this machine: it lists
-workspaces and their tabs, shows `herdr-acp` chats, sends prompts, answers the
+workspaces and their tabs, shows `sheprd-acp` chats, sends prompts, answers the
 agents' questions, and gets push notifications when an agent needs an answer
 or finishes. It is reached over HTTPS from the local network or, when
 Tailscale runs on the computer, from anywhere. Read `AGENTS.md` first; its
@@ -12,28 +12,28 @@ rules apply throughout.
 | Question | Decision |
 | --- | --- |
 | Scope | Chats only. Workspaces are listed, switched, and created. Terminal tabs are listed but disabled ("Not available yet"). |
-| Server stack | axum + Tokio, isolated in a new `herdr-remote-control` crate. No Tokio in `herdr-client` or `herdr-gpui`. |
-| Lifecycle | A user service that outlives Herdr UI. The settings toggle installs and starts it, or stops and removes it. |
+| Server stack | axum + Tokio, isolated in a new `sheprd-remote-control` crate. No Tokio in `sheprd-client` or `sheprd-gpui`. |
+| Lifecycle | A user service that outlives Herding. The settings toggle installs and starts it, or stops and removes it. |
 | Pairing | Dual approval: the phone scans a short-lived QR, then the desktop confirms the device with a matching code. Both sides prove themselves cryptographically. |
 | TLS | The daemon's own certificate authority, trusted once on the phone. Works by IP address on the LAN and over Tailscale; no DNS name is required. |
 | Notifications | Web Push from an installed PWA. |
 | UI | Mobile-first server-rendered HTML: Tailwind, Alpine (CSP build), SSE. Mockups: `docs/mockups/remote-control/index.html`. Picked: home F (needs-you strip over lists grouped by computer, Ghostty-style), workspaces and tabs D (attention board), chat C (focus), questions A (bottom sheet). |
-| Computers | One phone app shows every paired computer, plus the SSH hosts a paired computer's Herdr UI connects to. |
+| Computers | One phone app shows every paired computer. Allowing a phone on one computer also pairs it directly with the SSH and cloud machines that computer's Herding connects to. |
 | iOS Live Activities | A PWA cannot start them, so a small native companion app (`ios/`) adds them, updated by the daemon through APNs. |
 
 ## Architecture
 
 ```
-phone PWA ──HTTPS──▶ herdr-remote-control ──private endpoint──▶ herdr-acp (one per chat pane)
+phone PWA ──HTTPS──▶ sheprd-remote-control ──private endpoint──▶ sheprd-acp (one per chat pane)
                          │  ▲
-                         │  └── control endpoint ◀── Herdr UI (toggle, QR, approval, devices)
+                         │  └── control endpoint ◀── Herding (toggle, QR, approval, devices)
                          └──── Herdr daemon API (snapshot, workspace.create, tab.create)
 ```
 
-### `crates/herdr-remote-control`
+### `crates/sheprd-remote-control`
 
-A library plus a `herdr-remote-control` binary. It depends on `herdr-chat-protocol`
-and `herdr-client`, never on GPUI, keeping the UI → client → protocol
+A library plus a `sheprd-remote-control` binary. It depends on `sheprd-chat-protocol`
+and `sheprd-client`, never on GPUI, keeping the UI → client → protocol
 direction.
 
 - **Runtime**: Tokio and axum, TLS through `tokio-rustls` (or `axum-server`)
@@ -43,7 +43,7 @@ direction.
 - **Chat discovery**: reads pane metadata from the local daemon, takes panes
   whose `acp` token holds a valid `EndpointId`, and derives the address with
   `endpoint_address(id)`. It never connects to a path read from daemon data:
-  the same trust boundary as `herdr-gpui/src/chat/discovery.rs`.
+  the same trust boundary as `sheprd-gpui/src/chat/discovery.rs`.
 - **Per chat**: one upstream attach connection shared by every phone
   watching it, with a new `ClientKind` (`Remote`; older programs see `Other`).
   It keeps the transcript with `Transcript::apply`, the protocol's only
@@ -52,11 +52,11 @@ direction.
 - **Workspaces**: listed from the daemon snapshot; switching is client-side
   (the phone's own view, not `workspace.focus`, so the desktop is not moved).
   Creating one uses `workspace.create` (or `worktree.create` for a new branch)
-  and then `tab.create` running `herdr-acp` with the chosen agent, the same
-  path `chat new` takes in Herdr UI. Only directories the user already has
+  and then `tab.create` running `sheprd-acp` with the chosen agent, the same
+  path `chat new` takes in Herding. Only directories the user already has
   workspaces in, or below configured project roots, can be chosen.
-- **Control endpoint**: a private endpoint (`herdr_client::private_endpoint`)
-  that Herdr UI uses to read status, mint pairing tokens, approve or deny a
+- **Control endpoint**: a private endpoint (`sheprd_client::private_endpoint`)
+  that Herding uses to read status, mint pairing tokens, approve or deny a
   pending device, list and revoke devices, and stop the service. Only this
   user can reach it.
 
@@ -64,11 +64,16 @@ direction.
 
 - The toggle in Settings > Remote control installs a user service (LaunchAgent
   on macOS, systemd user unit on Linux, a logon task on Windows), started
-  through `herdr_client::new_command`. Turning it off stops and removes it.
-- It keeps running when Herdr UI quits, so the phone works and push keeps
-  flowing. Pairing needs Herdr UI, because only its dialog approves devices.
+  through `sheprd_client::new_command`. Turning it off stops and removes it.
+- It keeps running when Herding quits, so the phone works and push keeps
+  flowing. Pairing needs Herding, because only its dialog approves devices.
 - Without a running Herdr daemon it serves the app shell with a "Herdr is not
-  running" state; it never starts or installs a daemon.
+  running" state; it never installs a daemon, and starts only an installed
+  herdr-core, for a phone's new work, on a machine without Herdr 1 or
+  where the user chose "New terminals use Herdr 2" (`herdr_2_terminals`).
+  It never stops or moves Herdr 1. With a core answering, a new workspace
+  asked for in a named Herdr 1 session is refused (409): Herdr 2 has no
+  sessions, and the request says where the workspace should be.
 
 ## TLS without DNS
 
@@ -76,7 +81,7 @@ The phone must trust the certificate fully: service workers, PWA install,
 and Web Push all refuse an untrusted one. A name like `*.ts.net` is not
 required.
 
-- On first start `herdr-remote-control` creates its own **certificate authority**
+- On first start `sheprd-remote-control` creates its own **certificate authority**
   (`rcgen`, P-256, key 0600 in its private state directory) and issues a
   server certificate whose SANs list every address it serves on: the LAN
   IPv4/IPv6 addresses, `HOSTNAME.local`, and, when Tailscale is up, the
@@ -99,7 +104,7 @@ required.
   the serverAuth EKU, so a stolen CA key cannot vouch for public sites or
   sign anything but TLS servers.
 - On macOS with the application firewall on, the first start asks whether
-  `herdr-remote-control` may accept incoming connections; until the user allows it,
+  `sheprd-remote-control` may accept incoming connections; until the user allows it,
   LAN and Tailscale requests hang (loopback works). The settings page says
   so.
 - The phone installs the CA once during pairing: a `.mobileconfig` profile on
@@ -138,11 +143,11 @@ Passkeys (WebAuthn) would be stronger but need a domain as their relying
 party, and this works by IP address. They can come later for users with their
 own certificate and domain.
 
-1. Herdr UI, Remote control > Pair device, shows a QR:
+1. Herding, Remote control > Pair device, shows a QR:
    `https://ADDRESS:PORT/pair#t=TOKEN&fp=CA_SHA256`. The token is 256 random
    bits, valid 60 seconds, single use, and rotates while the dialog is open.
    It sits after `#`, so it never reaches a server or proxy log. The daemon
-   mints it; Herdr UI never holds secrets.
+   mints it; Herding never holds secrets.
 2. The phone opens `/pair` and claims it at once, asking nothing: it
    generates its key and posts the token, the public key, and a name taken
    from the browser (iPhone, iPad, Android phone). When the browser does not
@@ -154,7 +159,7 @@ own certificate and domain.
    Nothing is granted until Allow. Deny, timeout, or a second claim of the
    same token voids the pairing.
 4. After approval the device is stored (public key, name, created, last seen)
-   and gets session tokens by signing challenges. Revoking it in Herdr UI
+   and gets session tokens by signing challenges. Revoking it in Herding
    ends its sessions and drops its push subscription immediately.
 5. iOS gives a Home Screen web app storage of its own, so the key saved in
    the browser never reaches it. While the paired browser shows home, it
@@ -195,7 +200,7 @@ daemon post elsewhere. Payloads are encrypted end to end, so the push services
   on the desktop; bursts coalesce; a per-device rate limit.
 - The app icon shows the number of waiting questions (Badging API).
 - **Privacy**: by default a push says "Claude needs an answer in
-  herdr-gpui · main" without the message text. A per-device setting adds a
+  sheprd · main" without the message text. A per-device setting adds a
   short excerpt.
 - **Later, opt-in**: answering from the notification. Android offers
   notification actions ("Allow once", "Deny"); iOS has none, so a tap opens
@@ -232,7 +237,7 @@ committed; Alpine's CSP build is vendored; everything is embedded with
   progress, then "Idle"; the computer and workspace are labels on each card.
 - **Status marks**: every tab row with an agent, a chat or a terminal
   where Herdr detects one, shows its status from the daemon's snapshot in
-  the set picked in Herdr UI (`status_icons`), which Herdr UI sends over
+  the set picked in Herding (`status_icons`), which Herding sends over
   the control socket and the daemon keeps in its state directory. Dots,
   solid, outline, and tiles draw as on the desktop; the animated sets
   drawn in code (wave, braille, Orca) show as dots. Rows show no path.
@@ -278,9 +283,23 @@ shell connection. It uses Herdr's public API socket (`herdr.sock` beside
 focus nor resize anything:
 
 - **Screen**: `pane.read {source: visible, format: ansi}` while a phone
-  shows the pane, every 300 ms, sent as a patch only when it changed. The
-  ANSI (SGR only) becomes escaped spans on the server. No cursor position
-  comes with it.
+  shows the pane, every 300 ms, sent as a patch only when it changed. Input
+  Herdr takes also reads it at once, then 50 ms and 150 ms later, so an
+  echo does not wait out the timer. The ANSI (SGR only) becomes escaped
+  spans on the server. No cursor position comes with it.
+- **History**: a swipe down or the wheel on the screen reads `pane.read
+  {source: recent, lines: 1000, format: ansi}` once, and the view scrolls
+  through it. It is not streamed: 1,000 lines on every change would be far
+  more than a phone should take. Live screens wait while history shows and
+  return when the view reaches its end or the phone types. A program on the
+  alternate screen has no history here, so its screen stays as it is. A
+  Herdr 2 pane reads the history its shared emulator keeps (1,000 lines,
+  painted by the core's attach when the daemon opens it).
+- **Echo strip**: what was typed but is not on the screen yet shows,
+  dotted, above the key rows (backspace takes back what it can). An input
+  leaves it once Herdr took it and a screen arrived after, or 1 s after
+  Herdr took it when the screen did not change. Typing in place on the
+  screen, as mosh predicts, needs the cursor, which `pane.read` lacks.
 - **Typing**: one key at a time with `pane.send_keys` (Herdr's key syntax:
   `ctrl+c`, `esc`, `up`, `pageup`), because `pane.send_text` arrives as a
   bracketed paste, which an editor inserts rather than runs; a paste uses
@@ -293,7 +312,25 @@ focus nor resize anything:
   terminal is, so Claude Code and the like attach it.
 - **Actions** (the sheet): `pane.split {direction: right|down, focus:
   false}`, `pane.zoom`, `pane.close`, `tab.create {focus: false}`,
-  `tab.close`, and moving between panes on the phone only.
+  `tab.close`, and moving between panes on the phone only. A Herdr 2 pane
+  has no layout in herdr-core, so its tab's keeper makes the change:
+  - A tab Herding saves is Herding's. While Herding runs, the daemon asks it
+    (`control::layout`). While it is closed, the daemon edits
+    `browser-tabs.json` itself through `sheprd_session::saved::edit`,
+    touching only that tab's panes, zoom, and names (or a kept workspace's
+    name), and only when the file did not change meanwhile; Herding reads it
+    when it starts. A split's shell carries the tab's workspace label, so a
+    Herding starting meanwhile still lists it there.
+  - A tab no saved tab holds (every tab on a host Herding does not run on, a
+    terminal started outside Herding, a phone's new workspace) is the
+    daemon's own: its splits, zoom, and tab, pane, and group names live in
+    `core-tabs.json` in the daemon's state folder, for the core that made
+    them. Herding's saved tabs win: a terminal one takes in leaves it.
+  - A Herdr desktop space's tab (`herdr-app` document) is that app's. Each
+    terminal row's `actions` lists what its menu may do (`rename`,
+    `split`, `zoom`); such a tab lists none, and the phone hides them.
+  A workspace with nothing in it gets its first tab from `POST
+  /api/v2/workspaces/{workspace}/terminals`.
 - The same socket now carries New workspace and New chat, which the
   inactive shell connection could never send.
 
@@ -351,9 +388,92 @@ phone never disturbs the desktop's layout.
   Until then the app holds one subscription, for one computer
   (`herdr.push-host`); Settings on any other says where notifications come
   from, and a notification opens its page on the computer shown.
-- SSH hosts a paired computer's Herdr UI connects to appear as their own
-  sections, reached through that computer with `herdr-acp connect ID`, with
-  no pairing of their own.
+- **Tags.** Each computer's daemon keeps the tags that group it, such as
+  `personal` and `work` (`tags.json`), for every phone and desktop that
+  reaches it. No client has to match its name for a computer to another's.
+  - **The rule.** A client offers its copy with the time it was edited, and
+    the daemon answers with what stands: the latest edit wins, whole. An
+    offer counts as made by the daemon's clock at the latest, so a fast
+    clock cannot outlast later edits.
+  - **Phones.** `home` carries the tags, and `PUT /api/v2/tags` offers an
+    edit. An edit made while a computer is away is sent when its home next
+    arrives.
+  - **Herding.** It keeps a copy by endpoint ID, so a device away still shows
+    its tags. It meets this computer's daemon over the control socket and a
+    connected machine's by running `sheprd-remote-control tags --offer` over
+    SSH: at once after an edit, else every two minutes. A machine without
+    the program is not given one for this: no phone is paired with it, so
+    the copy is all there is.
+- **WSL distributions.** A distribution saved as a device on a Windows
+  computer is part of that computer, not another machine: it sleeps with it,
+  and a phone usually cannot reach its network. So the Windows daemon follows
+  its sessions itself, beside the named ones, and the phone needs no pairing.
+  - **What it follows.** Every 30 seconds it lists the running sessions of
+    the saved distributions that are already running. It boots nothing and
+    starts no server, and a connection that ends is not retried until the
+    session is listed again. A device disabled in Herding is still followed
+    while it runs: the daemon reads the saved list, not the window's state.
+  - **How.** The layout comes over `herdr remote-client-bridge` in `wsl.exe`,
+    requests over `herdr remote-api-bridge` (one `wsl.exe` each, so typing is
+    slower than on a native session), and a Herdr without the API bridge
+    lists its sessions read-only. Ids read `herdr:SESSION@DISTRO:ID`. A
+    picture stays on Windows and is typed as the path the distribution reads
+    it at, from its `wslpath`.
+  - **What it cannot do.** A chat's program listens inside the distribution,
+    out of this daemon's reach, so a chat there is listed as a terminal tab,
+    and a phone cannot start one there, nor a new workspace in that session.
+    A herdr-core inside a distribution is not followed.
+- **Other machines.** Allowing a phone on one computer also pairs it with
+  the SSH and cloud machines that computer's Herding connects to. The phone
+  reaches each machine's own daemon directly, so it keeps them while that
+  computer sleeps. They are not reached through it.
+  - **Allow.** The Allow step lists the machines, every one ticked.
+    `Approve` carries the ticked ones, and the daemon keeps them on the
+    device as allowed (`links` in `devices.json`).
+  - **The phone's side.** The phone reads `GET /api/v2/hosts`, which lists
+    each machine as `offered`, `allowed`, `asking`, `pending`, `paired`, or
+    `failed`. For each allowed machine it makes a new Secure Enclave key and
+    sends it with `POST /api/v2/hosts/{host}/pair`.
+  - **Herding's side.**
+    - It takes each request (`HostPairings`) and copies its own
+      `sheprd-remote-control` into the machine's home when the machine lacks
+      that build (`~/.local/share/herdr-remote-control/bin/VERSION/`).
+    - It runs `sheprd-remote-control enroll` there over SSH. On the way that
+      sends this daemon's APNs key (0600), so the machine notifies the phone
+      itself. It starts the machine's daemon as a user service unless one is
+      installed, then adds the phone, marked `via` this computer. Only then
+      does it turn on `[remote]` in that machine's Herding settings, creating
+      them if it has none, so a Herding installed there later keeps the
+      daemon. A failed pairing leaves the settings alone.
+    - It reports the machine's fingerprint and addresses back
+      (`HostPaired`).
+  - **Trust.** The phone pins that fingerprint because the computer it
+    already pinned said so. Herding vouches with the user's own SSH access.
+  - **Machines added later.** The phone offers them with a Pair button.
+    Herding asks on the desktop before pairing one, and closing the
+    question declines.
+  - **Revoking.** Revoking the phone here also revokes it on every machine
+    it was paired with from here. Herding does that once each machine can
+    be reached (`host-revokes.json`). An idle expiry here does not cascade:
+    the phone may be using those machines while this computer sleeps.
+  - **What it needs.** A machine is reachable only at an address its CA
+    covers: a LAN, Tailscale, or `.local` address. A machine reached only
+    through a provider's proxy is paired but unreachable from the phone.
+  - **Which build a machine gets.** Herding copies every build over SSH,
+    so the machine needs no internet:
+    - A machine like this computer, or any Mac when this is a release (its
+      build is universal), gets the app's own `sheprd-remote-control`.
+    - A Linux machine, when this is a release, gets the release's static
+      musl build for its architecture (`sheprd-remote-control-VERSION-ARCH-unknown-linux-musl`),
+      which runs whatever its glibc. Herding downloads it once per
+      version and checks it against the release's Ed25519-signed
+      `host-manifest.json` (schema 4) before it leaves this computer.
+    - A development build, as on a pull request, sends its checkout's
+      source (uncommitted changes included, through `git stash create`)
+      and builds `sheprd-remote-control` on the machine with its own Rust.
+      The pinned toolchain comes from rustup, and outputs stay in
+      `~/.cache/herdr-remote-control`, so the next build is incremental.
+      A machine without Rust says so.
 
 ## iOS Live Activities
 
@@ -363,7 +483,8 @@ amber with "Needs an answer" when a question waits; ending with the turn
 summary.
 
 A web app cannot do this. Live Activities belong to ActivityKit, so they need
-a native companion app:
+a native companion app. (`docs/ios-app-plan.md` now plans a full native app
+that replaces the companion described here.)
 
 - A small SwiftUI app plus widget extension, paired the same way as the PWA
   (QR, matching code, device key in the Keychain). It does not duplicate the
@@ -382,9 +503,9 @@ a native companion app:
 The companion lives in `ios/` (see `ios/README.md` for building, signing, and
 the APNs key):
 
-- **Project**: an XcodeGen spec (`ios/project.yml`) for the `HerdrRemote` app
-  and the `HerdrRemoteWidgets` extension, iOS 17.2+, bundle
-  `so.pen.herdr-remote`. Logic without UIKit sits in the `HerdrRemoteCore`
+- **Project**: an XcodeGen spec (`ios/project.yml`) for the `SheprdRemote` app
+  (visible name Herding) and the `SheprdRemoteWidgets` extension, iOS 17.2+, bundle
+  `so.pen.herdr.remote`. Logic without UIKit sits in the `SheprdRemoteCore`
   Swift package, whose tests run on the Mac with `swift test`.
 - **Activity**: `ChatActivityAttributes` (computer name, computer id,
   workspace, chat title, agent, pane) with `ChatActivityState` as its
@@ -409,14 +530,14 @@ the APNs key):
 - **Push tokens**: the push-to-start token goes to every paired computer and
   each activity's token to its own, through `POST /api/apns` with
   `{push_to_start, activities: [{pane, token}]}`.
-- **Daemon**: `crates/herdr-remote-control/src/apns` loads `STATE_DIR/apns/AuthKey.p8`
+- **Daemon**: `crates/sheprd-remote-control/src/apns` loads `STATE_DIR/apns/AuthKey.p8`
   and `config.json` (absent: off), signs the ES256 provider token (renewed
   every fifty minutes), decides start, update, or end from the same inputs as
   `push::decide`, paces step updates to one per ten seconds per chat, and
   posts over one HTTP/2 connection (hyper's client on tokio-rustls) to
   `api.push.apple.com` or `api.sandbox.push.apple.com` only. A
   `BadDeviceToken` or `410` drops the token. JSON fixtures under
-  `ios/HerdrRemoteCore/Tests/HerdrRemoteCoreTests/Fixtures` are checked by
+  `ios/SheprdRemoteCore/Tests/SheprdRemoteCoreTests/Fixtures` are checked by
   both the Rust and the Swift tests.
 
 Still to do: wire `apns::Sender` into the server (a `POST /api/apns` route
@@ -424,7 +545,7 @@ storing `apns::Registration` in a new opaque `apns` slot of the device
 record, and a notifier branch calling `apns::decide`), check payloads and
 push-to-start on a device with a real key, and an app icon.
 
-## Herdr UI
+## Herding
 
 - **Settings > Remote control**: a Pair a phone card first, then the
   toggle, port, addresses served (LAN, Tailscale when present), certificate
@@ -439,7 +560,7 @@ push-to-start on a device with a real key, and an app icon.
   matrix, a 60-second countdown ring, the URL and CA fingerprint, then the
   approval step with the matching code. Reachable from the palette, the
   title bar, and Settings.
-- **CLI** (`docs/cli.md`): `herdr-gpui remote status|pair|devices [--json]`.
+- **CLI** (`docs/cli.md`): `herding remote status|pair|devices [--json]`.
   `pair` opens the dialog and never prints a token; `remote revoke DEVICE`
   opens the app's confirmation. Each gets its `control/protocol` request,
   `control/server` handler, `control/client` parsing and output, `--help`
@@ -458,14 +579,14 @@ push-to-start on a device with a real key, and an app icon.
      installed PWA on iOS.
    - Several service worker registrations, each with its own push
      subscription, in one installed iOS PWA.
-1. **MVP**: `herdr-remote-control` service, own CA and leaf reissue, pairing with
+1. **MVP**: `sheprd-remote-control` service, own CA and leaf reissue, pairing with
    dual approval, devices and revoke, workspaces and tabs (terminals
    disabled), chat view with every chat command, new workspace with a chat,
    Settings page and dialog, `remote` CLI commands.
 2. **PWA and push**: install flow, Web Push triggers and noise rules, badges,
    per-chat mute, notification privacy setting.
 3. **Polish**: photo attachments, slash completion, SSH-host chats through
-   `herdr-acp connect ID`, opt-in Android notification actions, passkeys for
+   `sheprd-acp connect ID`, opt-in Android notification actions, passkeys for
    users with their own domain.
 4. **iOS companion**: Live Activities and Dynamic Island through
    ActivityKit and APNs.
@@ -479,10 +600,10 @@ push-to-start on a device with a real key, and an app icon.
   `Last-Event-ID`; rendering of every `EntryKind` with escaping; request,
   header, and body bounds and malformed input; push trigger and coalescing
   rules.
-- Mock peers: a fake `herdr-acp` endpoint for resume after lag, rejected
+- Mock peers: a fake `sheprd-acp` endpoint for resume after lag, rejected
   `Ack`s, and a permission answered from phone and desktop (first wins); a
   fake daemon for workspace creation.
-- Herdr UI: control requests, CLI parsing and output, settings model, QR
+- Herding: control requests, CLI parsing and output, settings model, QR
   matrix geometry; headless tests for the dialog states.
 - Manual: real iOS and Android devices on LAN and Tailscale, PWA install,
   push on a locked phone, revoke while streaming.
@@ -491,6 +612,6 @@ push-to-start on a device with a real key, and an app icon.
 
 - Default port, and whether to serve on every LAN interface or let the user
   pick one.
-- Project roots for "New workspace": reuse an existing Herdr UI setting, or
+- Project roots for "New workspace": reuse an existing Herding setting, or
   add one.
 - Device idle expiry default (30 days?).

@@ -12,22 +12,26 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = (ROOT / ".github/workflows/cancel-merged-pr.yml").read_text()
 SCRIPT = textwrap.dedent(WORKFLOW.split("        run: |\n", 1)[1])
-BASE = "repos/penso/herdr-gpui/actions/runs"
+BASE = "repos/sheprd-labs/sheprd/actions/runs"
 
 
 def run(run_id, number=42, event="pull_request", status="in_progress"):
-    return {"id": run_id, "event": event, "status": status,
+    return {"id": run_id, "event": event, "status": status, "head_sha": f"sha-{run_id}",
             "pull_requests": [] if number is None else [{"number": number}]}
 
 
 class CancelMergedPr(unittest.TestCase):
-    def execute(self, pages=None, failure_status=None):
+    def execute(self, pages=None, failure_status=None, commits=None):
         cancelled = []
 
         def api(command, *, text):
             self.assertTrue(text)
             self.assertEqual(command[:2], ["gh", "api"])
             path = command[2]
+            if "/commits/" in path:
+                self.assertEqual(command[3:], ["--paginate", "--slurp"])
+                sha = path.split("/commits/", 1)[1].split("/", 1)[0]
+                return json.dumps((commits or {}).get(sha, [[]]))
             if "?" in path:
                 self.assertTrue(path.startswith(f"{BASE}?event=pull_request&status="))
                 self.assertIn("&per_page=100", path)
@@ -43,7 +47,7 @@ class CancelMergedPr(unittest.TestCase):
             self.assertEqual(path, f"{BASE}/1")
             return json.dumps({"status": failure_status})
 
-        with mock.patch.dict(os.environ, GITHUB_REPOSITORY="penso/herdr-gpui", PR_NUMBER="42"), \
+        with mock.patch.dict(os.environ, GITHUB_REPOSITORY="sheprd-labs/sheprd", PR_NUMBER="42"), \
                 mock.patch("subprocess.check_output", side_effect=api), \
                 mock.patch("builtins.print"):
             exec(compile(SCRIPT, "cancel-merged-pr.yml", "exec"), {})
@@ -64,6 +68,16 @@ class CancelMergedPr(unittest.TestCase):
     def test_no_matching_runs_is_successful(self):
         self.assertEqual(self.execute(), [])
 
+    def test_missing_pr_association_is_resolved_from_commit_across_pages(self):
+        pages = {"queued": [{"workflow_runs": [
+            run(1, number=None), run(2, number=None), run(3, number=None),
+        ]}]}
+        commits = {
+            "sha-1": [[{"number": 99}], [{"number": 42}]],
+            "sha-2": [[{"number": 99}]],
+        }
+        self.assertEqual(self.execute(pages, commits=commits), [1])
+
     def test_completion_race_is_harmless(self):
         pages = {"in_progress": [{"workflow_runs": [run(1)]}]}
         self.assertEqual(self.execute(pages, failure_status="completed"), [1])
@@ -77,7 +91,7 @@ class CancelMergedPr(unittest.TestCase):
         self.assertIn("  pull_request_target:", WORKFLOW)
         self.assertIn("    types: [closed]", WORKFLOW)
         self.assertIn("github.event.pull_request.merged == true", WORKFLOW)
-        self.assertIn("github.repository == 'penso/herdr-gpui'", WORKFLOW)
+        self.assertIn("github.repository == 'sheprd-labs/sheprd'", WORKFLOW)
         self.assertIn("permissions: {}", WORKFLOW)
         self.assertIn("      actions: write", WORKFLOW)
         self.assertNotIn("uses:", WORKFLOW)

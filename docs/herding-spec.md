@@ -1,8 +1,8 @@
-# Herding: agent teams in Herdr UI
+# Herding: agent teams in the native workspace
 
 Status: draft, 2026-10-31. This describes the intended product, not features
-that are already implemented. **Herding** is the working project name;
-**Shepherd** is a proposed name for the supervisor role.
+that are already implemented. **Herding** is the product name; **Shepherd** is
+a proposed name for the supervisor role.
 
 For the full product, workflow, integration, and acceptance requirements, see
 [herding-detailed-spec.md](herding-detailed-spec.md).
@@ -10,7 +10,7 @@ For the full product, workflow, integration, and acceptance requirements, see
 ## Purpose
 
 Give one capable agent a goal and let it coordinate a team of existing agents
-on that goal. The user sees and steers the work inside Herdr UI, watches each
+on that goal. The user sees and steers the work inside Herding, watches each
 agent's real session, and can inspect the team's messages, tasks, and evidence.
 Agents may message each other directly while the supervisor remains responsible
 for planning, following progress, resolving conflicts, and producing a result.
@@ -55,7 +55,7 @@ not only a fixed sequence of coding steps.
 
 ## User experience
 
-1. Create a team in the current Herdr UI window, name its goal, and select a
+1. Create a team in the current Herding window, name its goal, and select a
    supervisor. A team can use an ordinary directory or a Git checkout.
 2. Add available local agent sessions or start configured workers in Herdr
    panes. Pick an agent type and account/profile where the harness supports it.
@@ -154,7 +154,7 @@ model selection: a raw inference endpoint is not itself a coding agent.
 
 ## Architecture and delivery
 
-Herdr continues to own terminal processes and session state. Herdr UI renders
+Herdr continues to own terminal processes and session state. Herding renders
 the interface and hosts or connects to a coordination component responsible
 for durable team records. The existing backend, session, and service abstractions
 should be reused where they fit; repository-specific orchestrator state is not
@@ -217,7 +217,7 @@ team works in a directory without Git. Failures and unknown states are visible.
 
 ### 2. Native UI and real sessions
 
-Show the roster, board, inbox and findings in Herdr UI; focus a selected worker
+Show the roster, board, inbox and findings in Herding; focus a selected worker
 terminal. A user can address the supervisor and inspect the result inside the
 window. Run a real supervisor with at least two different CLI harnesses in an
 isolated session. Demonstrate a peer message sent while a recipient is busy,

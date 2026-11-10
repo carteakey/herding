@@ -73,7 +73,7 @@ and the existing work plan is in [herding-roadmap.md](herding-roadmap.md).
 - [x] **[P1] Make the agent bootstrap instructions executable.**
   `team/bridge/prompts.rs` instructed agents to run `herdr team ...`, including
   `inbox`, `post`, and `task done`. The documented implementation exposes
-  `herdr-gpui team ...`, `bulletin list`, `bulletin post`, and `task complete`,
+  `herding team ...`, `bulletin list`, `bulletin post`, and `task complete`,
   with required team IDs. Use the actual CLI syntax and supply or discover the
   required IDs. Update the managed agent skill as well as `docs/cli.md`, and
   exercise the instructions with real supported harnesses.
@@ -138,7 +138,7 @@ the following features were already implemented or are part of the fixes above.
 
 ## Verification and handoff
 
-During this review, `cargo test --locked -p herdr-orchestrator team_store`
+During this review, `cargo test --locked -p sheprd-orchestrator team_store`
 passed 11 tests. A GPUI test attempt was stopped while waiting for another
 build's lock; no GPUI test, native UI test, live-agent test, or full CI run is
 claimed here. Another agent was running verification separately; consult its

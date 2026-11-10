@@ -1,0 +1,23 @@
+# The sheprd.org Netlify project: base directory `website`. Netlify reads this
+# file before the root netlify.toml, which stays paused for `site/`.
+[build]
+# Builds sheprd.org/docs into site/docs; see README.md. Netlify also installs
+# requirements.txt from this base directory on its own; installing it here
+# keeps the hashes enforced either way.
+command = "python3 -m pip install --require-hashes -r requirements.txt && python3 tools/docs.py"
+publish = "site"
+# Always build, even if the root file's `ignore = "exit 0"` is inherited.
+ignore = "exit 1"
+
+# Scope the canonical redirect to www so deploy previews remain usable.
+[[redirects]]
+force  = true
+from   = "https://www.sheprd.org/*"
+status = 301
+to     = "https://sheprd.org/:splat"
+
+[[redirects]]
+force  = true
+from   = "http://www.sheprd.org/*"
+status = 301
+to     = "https://sheprd.org/:splat"

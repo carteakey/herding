@@ -119,6 +119,10 @@ pub(crate) struct TeamSnapshot {
     pub(crate) bulletin_open: bool,
     pub(crate) paused: bool,
     pub(crate) queued_count: usize,
+    /// Wakes the drain marked undeliverable for this team: their pane left
+    /// the roster and no connected snapshot shows it, so the work stays
+    /// pending on the board with no agent to take it.
+    pub(crate) undeliverable_count: usize,
     pub(crate) last_activity: Option<SharedString>,
 }
 
@@ -142,6 +146,7 @@ impl Default for TeamSnapshot {
             bulletin_open: true,
             paused: false,
             queued_count: 0,
+            undeliverable_count: 0,
             last_activity: None,
         }
     }

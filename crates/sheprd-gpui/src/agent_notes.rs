@@ -189,6 +189,10 @@ pub(crate) enum Delivered {
     Agent,
     /// Kept for `browser feedback`.
     Kept,
+    /// Not deliverable now and not because the agent is busy: no snapshot
+    /// shows the pane, or no agent sits in it. The team layer backs off and
+    /// marks the wake undeliverable instead of retrying it every tick.
+    Unreachable,
     /// Not delivered: the caller copies this text, together with any other
     /// batch of the same Send, in one clipboard write.
     Copy(String),
@@ -199,7 +203,7 @@ impl Delivered {
     pub(crate) fn copy(self) -> Option<String> {
         match self {
             Self::Copy(text) => Some(text),
-            Self::Agent | Self::Kept => None,
+            Self::Agent | Self::Kept | Self::Unreachable => None,
         }
     }
 }
@@ -481,7 +485,9 @@ impl SheprdWindow {
         match self.deliver_notes(Some(target), text.to_owned(), None, None, cx) {
             Delivered::Agent => Some(NotesTo::Agent),
             Delivered::Kept => Some(NotesTo::Kept),
-            Delivered::Copy(_) => None,
+            // The generic notes path never produces it; only the team
+            // dispatch classifies a missing pane as unreachable.
+            Delivered::Unreachable | Delivered::Copy(_) => None,
         }
     }
 
@@ -574,7 +580,10 @@ impl SheprdWindow {
     /// Delivers a team wake to a terminal agent, but only when it can be
     /// pasted now. A busy agent returns `Kept` without queueing: the team
     /// layer holds and retries it, so the generic notes queue's 120s hold
-    /// cannot swallow a wake the team layer believes it delivered.
+    /// cannot swallow a wake the team layer believes it delivered. A pane no
+    /// snapshot can prove returns `Unreachable`: the team layer backs off
+    /// instead of re-offering the wake every tick, which once hot-looped the
+    /// drain on panes left over from a previous session.
     pub(crate) fn deliver_team_prompt(
         &mut self,
         pane_id: &str,
@@ -583,7 +592,7 @@ impl SheprdWindow {
     ) -> Delivered {
         let text = typable(&text);
         if self.endpoints.is_empty() {
-            return Delivered::Kept;
+            return Delivered::Unreachable;
         }
         let index = self.target_endpoint_for_pane(pane_id);
         let live = if index == self.selected_endpoint {
@@ -592,13 +601,13 @@ impl SheprdWindow {
             &self.endpoints[index].live
         };
         let Some(snapshot) = live.snapshot.clone() else {
-            return Delivered::Kept;
+            return Delivered::Unreachable;
         };
         if !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id) {
-            return Delivered::Kept;
+            return Delivered::Unreachable;
         }
         let Some(found) = agent(&snapshot, pane_id) else {
-            return Delivered::Kept;
+            return Delivered::Unreachable;
         };
         if matches!(
             found.agent_status,

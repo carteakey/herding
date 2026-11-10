@@ -5,6 +5,7 @@
 use super::*;
 use crate::team::bridge::queue::DrainedPrompt;
 use sheprd_orchestrator::team_store::{Author, Member, SessionTarget};
+use std::collections::HashSet;
 
 fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH)
@@ -165,6 +166,76 @@ fn a_team_pause_holds_a_wake_and_unpausing_releases_it() {
         bridge.supervisor_fallback_due(Instant::now()).is_none(),
         "the delivered wake is marked reported"
     );
+}
+
+/// The stale-queue shape: a wake sits in the queue for a pane that has left
+/// the roster and that no snapshot shows. It waits out its retry once - a
+/// pane that returns in time still gets it - and is then marked undeliverable
+/// and counted in the status surface, instead of being re-offered every tick.
+#[test]
+fn an_unreachable_wake_waits_out_its_retry_then_is_marked_undeliverable() {
+    let mut bridge = board();
+    bridge.paused_members.insert("sup".into());
+    queue_wake(&mut bridge);
+    // The roster re-binds elsewhere, the way re-registration moves every
+    // member: no roster pane is p_sup any more.
+    bridge.team = Some(Team {
+        supervisor: member("sup", "supervisor", "p_moved"),
+        ..team("t1")
+    });
+    bridge.paused_members.clear();
+
+    // A due wake to a gone pane is dropped and counted, not re-offered.
+    let dropped = bridge.expire_unreachable_prompts(&HashSet::new());
+    assert_eq!(
+        dropped,
+        vec!["p_sup".to_string()],
+        "the vanished pane is named"
+    );
+    assert_eq!(bridge.queued_count(), 0, "the wake is not kept forever");
+    assert_eq!(bridge.undeliverable, 1, "the status surface counts it");
+
+    // A wake whose retry is still in the future survives the sweep: the
+    // pane may return before the retry comes due.
+    bridge.hold_prompt(
+        "t1".into(),
+        "p_sup".into(),
+        "late wake".into(),
+        "summary".into(),
+        Vec::new(),
+    );
+    assert!(
+        bridge
+            .expire_unreachable_prompts(&HashSet::new())
+            .is_empty(),
+        "a backed-off wake is not expired early"
+    );
+    assert_eq!(bridge.queued_count(), 1);
+    assert_eq!(bridge.undeliverable, 1, "the sweep did not double-count");
+
+    // A pane a connected snapshot still shows is never expired, roster or
+    // not, so a reconnecting daemon keeps its wakes.
+    let item = bridge
+        .queued_prompts
+        .pop()
+        .unwrap_or_else(|| panic!("the held wake is still queued"));
+    bridge.requeue_prompt(
+        DrainedPrompt {
+            team_id: item.team_id,
+            pane_id: item.pane_id,
+            prompt: item.prompt,
+            summary: item.summary,
+            signals: item.signals,
+        },
+        Instant::now() - Duration::from_secs(1),
+    );
+    let live: HashSet<String> = ["p_sup".to_string()].into();
+    assert!(
+        bridge.expire_unreachable_prompts(&live).is_empty(),
+        "a live pane keeps its wake"
+    );
+    assert_eq!(bridge.queued_count(), 1);
+    assert_eq!(bridge.undeliverable, 1);
 }
 
 #[test]

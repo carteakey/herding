@@ -64,6 +64,18 @@ impl TeamView {
         } else {
             summary_base
         };
+        let summary = if self.snapshot.undeliverable_count > 0 {
+            format!(
+                "{} · {}",
+                summary,
+                fl!(
+                    "team-status-undeliverable",
+                    count = self.snapshot.undeliverable_count
+                )
+            )
+        } else {
+            summary
+        };
 
         self.card()
             .gap_1()

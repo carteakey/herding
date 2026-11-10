@@ -104,6 +104,7 @@ team-action-pause = Pause
 team-action-resume = Resume
 team-action-hide-bulletin = Hide bulletin
 team-status-paused = Paused
+team-status-undeliverable = { $count } undeliverable
 team-status-pto = PTO (Rate Limited)
 team-status-crashed = Crashed
 team-action-import-issue = Import #issue

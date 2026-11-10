@@ -28,6 +28,12 @@ pub(super) use views::*;
 const REFRESH: Duration = Duration::from_secs(2);
 const TEAM_PAGE: usize = 50;
 const POST_LIMIT: usize = 200;
+/// How long a wake the drain could not deliver waits before it is retried.
+/// Long enough that a reconnecting pane is not hammered every tick, short
+/// enough that a brief gap does not strand an assignment. A pane that is
+/// still unreachable after this long is marked undeliverable instead of
+/// being re-offered forever.
+pub(crate) const WAKE_RETRY: Duration = Duration::from_secs(5);
 /// How often the periodic supervisor catch-up may attempt a wake. It only
 /// fires on stored results no wake has covered, so a quiet team is silent.
 pub(crate) const SUPERVISOR_FALLBACK: Duration = Duration::from_secs(600);
@@ -89,6 +95,11 @@ pub(crate) struct Bridge {
     paused_teams: HashSet<String>,
     paused_members: HashSet<String>,
     queued_prompts: Vec<QueuedPrompt>,
+    /// Wakes the drain gave up on: their pane left the roster and no
+    /// connected snapshot shows it, so no later tick could deliver them.
+    /// Surfaced in the team status so a stranded assignment is visible;
+    /// reset when another team is shown.
+    undeliverable: usize,
     /// Prompts held against the request id of the operation that produced them,
     /// so an agent is told about a row only once the store has it.
     awaiting_write: HeldPrompts,
@@ -522,6 +533,7 @@ impl Bridge {
                 self.clear_board_cursors();
                 self.snapshot_in_flight = None;
                 self.warning = None;
+                self.undeliverable = 0;
                 self.refresh(&team_id);
             }
             TeamAction::LoadEarlierTasks => self.load_earlier_tasks(),
@@ -556,6 +568,7 @@ impl Bridge {
                 self.tasks.clear();
                 self.findings.clear();
                 self.warning = None;
+                self.undeliverable = 0;
                 self.save(team);
             }
             TeamAction::SetGoal { team_id, goal } => {
@@ -1003,6 +1016,7 @@ impl Bridge {
             bulletin_open: !self.bulletin_closed,
             paused: self.is_team_paused(),
             queued_count: self.queued_count(),
+            undeliverable_count: self.undeliverable,
             last_activity: self.last_activity.clone(),
         }
     }

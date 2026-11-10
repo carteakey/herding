@@ -560,11 +560,12 @@ fn a_held_wake_is_recorded_only_after_it_is_delivered(cx: &mut gpui::TestAppCont
         })
         .expect("window open");
 
-    // The pause clears; the drain delivers to the reachable supervisor pane
-    // and only then records the signal.
+    // The pause clears; once the wake's retry waits out, the drain delivers
+    // to the reachable supervisor pane and only then records the signal.
     window
         .update(cx, |view, _, cx| {
             view.team_bridge.unpause_all_for_test();
+            view.team_bridge.force_retry_due_for_test();
             view.dispatch_drained_team_prompts(cx);
         })
         .expect("window open");
@@ -705,6 +706,92 @@ fn a_wake_to_a_busy_pane_is_held_until_it_is_idle(cx: &mut gpui::TestAppContext)
             view.dispatch_drained_team_prompts(cx);
             assert_eq!(view.team_bridge.queued_count_for_test(), 0);
             assert!(view.team_bridge.wake_seen("t-x", signal));
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_wake_to_a_gone_pane_waits_out_its_retry_then_is_marked_undeliverable(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.add_window(fixture_window);
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            // The snapshot shows only the worker pane; the supervisor pane
+            // the wake targets is gone - the stale-queue shape that once
+            // hot-looped the drain.
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
+    window
+        .update(cx, |view, _, cx| {
+            view.dispatch_drained_team_prompts(cx);
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a missing pane does not re-dispatch the wake on the next tick"
+            );
+            assert_eq!(
+                view.team_bridge.snapshot(&[]).undeliverable_count,
+                0,
+                "the wake has not waited out its retry yet"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "a wake that has not landed is not recorded"
+            );
+        })
+        .expect("window open");
+
+    // The roster re-binds elsewhere - the members re-registered, the way the
+    // stale wA queue entries lost their panes - so when the retry comes due
+    // the pane is in neither the roster nor any snapshot.
+    window
+        .update(cx, |view, _, _| {
+            let mut rebound = supervisor_wake_team();
+            rebound.supervisor.target.pane = Some("w1X:p9".into());
+            view.team_bridge.set_team_for_test(rebound);
+        })
+        .expect("window open");
+    window
+        .update(cx, |view, _, cx| {
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts(cx);
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                0,
+                "a wake whose pane is gone is not retried forever"
+            );
+            assert_eq!(
+                view.team_bridge.snapshot(&[]).undeliverable_count,
+                1,
+                "the drain marks the stranded wake undeliverable"
+            );
+            let activity = view
+                .team_bridge
+                .snapshot(&[])
+                .last_activity
+                .expect("the expiry is recorded");
+            assert!(
+                activity.contains("undeliverable") && activity.contains("p_sup"),
+                "the status names the pane it gave up on: {activity}"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "an undeliverable wake is never recorded as delivered"
+            );
         })
         .expect("window open");
 }

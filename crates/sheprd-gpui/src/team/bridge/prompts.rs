@@ -1,13 +1,9 @@
-use super::{PaneCandidate, REFRESH, TeamAction, roster, status_label};
+use super::{PaneCandidate, REFRESH, TeamAction, WAKE_RETRY, roster, status_label};
 use crate::{SheprdWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
 use gpui::Context;
 use sheprd_orchestrator::team_store::{Task, Team};
-use std::time::{Duration, Instant};
-
-/// How long a wake the drain could not deliver waits before it is retried.
-/// Long enough that a reconnecting pane is not hammered every tick, short
-/// enough that a brief gap does not strand an assignment.
-const WAKE_RETRY: Duration = Duration::from_secs(5);
+use std::collections::HashSet;
+use std::time::Instant;
 
 impl SheprdWindow {
     /// Sessions this window can prove across all connected host endpoints:
@@ -255,12 +251,39 @@ impl SheprdWindow {
     /// Dispatches prompts whose pause cleared since the last tick. A wake is
     /// recorded only when it actually reaches the agent; a prompt held again
     /// stays queued, and one the pane could not take is requeued for a later
-    /// tick instead of being swallowed.
+    /// tick instead of being swallowed. A wake whose pane is gone from both
+    /// the roster and every connected snapshot is marked undeliverable once
+    /// its retry waits out, instead of being re-offered forever.
     pub(crate) fn dispatch_drained_team_prompts(&mut self, cx: &mut Context<Self>) {
         // A drain while the daemon is reconnecting has no snapshot to prove a
         // pane against, so it would fail every delivery. Keep the queue.
         if !self.live.status.is_connected() || self.live.snapshot.is_none() {
             return;
+        }
+        // Panes the connected daemons currently show, the same proof the
+        // dispatch uses: a queued wake for a pane outside this set and the
+        // roster has nowhere to land.
+        let live_panes: HashSet<String> = self
+            .endpoints
+            .iter()
+            .enumerate()
+            .filter(|(index, endpoint)| {
+                let live = if *index == self.selected_endpoint {
+                    &self.live
+                } else {
+                    &endpoint.live
+                };
+                live.status.is_connected()
+            })
+            .filter_map(|(_, endpoint)| endpoint.live.snapshot.as_deref())
+            .filter(|snapshot| !snapshot.boot_id.is_empty())
+            .flat_map(|snapshot| snapshot.panes.iter().map(|pane| pane.pane_id.clone()))
+            .collect();
+        let expired = self.team_bridge.expire_unreachable_prompts(&live_panes);
+        if !expired.is_empty() {
+            self.team_bridge.last_activity =
+                Some(format!("Marked undeliverable: no agent in {}", expired.join(", ")).into());
+            self.team_bridge.dirty = true;
         }
         let drained = self.team_bridge.drain_unpaused_prompts();
         for item in drained {
@@ -296,8 +319,9 @@ impl SheprdWindow {
                             .mark_supervisor_woken(&team_id, item.signals);
                     }
                 }
-                // Held re-enqueued it inside the dispatch.
-                PromptOutcome::Held => {}
+                // Held or unreachable prompts re-enqueued themselves inside
+                // the dispatch, backed off by WAKE_RETRY.
+                PromptOutcome::Held | PromptOutcome::Unreachable => {}
                 PromptOutcome::Unavailable | PromptOutcome::Failed => {
                     self.team_bridge
                         .requeue_prompt(item, Instant::now() + WAKE_RETRY);
@@ -325,7 +349,7 @@ impl SheprdWindow {
         if self.team_bridge.is_pane_paused_for_team(&team_id, pane_id)
             || self.team_pane_busy(pane_id)
         {
-            self.team_bridge.enqueue_prompt(
+            self.team_bridge.hold_prompt(
                 team_id.clone(),
                 pane_id.to_owned(),
                 prompt,
@@ -339,11 +363,14 @@ impl SheprdWindow {
             return PromptOutcome::Held;
         }
         let outcome = self.dispatch_team_prompt(pane_id, prompt.clone(), cx);
-        // The dispatch can discover a busy pane the pre-check missed; keep the
-        // wake in the team queue so the drain retries it, never in the notes
-        // queue where its hold expires into a lost paste.
-        if matches!(outcome, PromptOutcome::Held) {
-            self.team_bridge.enqueue_prompt(
+        // The dispatch can discover a busy pane the pre-check missed, or no
+        // reachable agent at all; keep the wake in the team queue either way,
+        // backed off by WAKE_RETRY so an unavailable pane cannot hot-loop the
+        // drain - never in the notes queue where its hold expires into a
+        // lost paste. An unreachable wake waits out its retry once and is
+        // then marked undeliverable if the pane is still gone.
+        if matches!(outcome, PromptOutcome::Held | PromptOutcome::Unreachable) {
+            self.team_bridge.hold_prompt(
                 team_id.clone(),
                 pane_id.to_owned(),
                 prompt,
@@ -359,7 +386,7 @@ impl SheprdWindow {
         self.team_bridge.last_activity = Some(
             match outcome {
                 PromptOutcome::Sent => summary,
-                PromptOutcome::Held => summary,
+                PromptOutcome::Held | PromptOutcome::Unreachable => summary,
                 PromptOutcome::Unavailable => format!(
                     "{summary}: not delivered, no reachable agent in {pane_id}; work stays pending"
                 ),
@@ -417,9 +444,12 @@ impl SheprdWindow {
         // Team wakes paste only into an idle agent; a busy one comes back as
         // Held so the team queue retries it, instead of the generic notes
         // queue holding it for 120s and then pasting into a mid-turn program.
+        // A pane no snapshot proves comes back as Unreachable so the drain
+        // backs off and expires it instead of re-offering it every tick.
         match self.deliver_team_prompt(pane_id, prompt, cx) {
             crate::agent_notes::Delivered::Agent => PromptOutcome::Sent,
             crate::agent_notes::Delivered::Kept => PromptOutcome::Held,
+            crate::agent_notes::Delivered::Unreachable => PromptOutcome::Unreachable,
             crate::agent_notes::Delivered::Copy(_) => PromptOutcome::Unavailable,
         }
     }
@@ -760,6 +790,10 @@ pub(crate) enum PromptOutcome {
     Sent,
     /// Held in the bridge queue for a paused team or member.
     Held,
+    /// No reachable agent in the pane: no snapshot shows it, or no agent sits
+    /// in it. Queued with a WAKE_RETRY backoff, then marked undeliverable if
+    /// the pane is still gone when the retry comes due.
+    Unreachable,
     /// No reachable agent in the pane; the text was kept, not injected.
     Unavailable,
     /// The agent or chat refused the prompt.

@@ -3,7 +3,7 @@
 //! prompt dispatches in the tick its action was queued, so an agent woken with
 //! "claim this task" or "ack this post" finds the row when it runs the command
 //! it was told to run.
-use super::{Bridge, QueuedPrompt, roster};
+use super::{Bridge, QueuedPrompt, WAKE_RETRY, roster};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -35,6 +35,29 @@ impl Bridge {
         signals: Vec<String>,
     ) {
         self.push_prompt(team_id, pane_id, prompt, summary, signals, Instant::now());
+    }
+
+    /// Queues a prompt the dispatch could not deliver now - a paused pane, a
+    /// busy agent, or no reachable agent at all - for a later tick. Unlike
+    /// [`Bridge::enqueue_prompt`], the retry is backed off by [`WAKE_RETRY`]:
+    /// a pane that stays unavailable must not be re-offered every tick,
+    /// which once hot-looped the drain on stale panes.
+    pub(super) fn hold_prompt(
+        &mut self,
+        team_id: String,
+        pane_id: String,
+        prompt: String,
+        summary: String,
+        signals: Vec<String>,
+    ) {
+        self.push_prompt(
+            team_id,
+            pane_id,
+            prompt,
+            summary,
+            signals,
+            Instant::now() + WAKE_RETRY,
+        );
     }
 
     /// Puts a prompt the drain could not deliver back in the queue, to be
@@ -133,6 +156,55 @@ impl Bridge {
         }
         self.queued_prompts = held;
         ready
+    }
+
+    /// Drops the selected team's queued prompts whose retry is due and whose
+    /// pane can no longer take a wake: it is neither in the team roster nor
+    /// shown by any connected snapshot. A pane that vanished mid-hold waits
+    /// out [`WAKE_RETRY`] once - one that returns in time still gets its
+    /// wake - and one that is still gone is marked undeliverable instead of
+    /// being re-offered forever. Prompts whose pane is merely reconnecting
+    /// (still in the roster) and other teams' prompts are kept. Each dropped
+    /// prompt counts toward the status surface; the unique panes are
+    /// returned for the activity line.
+    pub(super) fn expire_unreachable_prompts(
+        &mut self,
+        live_panes: &HashSet<String>,
+    ) -> Vec<String> {
+        let Some(team) = self.team.as_ref() else {
+            return Vec::new();
+        };
+        let team_id = team.team_id.as_str();
+        let roster_panes: HashSet<String> =
+            roster(team).filter_map(|m| m.target.pane.clone()).collect();
+        let now = Instant::now();
+        let mut dropped: Vec<String> = Vec::new();
+        let mut dropped_count = 0usize;
+        let mut kept = Vec::new();
+        for item in self.queued_prompts.drain(..) {
+            let unreachable = item.team_id == team_id
+                && item.retry_at <= now
+                && !roster_panes.contains(&item.pane_id)
+                && !live_panes.contains(&item.pane_id);
+            if unreachable {
+                self.undeliverable += 1;
+                dropped_count += 1;
+                if !dropped.iter().any(|pane| pane == &item.pane_id) {
+                    dropped.push(item.pane_id.clone());
+                }
+            } else {
+                kept.push(item);
+            }
+        }
+        self.queued_prompts = kept;
+        if dropped_count > 0 {
+            tracing::warn!(
+                count = dropped_count,
+                panes = %dropped.join(", "),
+                "Queued team wakes marked undeliverable: their panes are in neither the roster nor any connected snapshot"
+            );
+        }
+        dropped
     }
 
     /// Split an action's prompts by whether the store has to confirm them. The

@@ -55,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preflight refuses a live remote UI, recovers stale remote sockets the way the app's own bind does, and passes ssh options through (`--ssh-arg`).
   - Setup, identity and failure modes documented in `docs/control-tunnel.md`.
 
+### Fixed
+- Team wakes to panes that are gone no longer hot-loop the drain (issue
+  #35). A wake whose pane is in neither the team roster nor any connected
+  snapshot is queued with a 5s backoff instead of an immediate retry, and
+  once its retry waits out it is marked undeliverable: dropped from the
+  queue, counted in the team status summary ("N undeliverable"), named in
+  the last-action line, and never recorded as delivered, so the work stays
+  pending on the board. Held wakes (paused pane, busy agent) also back off
+  by the retry interval instead of being re-offered every tick, and a
+  reconnecting pane (still in the roster) keeps its wakes.
+
 ### Planned & In Progress
 - **Cross-Host Agent Fleet (Remote Coordination)**:
   - Wire remote SSH endpoints (`m1`, `m2`, `fx505`) into the active team roster.

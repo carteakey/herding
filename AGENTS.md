@@ -13,6 +13,10 @@ Engineering guidance for agents working in this repository. Read this alongside
 - Never modify or patch Herdr itself. It is owned by an unrelated external team;
   sibling Herdr checkouts are read-only references. Propose an upstream PR only
   when genuinely justified, never make incidental upstream edits for this client.
+- File issues and PRs in this fork (`carteakey/herding`), not upstream
+  `penso/herdr-gpui`. Upstream is an unrelated external project and a read-only
+  reference; do not open issues, PRs, or comments there unless the user
+  explicitly asks for an upstream report.
 
 ## Architecture
 

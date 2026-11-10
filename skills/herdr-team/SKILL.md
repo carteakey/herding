@@ -55,3 +55,34 @@ The SSH shim does not currently provide Team commands.
 A skill does not deliver messages or wake an idle agent. Check the bulletin
 when prompted or when your task calls for it; do not claim a message was read
 or a task completed merely because a notification was submitted.
+
+## If a wake does not arrive (temporary workaround, issue #35)
+
+Team wakes can be silently dropped by the app's paste path after an app/daemon
+restart or a workspace/pane change. The member looks registered and
+`team heartbeat` says live/HEALTHY, but no message appears in the pane and
+`herdr-gpui.jsonl` has no `team wake drain` line for that pane.
+
+Until #35 lands, deliver the prompt manually from the supervisor's pane or any
+shell:
+
+    herdr pane send-text <PANE_ID> "<the full team prompt>"
+    herdr pane send-keys <PANE_ID> Enter
+
+Then verify the member acted (`team task list`, `team bulletin list`) or read
+the pane (`herdr pane read <PANE_ID> --lines 40`). This bypasses the app's
+paste path entirely. Do not assume a wake was delivered because the post was
+stored; check the pane or the ack.
+
+Root cause: `deliver_team_prompt` returns `Kept` for a pane it cannot prove,
+and the #17 path maps that to `Held` and re-enqueues with no backoff; the
+direct dispatch path also logs nothing on failure. Tracked in issue #35.
+
+## File issues in this fork, not upstream
+
+Open issues and PRs in `carteakey/herding` (the fork). `penso/herdr-gpui` is
+upstream and a read-only reference: do not open issues, pull requests, or
+comments there unless the user explicitly asks for an upstream report. Team
+findings, fork bugs, and follow-ups belong on the fork's tracker and the team
+board. If a worker spots an upstream bug, re-file it in the fork and cite the
+upstream commit/issue as evidence only.

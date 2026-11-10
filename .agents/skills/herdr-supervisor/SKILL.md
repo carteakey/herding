@@ -28,6 +28,15 @@ task automatic once it lands; until then the supervisor authors tasks by hand
 and references the issue. Closing an issue is always a deliberate act after
 LIVE verification - never on task-done alone.
 
+## Issue tracking: fork only, never upstream
+
+File issues and PRs in `carteakey/herding` (the fork). `penso/herdr-gpui` is
+upstream, owned by an unrelated external team, and is a read-only reference:
+do not open issues, pull requests, or comments there unless the user explicitly
+asks for an upstream report. Team findings, fork bugs, and follow-ups belong on
+the fork's tracker and the team board. If a worker reports an upstream issue,
+re-file it in the fork and cite the upstream commit/issue as evidence only.
+
 ## The supervision loop
 
 1. On a wake: read the bulletin, `team bulletin ack` it.

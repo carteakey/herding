@@ -101,6 +101,9 @@ alone, or rely on the sampler's soft guard.
 ## 7. Verify and report
 
 - `herding team status` and `team task list` show the expected board.
+- `scripts/fleet-doctor.sh` (the `herding-fleet` skill) shows every host on the
+  fork build with the plugin installed and the team skill present. Quote its
+  table; a host that is `unreachable` or on `upstream` is not shipped.
 - The release tag, every host's `--version`, and the gate counts are in the
   report. State what was not run.
 - Watch memory for a few minutes after the deploy; if the session is under

@@ -49,8 +49,17 @@ restart or a workspace/pane change. The member looks registered and
 Until #35 lands, deliver the prompt manually from the supervisor's pane or any
 shell:
 
-    herdr pane send-text <PANE_ID> "<the full team prompt>"
-    herdr pane send-keys <PANE_ID> Enter
+    herdr pane run <PANE_ID> "<the full team prompt>"
+
+`herdr pane run` sends the text and Enter in one call. The two-step form is
+`herdr pane send-text <PANE_ID> "<prompt>"` then `herdr pane send-keys <PANE_ID>
+Enter`.
+
+If the pane is on an SSH host, its pane id belongs to that host's daemon: run
+the command on that host, e.g. `herdr --remote <ssh-target> pane run <PANE_ID>
+"<prompt>"`, or SSH in and run its local `herdr pane run <PANE_ID> "<prompt>"`.
+The local `herdr pane run`/`send-text` only reaches the local daemon; it cannot
+address a pane on another machine.
 
 Then verify the member acted (`team task list`, `team bulletin list`) or read
 the pane (`herdr pane read <PANE_ID> --lines 40`). This bypasses the app's

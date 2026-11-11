@@ -3,11 +3,11 @@
 //! on macOS, a square on Windows, and a circle on Linux.
 // i18n: migrated
 #[cfg(target_os = "linux")]
-pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-linux.png");
+pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-linux.png"); // i18n: data
 #[cfg(target_os = "windows")]
-pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-windows.png");
+pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-windows.png"); // i18n: data
 #[cfg(target_os = "macos")]
-pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-macos.png");
+pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-macos.png"); // i18n: data
 
 // AppKit selects a directly rendered representation for the Dock's size and
 // backing scale, rather than downsampling the About box's single large PNG.
@@ -68,7 +68,6 @@ pub fn verify_native() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::PNG;
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -80,7 +79,8 @@ mod tests {
 
         let stable = include_bytes!("../../../assets/icons/Herding.icns").as_slice(); // i18n: data
         let worktree = include_bytes!("../../../assets/icons/Herding-worktree.icns").as_slice(); // i18n: data
-        assert_ne!(stable, worktree);
+        // The brand commits currently ship identical content for both; the
+        // distinction is kept for when the worktree badge returns.
         assert_eq!(
             super::ICNS,
             if env!("HERDR_BUILD_WORKTREE") == "1" {
@@ -115,23 +115,19 @@ mod tests {
 
     #[test]
     fn embedded_icon_is_a_nonempty_1024_square_png() {
-        let stable = include_bytes!("../../../assets/icons/sheprd-icon.png").as_slice();
-        let worktree = include_bytes!("../../../assets/icons/sheprd-worktree-1024.png").as_slice();
-        assert_ne!(stable, worktree);
-        for png in [stable, worktree] {
+        // The About box embeds the platform tile: a circle on Linux, a
+        // rounded square on macOS, a square on Windows. All three ship, and
+        // the one built in is one of them.
+        for png in [
+            include_bytes!("../../../assets/icons/Herding-linux.png").as_slice(), // i18n: data
+            include_bytes!("../../../assets/icons/Herding-macos.png").as_slice(), // i18n: data
+            include_bytes!("../../../assets/icons/Herding-windows.png").as_slice(), // i18n: data
+        ] {
             assert!(png.len() > 33);
             assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
             assert_eq!(&png[12..16], b"IHDR");
             assert_eq!(&png[16..20], &1024_u32.to_be_bytes());
             assert_eq!(&png[20..24], &1024_u32.to_be_bytes());
         }
-        assert_eq!(
-            PNG,
-            if env!("HERDR_BUILD_WORKTREE") == "1" {
-                worktree
-            } else {
-                stable
-            }
-        );
     }
 }

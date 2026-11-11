@@ -26,6 +26,7 @@ pub(super) struct DrainedPrompt {
 pub(super) type HeldPrompts = std::collections::VecDeque<(u64, Vec<PromptDispatch>)>;
 
 impl Bridge {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn enqueue_prompt(
         &mut self,
         team_id: String,

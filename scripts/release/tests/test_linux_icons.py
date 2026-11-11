@@ -1,42 +1,44 @@
-"""The shipped Linux variants retain the shared logo and can be regenerated."""
+"""The shipped Linux variants embed the Herding circle tile, self-contained."""
 from pathlib import Path
-import runpy
+import base64
+import re
 import unittest
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
 ASSETS = ROOT / "assets/icons"
-GENERATOR = runpy.run_path(str(ROOT / "scripts/generate-linux-icons.py"))
 SVG = "{http://www.w3.org/2000/svg}"
 
 
+def strip_data(text):
+    return re.sub(r"data:image/png;base64,[A-Za-z0-9+/=]+", "DATA", text)
+
+
 class LinuxIconTests(unittest.TestCase):
-    def test_committed_icons_are_reproducible_and_keep_the_shared_logo(self):
-        source = (ASSETS / "sheprd-avatar.svg").read_text()
-        shared = ET.fromstring(source)
-        for name, worktree in (("sheprd-linux.svg", False), ("sheprd-linux-worktree.svg", True)):
+    def test_committed_icons_embed_the_herding_circle_tile(self):
+        tile = (ASSETS / "Herding-linux.png").read_bytes()
+        for name in ("sheprd-linux.svg", "sheprd-linux-worktree.svg"):
             with self.subTest(icon=name):
                 committed = (ASSETS / name).read_text()
-                self.assertEqual(committed, GENERATOR["artwork"](source, "circle", worktree))
                 root = ET.fromstring(committed)
-                paw = root.find(f"{SVG}g")
-                original = shared.find(f"{SVG}g")
-                self.assertEqual([(shape.tag, shape.attrib) for shape in paw],
-                                 [(shape.tag, shape.attrib) for shape in original])
-                self.assertEqual(paw.get("fill"), original.get("fill"))
-                self.assertIn("sheprd-avatar.svg", root.find(f"{SVG}metadata").text)
-                # No full-canvas background, clip, embedded raster, or external
-                # reference: the shell gets a transparent, self-contained disc.
-                self.assertEqual([child.tag.removeprefix(SVG) for child in root],
-                                  ["title", "desc", "metadata", "defs", "circle", "g"])
+                self.assertEqual(root.get("viewBox"), "0 0 1024 1024")
+                self.assertEqual(root.find(f"{SVG}title").text, "Herding")
+                # One self-contained raster: the shell resolves nothing
+                # external, so a desktop shell renders it anywhere.
+                hrefs = re.findall(r'href="([^"]+)"', committed)
+                self.assertEqual(len(hrefs), 1)
+                self.assertTrue(hrefs[0].startswith("data:image/png;base64,"))
+                embedded = base64.b64decode(hrefs[0].removeprefix("data:image/png;base64,"))
+                self.assertEqual(embedded, tile, "the embedded raster is the circle tile")
+                image = root.find(f"{SVG}image")
+                self.assertEqual((image.get("width"), image.get("height")), ("1024", "1024"))
+                clip = root.find(f"{SVG}defs/{SVG}clipPath/{SVG}circle")
+                self.assertEqual([clip.get(key) for key in ("cx", "cy", "r")],
+                                 ["512", "512", "512"])
+                self.assertEqual(image.get("clip-path"), "url(#circle)")
 
-    def test_missing_paw_or_gradient_is_rejected(self):
-        source = (ASSETS / "sheprd-avatar.svg").read_text()
-        for tag in ("path", "defs", "g"):
-            root = ET.fromstring(source)
-            for parent in root.iter():
-                for child in list(parent):
-                    if child.tag == SVG + tag:
-                        parent.remove(child)
-            with self.subTest(missing=tag), self.assertRaises(ValueError):
-                GENERATOR["artwork"](ET.tostring(root))
+    def test_the_variants_share_one_shell_around_the_tile(self):
+        # The stable and worktree variants differ only in the embedded raster,
+        # so artwork updates rewrap one tile; the badge lives in the .icns.
+        self.assertEqual(strip_data((ASSETS / "sheprd-linux.svg").read_text()),
+                         strip_data((ASSETS / "sheprd-linux-worktree.svg").read_text()))

@@ -224,6 +224,9 @@ impl TeamStore {
                 status: current.status.as_str().to_owned(),
             });
         }
+        if !actor_may_touch_task(&tx, team_id, actor, &current)? {
+            return Err(Error::TaskUnavailable(task_id.to_owned()));
+        }
         tx.execute(
             "UPDATE tasks SET status = 'blocked', blocker_reason = ?1, updated_at = ?2
              WHERE team_id = ?3 AND task_id = ?4",
@@ -311,6 +314,9 @@ impl TeamStore {
             });
         }
         let current = read_task_in_tx(&tx, team_id, task_id)?;
+        if !actor_may_touch_task(&tx, team_id, actor, &current)? {
+            return Err(Error::TaskUnavailable(task_id.to_owned()));
+        }
         // A different assignee cannot continue another worker's in-progress or
         // blocked claim, so the task returns to the board as claimable work.
         let reset = current.assignee.as_deref() != assignee
@@ -333,7 +339,16 @@ impl TeamStore {
         let (_, stamp) = now_stamp()?;
         let tx = self.db.transaction()?;
         ensure_author_in_team(&tx, team_id, actor)?;
-        let _ = read_task_in_tx(&tx, team_id, task_id)?;
+        let current = read_task_in_tx(&tx, team_id, task_id)?;
+        if matches!(current.status, TaskStatus::Done | TaskStatus::Cancelled) {
+            return Err(Error::InvalidTaskTransition {
+                task_id: task_id.to_owned(),
+                status: current.status.as_str().to_owned(),
+            });
+        }
+        if !actor_may_touch_task(&tx, team_id, actor, &current)? {
+            return Err(Error::TaskUnavailable(task_id.to_owned()));
+        }
         tx.execute(
             "UPDATE tasks SET status = 'cancelled', updated_at = ?1
              WHERE team_id = ?2 AND task_id = ?3",
@@ -432,6 +447,30 @@ fn read_task_in_tx(tx: &rusqlite::Transaction<'_>, team_id: &str, task_id: &str)
         Some(task) => task,
         None => Err(Error::TaskNotFound(task_id.to_owned())),
     }
+}
+
+/// Whether `actor` may block, cancel, or re-scope `task` in `team_id`: the
+/// human operator, the team's supervisor, the current assignee, or — while
+/// the task is still open and unassigned — its creator. Transitioning
+/// another worker's claim is a permission refusal (#44), not a claim race,
+/// so it reports the same `TaskUnavailable` the claim race does.
+fn actor_may_touch_task(
+    tx: &rusqlite::Transaction<'_>,
+    team_id: &str,
+    actor: &Author,
+    task: &Task,
+) -> Result<bool> {
+    let Author::Member { member_id } = actor else {
+        return Ok(true);
+    };
+    let supervisor_id: String = tx.query_row(
+        "SELECT supervisor_id FROM teams WHERE team_id = ?1",
+        [team_id],
+        |row| row.get(0),
+    )?;
+    Ok(*member_id == supervisor_id
+        || task.assignee.as_deref() == Some(member_id.as_str())
+        || (task.status == TaskStatus::Open && task.assignee.is_none() && task.creator == *actor))
 }
 
 fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {

@@ -3,13 +3,17 @@
 //! been silent for the configured timeout is stalled, and the supervisor is
 //! woken once per stall state.
 //!
-//! The signals are deliberately status-independent (bulletin 289, issue #61):
-//! a harness that reports `idle` mid-turn cannot create a false stall here,
-//! because the judgment needs output silence (no agent `state_change_seq`
-//! change) *and* no team CLI call, both over the same timeout window. The
-//! daemon's `AgentStatus` is only a hint in the other direction: a `Working`
-//! pane is never stalled, but `idle` alone never proves one. Terminal output
-//! is never read (issue #55); only the snapshot's counters.
+//! The output signal is the daemon's terminal content revision, the counter
+//! `herdr pane list` reports: it climbs with every redraw, spinner and clock
+//! included, and freezes when the pane stops drawing - so a harness that
+//! reports `idle` mid-turn (#61) cannot create a false stall, and a turn
+//! stuck `working` cannot hide from it either. The daemon's `AgentStatus` is
+//! only a window hint: a `Working` pane is judged on the same silence but
+//! over a tripled window, so a slow compile is not a stall while a turn that
+//! died working still trips it (#56). Panes the surface frame does not carry
+//! (a background tab, a daemon without the surface capability) have no
+//! observable output and are never claimed stalled. Terminal output is never
+//! read (issue #55); only the counter.
 //!
 //! Activity is window-local: a restart forgets calls made before it, so a
 //! member that went quiet around a restart is detected by output silence
@@ -29,12 +33,17 @@ use std::time::{Duration, Instant};
 /// The default stall timeout: three minutes of silence on both signals.
 pub(crate) const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 
-/// One member's pane signal as the snapshots report it: the daemon's status
-/// hint and the agent state counter the output clock reads.
-pub(crate) type PaneSignal = (AgentStatus, u64);
+/// How much longer a pane the daemon reports `Working` may sit silent before
+/// it is stalled: a compile or a long tool run redraws nothing, so the plain
+/// timeout would false-positive, but a turn that died working must still
+/// trip eventually (#56).
+const WORKING_WINDOW_FACTOR: u32 = 3;
 
-/// A roster member with their pane and current signal.
-pub(crate) type ObservedMember<'a> = (&'a Member, String, Option<PaneSignal>);
+/// The daemon's status hint for a member's pane, from the snapshot's agents.
+pub(crate) type PaneStatusHint = Option<AgentStatus>;
+
+/// A roster member with their pane and the status hint about it.
+pub(crate) type ObservedMember<'a> = (&'a Member, String, PaneStatusHint);
 
 /// One detected stall, frozen until the member is active again.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,7 +101,7 @@ impl StalledMember {
 /// manufacture a stall for a member that called before it.
 #[derive(Default)]
 pub(crate) struct StallTracker {
-    /// Pane id to the last seen `state_change_seq` and when it changed.
+    /// Pane id to the last seen terminal content revision and when it moved.
     pane_output: HashMap<String, (u64, Instant)>,
     /// The caller's proven session to its last team CLI call.
     member_calls: HashMap<String, Instant>,
@@ -114,53 +123,57 @@ impl StallTracker {
         self.member_calls.insert(session.to_owned(), now);
     }
 
-    /// Advances the output clock from the connected snapshots' agents. A pane
-    /// with a new `state_change_seq` is active now; a pane that left the
-    /// snapshots is dropped, so a gone member is not judged on stale silence.
+    /// Advances the output clock from the connected endpoints' surface
+    /// frames. A pane whose content revision moved is active now; a pane
+    /// that left the frames is dropped, so a gone member is not judged on
+    /// stale silence.
     pub(crate) fn observe_panes<'a>(
         &mut self,
-        agents: impl IntoIterator<Item = (&'a str, u64)>,
+        panes: impl IntoIterator<Item = (&'a str, u64)>,
         now: Instant,
     ) {
-        let seen: HashMap<String, u64> = agents
+        let seen: HashMap<String, u64> = panes
             .into_iter()
-            .map(|(pane, seq)| (pane.to_owned(), seq))
+            .map(|(pane, revision)| (pane.to_owned(), revision))
             .collect();
         self.pane_output.retain(|pane, _| seen.contains_key(pane));
-        for (pane, seq) in seen {
+        for (pane, revision) in seen {
             match self.pane_output.get(&pane) {
                 // Unchanged output keeps its original change time.
-                Some((last, _)) if *last == seq => {}
+                Some((last, _)) if *last == revision => {}
                 _ => {
-                    self.pane_output.insert(pane, (seq, now));
+                    self.pane_output.insert(pane, (revision, now));
                 }
             }
         }
     }
 
-    /// The member is stalled when their pane has not changed its agent state
-    /// for the timeout, they have not called the team CLI within it, and the
-    /// daemon does not report them working.
+    /// The member is stalled when their pane's content revision has not
+    /// moved and they have not called the team CLI for the window. A pane
+    /// the daemon reports `Working` gets a tripled window: drawing stops
+    /// during a long tool run, but a turn that died working still trips it.
     fn is_stalled(
         &self,
         session: &str,
         pane_id: &str,
-        agent_status: Option<AgentStatus>,
+        agent_status: PaneStatusHint,
         timeout: Duration,
         now: Instant,
     ) -> bool {
-        if matches!(agent_status, Some(AgentStatus::Working)) {
-            return false;
-        }
+        let window = match agent_status {
+            Some(AgentStatus::Working) => timeout * WORKING_WINDOW_FACTOR,
+            _ => timeout,
+        };
         let silent_output = match self.pane_output.get(pane_id) {
-            Some((_, changed_at)) => now.duration_since(*changed_at) >= timeout,
-            // No agent entry: output is unobservable, so no stall is claimed.
+            Some((_, changed_at)) => now.duration_since(*changed_at) >= window,
+            // Absent from the surface frame: output is unobservable, so no
+            // stall is claimed.
             None => return false,
         };
         let silent_calls = self
             .member_calls
             .get(session)
-            .is_none_or(|called| now.duration_since(*called) >= timeout);
+            .is_none_or(|called| now.duration_since(*called) >= window);
         silent_output && silent_calls
     }
 
@@ -176,17 +189,11 @@ impl StallTracker {
         now: Instant,
     ) -> Vec<StalledMember> {
         let mut still_stalled = HashMap::new();
-        for (member, pane_id, agent) in members {
+        for (member, pane_id, status) in members {
             let Some(task) = held.get(member.member_id.as_str()) else {
                 continue;
             };
-            if !self.is_stalled(
-                &member.target.session,
-                pane_id,
-                agent.map(|(status, _)| status),
-                timeout,
-                now,
-            ) {
+            if !self.is_stalled(&member.target.session, pane_id, *status, timeout, now) {
                 continue;
             }
             let record = match self.stalled.get(&member.member_id) {
@@ -250,7 +257,7 @@ impl SheprdWindow {
         let members: Vec<ObservedMember<'_>> = roster(&team)
             .filter_map(|member: &Member| {
                 let pane_id = member.target.pane.clone()?;
-                let agent = self
+                let status = self
                     .endpoints
                     .iter()
                     .enumerate()
@@ -266,8 +273,8 @@ impl SheprdWindow {
                             .iter()
                             .find(|agent| agent.pane_id == pane_id)
                     })
-                    .map(|agent| (agent.agent_status, agent.state_change_seq));
-                Some((member, pane_id, agent))
+                    .map(|agent| agent.agent_status);
+                Some((member, pane_id, status))
             })
             .collect();
         let members: Vec<_> = members
@@ -307,7 +314,7 @@ impl SheprdWindow {
     }
 
     fn observe_team_pane_output(&mut self, now: Instant) {
-        let agents: Vec<_> = self
+        let panes: Vec<_> = self
             .endpoints
             .iter()
             .enumerate()
@@ -317,12 +324,12 @@ impl SheprdWindow {
                 } else {
                     &endpoint.live
                 };
-                live.snapshot.as_ref().map(|snapshot| &snapshot.agents)
+                live.surface.as_ref().map(|frame| &frame.panes)
             })
             .flatten()
-            .map(|agent| (agent.pane_id.as_str(), agent.state_change_seq))
+            .map(|pane| (pane.pane_id.as_str(), pane.content_revision))
             .collect();
-        self.team_stalls.observe_panes(agents, now);
+        self.team_stalls.observe_panes(panes, now);
     }
 }
 

@@ -7,20 +7,13 @@ import re
 import subprocess
 import sys
 
-REPO = "sheprd-labs/sheprd"
+REPO = "carteakey/herding"
 # Job names are the API contract with ci.yml. Missing/renamed jobs fail closed.
-# Windows packaging is path-selected and also runs in the release workflow;
-# the macOS release builds run on pull requests only, since the release
-# workflow builds those targets itself.
+# The fork runs the minimum set: the commit-message job and the Linux checks
+# job on its single free runner; every other ci.yml job skips on the fork.
 REQUIRED_JOBS = frozenset({
-    "Workflow Security", "Commit messages", "Format, lint, and test",
-    *(f"Format, lint, and test ({runner}, {features})" for runner in
-      ("macos-15", "ubuntu-24.04", "ubuntu-24.04-arm") for features in ("default", "all")),
-    *(f"Windows check ({runner}, {features})" for runner in ("windows-2025", "windows-11-arm")
-      for features in ("default", "all")),
-    *(f"Windows native GUI ({runner})" for runner in ("windows-2025", "windows-11-arm")),
-    *(f"Release ({target})" for target in
-      ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")),
+    "Commit messages",
+    "Format, lint, and test (ubuntu-24.04, default)",
 })
 
 
@@ -42,8 +35,8 @@ def api(path, *, paginate=False):
 def eligible(run, sha):
     return (run["head_sha"] == sha and run["head_branch"] == "main"
             and run["event"] in ("push", "workflow_dispatch")
-            and run["actor"]["login"] == "penso"
-            and run["triggering_actor"]["login"] == "penso")
+            and run["actor"]["login"] == "carteakey"
+            and run["triggering_actor"]["login"] == "carteakey")
 
 
 def missing_jobs(jobs):

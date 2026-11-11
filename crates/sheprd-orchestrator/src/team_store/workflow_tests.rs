@@ -106,7 +106,7 @@ fn task_lifecycle_atomic_claim_assignment_and_completion() {
     // Unassigned worker cannot complete w-1's in-progress task t1, but w-1 can.
     assert!(matches!(
         store.complete_task("team-1", "t1", &w2, "forged"),
-        Err(Error::TaskUnavailable(_))
+        Err(Error::TaskNotPermitted { .. })
     ));
     let done = store
         .complete_task("team-1", "t1", &w1, "ELF entrypoint at 0x401000")

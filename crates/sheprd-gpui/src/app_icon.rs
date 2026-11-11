@@ -1,11 +1,13 @@
 //! Embedded development icon; app bundles use their native Info.plist icon.
-//! The same artwork identifies the build in the About box on every platform.
+//! The platform tile identifies the build in the About box: a rounded square
+//! on macOS, a square on Windows, and a circle on Linux.
 // i18n: migrated
-pub(super) const PNG: &[u8] = if env!("HERDR_BUILD_WORKTREE").as_bytes()[0] == b'1' {
-    include_bytes!("../../../assets/icons/sheprd-worktree-1024.png")
-} else {
-    include_bytes!("../../../assets/icons/sheprd-icon.png")
-};
+#[cfg(target_os = "linux")]
+pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-linux.png");
+#[cfg(target_os = "windows")]
+pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-windows.png");
+#[cfg(target_os = "macos")]
+pub(super) const PNG: &[u8] = include_bytes!("../../../assets/icons/Herding-macos.png");
 
 // AppKit selects a directly rendered representation for the Dock's size and
 // backing scale, rather than downsampling the About box's single large PNG.

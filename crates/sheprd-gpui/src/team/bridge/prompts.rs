@@ -291,9 +291,22 @@ impl SheprdWindow {
     /// the roster and every connected snapshot is marked undeliverable once
     /// its retry waits out, instead of being re-offered forever.
     pub(crate) fn dispatch_drained_team_prompts(&mut self) {
-        // A drain while the daemon is reconnecting has no snapshot to prove a
-        // pane against, so it would fail every delivery. Keep the queue.
-        if !self.live.status.is_connected() || self.live.snapshot.is_none() {
+        // A drain with no connected daemon has no snapshot to prove a pane
+        // against, so it would fail every delivery. Keep the queue. One host
+        // being down must not stall the rest: the drain runs whenever any
+        // endpoint is connected, and the per-member host resolution decides
+        // what each wake can reach - an unreachable host is held with the
+        // regular backoff instead of waiting for the selected endpoint
+        // (finding 736a1b22).
+        let any_endpoint_provable = self.endpoints.iter().enumerate().any(|(index, endpoint)| {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            live.status.is_connected() && live.snapshot.is_some()
+        });
+        if !any_endpoint_provable {
             return;
         }
         // Panes the connected daemons currently show, the same proof the

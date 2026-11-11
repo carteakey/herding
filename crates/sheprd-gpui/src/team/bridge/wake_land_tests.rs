@@ -14,9 +14,10 @@ use crate::SheprdWindow;
 use crate::agent_notes::Delivered;
 use crate::control::server::team::dispatch::{mention_signal, notify_team_mutation};
 use crate::control::server::team_worker::Reply;
+use crate::endpoint::Endpoint;
 use crate::sidebar::layout_tests::fixture_window;
-use crate::state::ConnectionStatus;
-use sheprd_client::protocol::ClientShellSnapshot;
+use crate::state::{ConnectionStatus, LiveState};
+use sheprd_client::{ConnectTarget, protocol::ClientShellSnapshot};
 use sheprd_orchestrator::team_store::{
     Author, Member, Post, SessionTarget, Task, TaskStatus, Team,
 };
@@ -231,10 +232,10 @@ fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH)
 }
 
-fn hold_supervisor_wake(view: &mut SheprdWindow, pane: &str) {
+fn hold_supervisor_wake(view: &mut SheprdWindow, host: &str, pane: &str) {
     view.team_bridge.hold_prompt(
         "t-x".into(),
-        "boot-local".into(),
+        host.into(),
         pane.into(),
         "wake text".into(),
         "summary".into(),
@@ -255,7 +256,7 @@ fn the_drain_runs_before_the_team_panel_is_ever_shown(cx: &mut gpui::TestAppCont
                 snapshot_with("boot-local", "w1X", "w1X:p9", Some("opencode"), "idle", &[]),
             );
             view.team_bridge.set_team_for_test(wake_team());
-            hold_supervisor_wake(view, "p_sup");
+            hold_supervisor_wake(view, "boot-local", "p_sup");
             // The roster re-binds elsewhere, the way members re-register: the
             // held wake's pane is now in neither the roster nor any snapshot.
             let mut rebound = wake_team();
@@ -303,7 +304,7 @@ fn a_wake_reaches_an_idle_agent_as_typed_text_then_enter(cx: &mut gpui::TestAppC
                 snapshot_with("boot-local", "w1X", "p_sup", Some("opencode"), "idle", &[]),
             );
             view.team_bridge.set_team_for_test(wake_team());
-            hold_supervisor_wake(view, "p_sup");
+            hold_supervisor_wake(view, "boot-local", "p_sup");
             assert!(
                 !view.team_panel_shown(),
                 "the wake retries without anyone opening the board"
@@ -568,4 +569,118 @@ fn the_direct_delivery_decisions_each_log(cx: &mut gpui::TestAppContext) {
             .expect("window open");
     });
     assert!(capture.contains("outcome=\"unreachable\""));
+}
+
+#[gpui::test]
+fn a_remote_wake_drains_while_the_selected_endpoint_is_down(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            // The selected endpoint is down: disconnected, nothing to prove
+            // a pane against. This used to stall the whole drain, including
+            // wakes to hosts that were still connected (finding 736a1b22).
+            view.live.status = ConnectionStatus::Disconnected;
+            view.live.snapshot = None;
+            view.endpoints[0].live = view.live.clone();
+            // A remote host is connected and shows the wake's pane.
+            let mut remote_live = LiveState::default();
+            remote_live.status = ConnectionStatus::Connected;
+            remote_live.snapshot = Some(Arc::new(snapshot_with(
+                "boot-m1",
+                "w0",
+                "m1:p1",
+                Some("claude"),
+                "idle",
+                &[],
+            )));
+            let mut remote = Endpoint::new(
+                "m1".into(),
+                "m1".into(),
+                ConnectTarget::Socket("/unused-m1.sock".into()),
+                true,
+            );
+            remote.never_connect();
+            remote.live = remote_live;
+            view.endpoints.push(remote);
+            assert_eq!(view.selected_endpoint, 0, "the down local host is selected");
+
+            let mut team = wake_team();
+            team.supervisor.target.host = "boot-m1".into();
+            team.supervisor.target.pane = Some("m1:p1".into());
+            view.team_bridge.set_team_for_test(team);
+            hold_supervisor_wake(view, "boot-m1", "m1:p1");
+            assert!(
+                !view.team_panel_shown(),
+                "the fixture never shows the Team panel"
+            );
+        })
+        .expect("window open");
+    let capture = Capture::default();
+    run_logged(&capture, || {
+        window
+            .update(cx, |view, _, cx| view.poll_team(cx))
+            .expect("window open");
+    });
+    assert!(
+        capture.contains("team wake drain delivered a held wake"),
+        "the drain runs on a connected remote host while the selected endpoint is down: {capture:?}",
+    );
+    assert!(
+        capture.contains("could not be typed into the pane"),
+        "the remote wake was attempted through the daemon's pane input: {capture:?}",
+    );
+    window
+        .update(cx, |view, _, _| {
+            // The fixture's daemon input is not connected, so the wake stays
+            // queued for a retry instead of being recorded as delivered.
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a wake the daemon could not take waits for a retry"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", "task9|done|10000"),
+                "only a delivered wake is recorded"
+            );
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_drain_with_every_daemon_down_keeps_the_queue(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            // No connected daemon anywhere: nothing can prove a pane, so the
+            // drain keeps the queue for the reconnect instead of failing
+            // every delivery.
+            view.live.status = ConnectionStatus::Disconnected;
+            view.live.snapshot = None;
+            view.endpoints[0].live = view.live.clone();
+            view.team_bridge.set_team_for_test(wake_team());
+            hold_supervisor_wake(view, "boot-local", "p_sup");
+        })
+        .expect("window open");
+    let capture = Capture::default();
+    run_logged(&capture, || {
+        window
+            .update(cx, |view, _, cx| view.poll_team(cx))
+            .expect("window open");
+    });
+    assert!(
+        !capture
+            .lines()
+            .iter()
+            .any(|line| line.contains("team wake drain delivered a held wake")),
+        "a drain with no connected daemon attempts nothing: {capture:?}",
+    );
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits for a reconnect"
+            );
+        })
+        .expect("window open");
 }

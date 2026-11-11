@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Repackage the manual Linux archive as .deb, .rpm, and Arch packages.
 
-The packages install the files of Sheprd-VERSION-TARGET.tar.gz under /usr,
-materializing its main command alias for the deployed privileged updater.
+The packages install the files of Herding-VERSION-TARGET.tar.gz under /usr,
+materializing its main command aliases (bin/sheprd and bin/herdr-gpui, both
+links to bin/herding) as real copies for the deployed privileged updater.
 Every Linux format ships the same bytes. nfpm (pinned by
 install-nfpm.sh) writes each format from one generated configuration.
 """
@@ -22,11 +23,11 @@ ARCHES = {"x86_64-unknown-linux-gnu": "amd64", "aarch64-unknown-linux-gnu": "arm
 # (nfpm packager, published extension)
 FORMATS = (("deb", "deb"), ("rpm", "rpm"), ("archlinux", "pkg.tar.zst"))
 TREE = {
-    "bin/herdr-core", "bin/herdr-gpui", "bin/sheprd",
+    "bin/herding", "bin/herdr-core", "bin/herdr-gpui", "bin/sheprd",
     *(f"bin/{prefix}-{helper}" for prefix in ("sheprd", "herdr")
       for helper in ("acp", "automate", "nearby", "remote-control")),
     "share/applications/org.sheprd.Sheprd.desktop",
-    "share/icons/hicolor/scalable/apps/sheprd.svg",
+    "share/icons/hicolor/scalable/apps/herding.svg",
     *(f"share/licenses/herdr-gpui/{name}" for name in (
         "LICENSE", "NOTICE", "LICENSE-octicons", "LICENSE-APACHE", "NOTICE.md",
         "SOUND-NOTICE.md", "THIRD-PARTY-NOTICES.txt", "HERDR-CORE-LICENSES.txt")),
@@ -64,7 +65,7 @@ def check_version(version):
 
 
 def extract(archive, prefix, destination):
-    """Extract regular files and materialize the sole permitted command symlink."""
+    """Extract regular files and materialize the permitted command symlinks."""
     with tarfile.open(archive) as source:
         members = source.getmembers()
         files = {}
@@ -77,8 +78,8 @@ def extract(archive, prefix, destination):
             if relative in seen:
                 raise ValueError(f"Duplicate archive entry: {member.name}")
             seen.add(relative)
-            if member.isfile() or (member.issym() and relative == "bin/herdr-gpui"
-                                   and member.linkname == "sheprd"):
+            if member.isfile() or (member.issym() and relative in ("bin/sheprd", "bin/herdr-gpui")
+                                   and member.linkname == "herding"):
                 files[relative] = member
             elif not member.isdir():
                 raise ValueError(f"Archive entry is not a regular file or directory: {member.name}")
@@ -88,8 +89,9 @@ def extract(archive, prefix, destination):
         # copy its bytes only after the entire archive has passed validation.
         source.extractall(destination, members=[m for m in files.values() if m.isfile()], filter="data")
     root = destination / prefix
-    if files["bin/herdr-gpui"].issym():
-        shutil.copy2(root / "bin/sheprd", root / "bin/herdr-gpui")
+    for alias in ("bin/sheprd", "bin/herdr-gpui"):
+        if files[alias].issym():
+            shutil.copy2(root / "bin/herding", root / alias)
     return root
 
 
@@ -131,12 +133,16 @@ def package(version, target, archive, output_dir, nfpm):
     mtime = check_version(version).isoformat().replace("+00:00", "Z")
     if target not in ARCHES:
         raise ValueError("Unsupported Linux target")
-    name = f"Sheprd-{version}-{target}"
+    name = f"Herding-{version}-{target}"
     if archive.name != f"{name}.tar.gz" or not archive.is_file():
         raise ValueError(f"Expected the manual archive {name}.tar.gz")
     if not output_dir.is_dir():
         raise ValueError("Existing output directory required")
-    outputs = [output_dir.resolve() / f"{name}.{extension}" for _, extension in FORMATS]
+    # The deployed bridge selects these exact filenames before downloading, so
+    # the packages keep their published Sheprd-/Herdr- names under the
+    # Herding- archive name.
+    outputs = [output_dir.resolve() / f"Sheprd-{version}-{target}.{extension}"
+               for _, extension in FORMATS]
     # The deployed bridge selects these exact filenames before downloading.
     aliases = [output.with_name(output.name.replace("Sheprd-", "Herdr-", 1)) for output in outputs]
     for output in outputs + aliases:

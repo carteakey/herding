@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Setup, identity and failure modes documented in `docs/control-tunnel.md`.
 
 ### Fixed
+- Distro packaging accepts the Herding-VERSION-TARGET manual archive again:
+  the Linux rebrand renamed the archive but left package-linux-distro.py
+  expecting Sheprd-*, so every .deb, .rpm and Arch build failed. The packages
+  keep their published Sheprd-/Herdr- names, materialize both bin/sheprd and
+  bin/herdr-gpui as real copies of bin/herding, and install the launcher as
+  herding.svg.
 - Team wakes to panes that are gone no longer hot-loop the drain (issue
   #35). A wake whose pane is in neither the team roster nor any connected
   snapshot is queued with a 5s backoff instead of an immediate retry, and

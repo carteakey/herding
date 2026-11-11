@@ -157,7 +157,7 @@ class LinuxDistroTests(unittest.TestCase):
 
     def test_rejects_unexpected_archive_entries(self):
         target = TARGETS[0]
-        prefix = f"Sheprd-{VERSION}-{target}"
+        prefix = f"Herding-{VERSION}-{target}"
         with tarfile.open(self.archive(target)) as source:
             members = [(m, source.extractfile(m).read() if m.isfile() else None) for m in source.getmembers()]
 

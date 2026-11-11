@@ -5,7 +5,10 @@ use crate::endpoint::Endpoint;
 use crate::sidebar::layout_tests::fixture_window;
 use crate::state::{ConnectionStatus, LiveState};
 use gpui::TestAppContext;
-use sheprd_client::{ConnectTarget, protocol::ClientShellSnapshot};
+use sheprd_client::{
+    ConnectTarget,
+    protocol::{ClientShellSnapshot, FrameData, PaneSurfaceFrame, PaneSurfacePane, SurfaceRect},
+};
 use sheprd_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskStatus, Team};
 use std::sync::Arc;
 
@@ -88,6 +91,49 @@ fn snapshot(pane: &str, seq: u64) -> ClientShellSnapshot {
 /// instead of waiting out the timeout.
 const TIMEOUT: Duration = Duration::from_secs(180);
 
+fn frame(pane: &str, content_revision: u64) -> PaneSurfaceFrame {
+    PaneSurfaceFrame {
+        boot_id: "boot-local".into(),
+        projection_revision: content_revision,
+        surface_revision: content_revision,
+        frame: FrameData {
+            cells: vec![],
+            width: 0,
+            height: 0,
+            cursor: None,
+            hyperlinks: vec![],
+            graphics: vec![],
+        },
+        panes: vec![PaneSurfacePane {
+            pane_id: pane.into(),
+            content_revision,
+            rect: SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            inner_rect: SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            scrollbar_rect: None,
+            scroll: None,
+            focused: true,
+            mouse_reporting: false,
+            sgr_pixel_mouse: false,
+            alternate_screen_active: false,
+            pixel_width: 0,
+            pixel_height: 0,
+        }],
+        splits: vec![],
+        popup: None,
+        graphics: Default::default(),
+    }
+}
+
 fn show_local(view: &mut SheprdWindow, pane: &str, seq: u64) {
     let mut local = Endpoint::new(
         "Local".into(),
@@ -101,6 +147,13 @@ fn show_local(view: &mut SheprdWindow, pane: &str, seq: u64) {
     view.live = LiveState::default();
     view.live.status = ConnectionStatus::Connected;
     view.live.snapshot = Some(Arc::new(snapshot(pane, seq)));
+    view.live.surface = Some(Arc::new(frame(pane, seq)));
+}
+
+/// Fresh output: a new content revision in the surface frame, while the
+/// snapshot's agent state stays whatever it was.
+fn redraw(view: &mut SheprdWindow, pane: &str, content_revision: u64) {
+    view.live.surface = Some(Arc::new(frame(pane, content_revision)));
 }
 
 #[gpui::test]
@@ -121,6 +174,7 @@ fn a_silent_assigned_worker_queues_one_wake_without_the_panel(cx: &mut TestAppCo
             // Both signals silent past the timeout: detected, and one wake
             // is queued for the supervisor.
             view.track_team_stalls(start + TIMEOUT);
+            redraw(view, "ws:p2", 1);
             let record = view.team_stall_for_pane("ws:p2").expect("w1 is stalled");
             assert_eq!(record.task_id, "t-1");
             assert_eq!(record.minutes, 3);
@@ -130,6 +184,7 @@ fn a_silent_assigned_worker_queues_one_wake_without_the_panel(cx: &mut TestAppCo
             // dedupes at the queue.
             view.track_team_stalls(start + TIMEOUT + Duration::from_secs(10));
             assert_eq!(view.team_bridge.queued_count_for_test(), 1);
+            redraw(view, "ws:p2", 1);
         })
         .expect("the window stays open");
 }
@@ -147,7 +202,7 @@ fn a_recovery_clears_the_stall_and_a_restall_rewakes(cx: &mut TestAppContext) {
             assert!(view.team_stall_for_pane("ws:p2").is_some());
 
             // Recovery: fresh output and a fresh CLI call end the stall.
-            view.live.snapshot = Some(Arc::new(snapshot("ws:p2", 2)));
+            redraw(view, "ws:p2", 2);
             view.note_team_member_call("agent:zcode:ws:w1");
             let recovered_at = start + TIMEOUT + Duration::from_secs(10);
             view.track_team_stalls(recovered_at);

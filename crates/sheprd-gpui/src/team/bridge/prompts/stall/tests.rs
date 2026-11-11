@@ -77,7 +77,7 @@ fn silence_on_both_signals_for_the_timeout_is_a_stall() {
     ));
     let task = held_task("t-1", "w1");
     let w1 = member("w1");
-    let members = [(&w1, "pane-w1".to_owned(), Some((AgentStatus::Idle, 7)))];
+    let members = [(&w1, "pane-w1".to_owned(), Some(AgentStatus::Idle))];
     let held = [("w1", &task)].into_iter().collect::<HashMap<_, _>>();
     let detected = tracker.detect(&members, &held, TIMEOUT, now);
     assert_eq!(detected.len(), 1);
@@ -88,12 +88,14 @@ fn silence_on_both_signals_for_the_timeout_is_a_stall() {
 }
 
 #[test]
-fn a_working_or_unobservable_pane_is_never_stalled() {
+fn a_working_pane_stalls_only_after_the_extended_window() {
     let mut tracker = StallTracker::new();
     let start = Instant::now();
     tracker.observe_panes([("pane-w1", 1u64)], start);
     let now = start + TIMEOUT;
     tracker.observe_panes([("pane-w1", 1u64)], now);
+    // A frozen pane the daemon still reports working gets the tripled
+    // window: the plain timeout does not stall it (a long tool run).
     assert!(!tracker.is_stalled(
         "agent:zcode:ws:w1",
         "pane-w1",
@@ -101,10 +103,39 @@ fn a_working_or_unobservable_pane_is_never_stalled() {
         TIMEOUT,
         now
     ));
-    // A pane the snapshots no longer describe is unobservable, so silent.
+    // Past the extended window it stalls: a turn that died working (#56).
+    let expired = start + TIMEOUT * 3;
+    tracker.observe_panes([("pane-w1", 1u64)], expired);
+    assert!(tracker.is_stalled(
+        "agent:zcode:ws:w1",
+        "pane-w1",
+        Some(AgentStatus::Working),
+        TIMEOUT,
+        expired
+    ));
+    // An unobservable pane is never stalled, whatever the daemon reports.
     assert!(!tracker.is_stalled(
         "agent:zcode:ws:w1",
         "pane-gone",
+        Some(AgentStatus::Idle),
+        TIMEOUT,
+        now
+    ));
+}
+
+#[test]
+fn output_that_moves_holds_the_stall_off_while_the_status_sits_frozen() {
+    // Issue #61: a harness can report the same agent state throughout a
+    // busy turn. The content revision still climbs with every redraw, so a
+    // working compile is not a stall even though no CLI call was made.
+    let mut tracker = StallTracker::new();
+    let start = Instant::now();
+    tracker.observe_panes([("pane-w1", 1u64)], start);
+    let now = start + TIMEOUT;
+    tracker.observe_panes([("pane-w1", 2u64)], now - Duration::from_secs(10));
+    assert!(!tracker.is_stalled(
+        "agent:zcode:ws:w1",
+        "pane-w1",
         Some(AgentStatus::Idle),
         TIMEOUT,
         now
@@ -119,7 +150,7 @@ fn a_member_without_assigned_work_is_never_reported() {
     let now = start + TIMEOUT;
     tracker.observe_panes([("pane-w1", 1u64)], now);
     let w1 = member("w1");
-    let members = [(&w1, "pane-w1".to_owned(), Some((AgentStatus::Idle, 1)))];
+    let members = [(&w1, "pane-w1".to_owned(), Some(AgentStatus::Idle))];
     let held = HashMap::<&str, &Task>::new();
     assert!(tracker.detect(&members, &held, TIMEOUT, now).is_empty());
 }
@@ -133,7 +164,7 @@ fn a_detection_stays_frozen_until_the_member_recovers() {
     tracker.observe_panes([("pane-w1", 1u64)], stalled_at);
     let task = held_task("t-1", "w1");
     let w1 = member("w1");
-    let members = [(&w1, "pane-w1".to_owned(), Some((AgentStatus::Idle, 1)))];
+    let members = [(&w1, "pane-w1".to_owned(), Some(AgentStatus::Idle))];
     let held = [("w1", &task)].into_iter().collect::<HashMap<_, _>>();
     let first = tracker.detect(&members, &held, TIMEOUT, stalled_at);
     let signal = first[0].signal("t");
@@ -161,7 +192,7 @@ fn a_restall_after_recovery_detects_afresh() {
     tracker.observe_panes([("pane-w1", 1u64)], start);
     let task = held_task("t-1", "w1");
     let w1 = member("w1");
-    let members = [(&w1, "pane-w1".to_owned(), Some((AgentStatus::Idle, 1)))];
+    let members = [(&w1, "pane-w1".to_owned(), Some(AgentStatus::Idle))];
     let held = [("w1", &task)].into_iter().collect::<HashMap<_, _>>();
     let stalled_at = start + TIMEOUT;
     tracker.observe_panes([("pane-w1", 1u64)], stalled_at);

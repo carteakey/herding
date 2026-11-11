@@ -443,8 +443,19 @@ fn run(path: PathBuf, queue: Receiver<Job>) {
 fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> {
     let reply = match operation {
         Operation::SaveTeam(team) => {
+            let previous = store.team(&team.team_id)?;
             store.save_team(&team)?;
-            Reply::Saved
+            // A takeover (a stored team re-saved under a different
+            // supervisor) always requests a structured handoff from the
+            // previous supervisor before the new one acts. The reply is the
+            // posted bulletin itself, so the existing mention dispatch
+            // wakes them like any other bulletin mention.
+            let Some(previous) = previous
+                .filter(|previous| previous.supervisor.member_id != team.supervisor.member_id)
+            else {
+                return Ok(Reply::Saved);
+            };
+            handoff_request(store, &team, &previous)?
         }
         Operation::DeleteTeam { team_id } => {
             store.delete_team(&team_id)?;
@@ -596,6 +607,40 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
         } => scoped(store, &team_id, &caller, action, &live_hosts)?,
     };
     Ok(reply)
+}
+
+/// The takeover bulletin (issue #15): a structured handoff request the new
+/// supervisor sends to the previous one before acting. The previous
+/// supervisor keeps their member row after losing the role, so the explicit
+/// mention is deliverable and rides the `ScopedPosted` dispatch as a wake;
+/// the new supervisor holds pushes and gate claims until the reply arrives
+/// or the user explicitly skips the handoff.
+fn handoff_request(store: &mut TeamStore, team: &Team, previous: &Team) -> Result<Reply, Error> {
+    let saved = store
+        .team(&team.team_id)?
+        .ok_or_else(|| Error::from(team_store::Error::TeamNotFound(team.team_id.clone())))?;
+    let team_id = team.team_id.as_str();
+    let previous_name = previous.supervisor.display_name.as_str();
+    let new_name = team.supervisor.display_name.as_str();
+    let body = format!(
+        "[Herdr Team] Supervisor handoff requested for team {team_id}: {previous_name} -> \
+         {new_name}. @{previous_name}: please reply on this bulletin with (1) in-flight work \
+         per worker and what is gated vs ungated; (2) unpushed commits, uncommitted files, \
+         worktrees, stashes; (3) pending user decisions; (4) known risks and your next \
+         intended step. The new supervisor holds pushes and gate claims until the reply \
+         arrives or the user explicitly skips the handoff."
+    );
+    let post = store.add_post(
+        &uuid::Uuid::new_v4().to_string(),
+        team_id,
+        &Author::Member {
+            member_id: saved.supervisor.member_id.clone(),
+        },
+        None,
+        &body,
+        std::slice::from_ref(&previous.supervisor.member_id),
+    )?;
+    Ok(Reply::ScopedPosted { team: saved, post })
 }
 
 /// A snapshot shows its newest `limit` posts, read as page-sized slices from

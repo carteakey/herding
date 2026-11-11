@@ -294,3 +294,69 @@ fn status_reports_pending_mentions_with_one_count_query() {
     };
     assert_eq!(pending_mentions, 2, "three mentions, one acknowledged");
 }
+
+/// The takeover save: the supervisor role moved to member-2 and the
+/// previous supervisor stays on as a member, exactly what the UI's
+/// SelectSupervisor action persists.
+fn takeover() -> Team {
+    let mut team = team();
+    let previous = team.supervisor.clone();
+    team.supervisor = team.members.remove(0);
+    team.members.push(previous);
+    team
+}
+
+#[test]
+fn takeover_posts_one_handoff_bulletin_for_the_previous_supervisor() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("team").join("teams.sqlite");
+    let mut store = TeamStore::open(&path).unwrap();
+    assert!(matches!(
+        execute(&mut store, Operation::SaveTeam(team())).unwrap(),
+        Reply::Saved
+    ));
+
+    let reply = execute(&mut store, Operation::SaveTeam(takeover())).unwrap();
+    let Reply::ScopedPosted { team, post } = reply else {
+        panic!("a takeover must post the handoff bulletin");
+    };
+    assert_eq!(team.supervisor.member_id, "member-2");
+    assert_eq!(
+        post.author,
+        Author::Member {
+            member_id: "member-2".into(),
+        }
+    );
+    assert_eq!(post.mentions, vec!["member-1".to_owned()]);
+    assert!(post.body.contains("handoff"));
+    assert!(post.body.contains("in-flight work per worker"));
+    assert!(post.body.contains("pending user decisions"));
+
+    // The request is durable on the bulletin and is the only post the two
+    // saves produced.
+    let page = store.latest_posts("team-1", None, 10).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].1.post_id, post.post_id);
+    // The previous supervisor holds the pending mention the wake rides on.
+    let pending = store.pending_mention_count("team-1", "member-1").unwrap();
+    assert_eq!(pending, 1);
+}
+
+#[test]
+fn fresh_saves_and_same_supervisor_resaves_stay_silent() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("team").join("teams.sqlite");
+    let mut store = TeamStore::open(&path).unwrap();
+    assert!(matches!(
+        execute(&mut store, Operation::SaveTeam(team())).unwrap(),
+        Reply::Saved
+    ));
+    // A re-save that re-asserts the same supervisor is not a takeover.
+    let mut renamed = team();
+    renamed.name = "renamed".into();
+    assert!(matches!(
+        execute(&mut store, Operation::SaveTeam(renamed)).unwrap(),
+        Reply::Saved
+    ));
+    assert!(store.latest_posts("team-1", None, 10).unwrap().is_empty());
+}

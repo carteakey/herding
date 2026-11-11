@@ -578,27 +578,38 @@ impl SheprdWindow {
     }
 
     /// Delivers a team wake to a terminal agent, but only when it can be
-    /// pasted now. The member's recorded `host` picks the endpoint, the pane
-    /// must be in that host's snapshot: a wake is never pasted into another
+    /// typed now. The member's recorded `host` picks the endpoint, the pane
+    /// must be in that host's snapshot: a wake is never typed into another
     /// machine just because a pane id matched there (#40). A busy agent
     /// returns `Kept` without queueing: the team layer holds and retries it,
     /// so the generic notes queue's 120s hold cannot swallow a wake the team
     /// layer believes it delivered. A host or pane no snapshot can prove
     /// returns `Unreachable`: the team layer backs off instead of re-offering
     /// the wake every tick, which once hot-looped the drain on panes left
-    /// over from a previous session.
+    /// over from a previous session. Every exit logs its decision, because a
+    /// silent one is indistinguishable from a lost wake (#62).
     pub(crate) fn deliver_team_prompt(
         &mut self,
         host: &str,
         pane_id: &str,
         text: String,
-        cx: &mut Context<Self>,
     ) -> Delivered {
         let text = typable(&text);
         if self.endpoints.is_empty() {
+            tracing::info!(
+                pane = %pane_id,
+                outcome = "unreachable",
+                "team wake not delivered: no endpoints connected"
+            );
             return Delivered::Unreachable;
         }
         let Some(index) = self.target_endpoint_for_member(host, pane_id) else {
+            tracing::info!(
+                host = %host,
+                pane = %pane_id,
+                outcome = "unreachable",
+                "team wake not delivered: no connected endpoint runs the member's host with the pane in its snapshot"
+            );
             return Delivered::Unreachable;
         };
         let live = if index == self.selected_endpoint {
@@ -606,42 +617,82 @@ impl SheprdWindow {
         } else {
             &self.endpoints[index].live
         };
+        let endpoint_id = self.endpoints[index].id.clone();
         let Some(snapshot) = live.snapshot.clone() else {
+            tracing::info!(
+                pane = %pane_id,
+                endpoint = %endpoint_id,
+                outcome = "unreachable",
+                "team wake not delivered: the endpoint has no snapshot"
+            );
             return Delivered::Unreachable;
         };
         let Some(found) = agent(&snapshot, pane_id) else {
+            tracing::info!(
+                pane = %pane_id,
+                endpoint = %endpoint_id,
+                outcome = "unreachable",
+                "team wake not delivered: no agent session in the pane"
+            );
             return Delivered::Unreachable;
         };
         if matches!(
             found.agent_status,
             AgentStatus::Working | AgentStatus::Blocked
         ) {
+            tracing::info!(
+                pane = %pane_id,
+                endpoint = %endpoint_id,
+                status = ?found.agent_status,
+                outcome = "held_busy",
+                "team wake held: the agent is mid-turn"
+            );
             return Delivered::Kept;
         }
+        // Deliver the way `herdr pane run` does (#62): the wake text committed
+        // as if typed, then Enter, as one ordered batch through the daemon's
+        // pane input. A bracketed Paste is truncated to fragments by some
+        // TUIs - the rest dropped, or worse the fragment submitted alone - so
+        // wakes never relied on it here; agent notes keep their paste path.
         let origin = Origin {
-            endpoint: self.endpoints[index].id.clone(),
+            endpoint: endpoint_id,
             boot_id: snapshot.boot_id.clone(),
         };
-        let target = FeedbackKey {
-            scope: crate::browser::scope(&self.endpoints[index]),
-            pane_id: pane_id.to_owned(),
-        };
-        let pasted = self.paste_into_pane(
-            Delivery {
-                target,
-                origin,
-                text,
-                until: Instant::now(),
-                pending: None,
-                copies: None,
-            },
-            cx,
-        );
-        // `paste_into_pane` returns the text only when it could not paste, so
-        // the team layer keeps the wake and retries instead of recording it.
-        match pasted {
-            None => Delivered::Agent,
-            Some(_) => Delivered::Kept,
+        let typed = self.endpoints[index]
+            .connection
+            .handle
+            .as_ref()
+            .ok_or(crate::Error::NotConnected)
+            .and_then(|handle| {
+                ConnectionBridge::send_inputs(
+                    handle,
+                    &origin.boot_id,
+                    &InputTarget::Pane(pane_id.to_owned()),
+                    [ClientPaneInputEvent::TextCommit(text), enter()],
+                )
+                .map_err(crate::Error::from)
+            });
+        match typed {
+            Ok(()) => {
+                tracing::info!(
+                    pane = %pane_id,
+                    endpoint = %origin.endpoint,
+                    outcome = "sent",
+                    "team wake delivered as typed text plus Enter"
+                );
+                self.request_reveal(origin, pane_id);
+                Delivered::Agent
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    pane = %pane_id,
+                    endpoint = %origin.endpoint,
+                    outcome = "kept",
+                    "team wake could not be typed into the pane; the team layer retries"
+                );
+                Delivered::Kept
+            }
         }
     }
 

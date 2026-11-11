@@ -98,7 +98,7 @@ fn two_hosts_same_pane_id(view: &mut SheprdWindow) {
 fn the_same_pane_id_on_two_hosts_routes_to_the_recorded_host(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(fixture_window);
     cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
+        view.update(cx, |view, _| {
             two_hosts_same_pane_id(view);
             assert_eq!(view.selected_endpoint, 0, "the local host is first");
 
@@ -116,12 +116,14 @@ fn the_same_pane_id_on_two_hosts_routes_to_the_recorded_host(cx: &mut gpui::Test
             assert!(!view.team_pane_busy("boot-m1", "w0:p1"));
 
             // The m1 member's wake gets past host resolution to m1's own
-            // endpoint, whose idle agent takes the paste. What matters is
-            // that it is not `Unreachable`, which is what a failed host
-            // lookup would report.
+            // endpoint. What matters is that it is not `Unreachable`, which
+            // is what a failed host lookup would report. The endpoint's
+            // daemon input is not connected in this fixture, so the wake is
+            // kept for retry rather than claimed delivered - a wake that
+            // never reached a program must not be recorded as sent (#62).
             assert_eq!(
-                view.deliver_team_prompt("boot-m1", "w0:p1", "claim the task".into(), cx),
-                crate::agent_notes::Delivered::Agent
+                view.deliver_team_prompt("boot-m1", "w0:p1", "claim the task".into()),
+                crate::agent_notes::Delivered::Kept
             );
         })
     });
@@ -131,7 +133,7 @@ fn the_same_pane_id_on_two_hosts_routes_to_the_recorded_host(cx: &mut gpui::Test
 fn a_disconnected_host_is_unreachable_and_never_falls_back(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(fixture_window);
     cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
+        view.update(cx, |view, _| {
             two_hosts_same_pane_id(view);
             // The selected endpoint shows w0:p1; a member recorded on a host
             // that is not connected must not wake it.
@@ -141,7 +143,7 @@ fn a_disconnected_host_is_unreachable_and_never_falls_back(cx: &mut gpui::TestAp
                 "an unknown host resolves to nothing"
             );
             assert_eq!(
-                view.deliver_team_prompt("boot-gone", "w0:p1", "claim the task".into(), cx),
+                view.deliver_team_prompt("boot-gone", "w0:p1", "claim the task".into()),
                 crate::agent_notes::Delivered::Unreachable,
                 "no connected host, no delivery - and nothing pasted into the selected endpoint's agent"
             );
@@ -151,7 +153,7 @@ fn a_disconnected_host_is_unreachable_and_never_falls_back(cx: &mut gpui::TestAp
             view.endpoints[1].live.status = ConnectionStatus::Disconnected;
             assert_eq!(view.target_endpoint_for_member("boot-m1", "w0:p1"), None);
             assert_eq!(
-                view.deliver_team_prompt("boot-m1", "w0:p1", "claim the task".into(), cx),
+                view.deliver_team_prompt("boot-m1", "w0:p1", "claim the task".into()),
                 crate::agent_notes::Delivered::Unreachable
             );
 
@@ -166,7 +168,7 @@ fn a_disconnected_host_is_unreachable_and_never_falls_back(cx: &mut gpui::TestAp
 fn a_local_member_keeps_its_existing_path(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(fixture_window);
     cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
+        view.update(cx, |view, _| {
             two_hosts_same_pane_id(view);
 
             // The recorded host is the local daemon's boot id: resolution
@@ -180,7 +182,7 @@ fn a_local_member_keeps_its_existing_path(cx: &mut gpui::TestAppContext) {
             assert!(view.team_pane_busy("boot-local", "w0:p1"));
             assert!(!view.team_session_dead("boot-local", "w0:p1"));
             assert_eq!(
-                view.deliver_team_prompt("boot-local", "w0:p1", "claim the task".into(), cx),
+                view.deliver_team_prompt("boot-local", "w0:p1", "claim the task".into()),
                 crate::agent_notes::Delivered::Kept,
                 "the local agent is mid-turn, so the wake is kept for it to finish"
             );

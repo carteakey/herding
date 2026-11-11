@@ -9,12 +9,13 @@ use super::*;
 use crate::control::server::team_worker::Error as WorkerError;
 use std::sync::Arc;
 
-fn prompt(pane: &str, text: &str) -> (String, String, String) {
-    (
-        pane.to_owned(),
-        format!("[Herdr Team] {text}"),
-        text.to_owned(),
-    )
+fn prompt(pane: &str, text: &str) -> PromptDispatch {
+    PromptDispatch {
+        host: "boot".into(),
+        pane_id: pane.to_owned(),
+        prompt: format!("[Herdr Team] {text}"),
+        summary: text.to_owned(),
+    }
 }
 
 /// A bridge whose action has queued a write that the worker has not answered.
@@ -55,8 +56,8 @@ fn a_prompt_waits_for_the_write_that_produced_it() {
 
     let released = bridge.take_released_prompts();
     assert_eq!(released.len(), 1);
-    assert_eq!(released[0].0, "p1");
-    assert!(released[0].1.contains("Task t-1 is yours"));
+    assert_eq!(released[0].pane_id, "p1");
+    assert!(released[0].prompt.contains("Task t-1 is yours"));
     assert_eq!(bridge.held_prompt_count(), 0);
     assert!(
         bridge.take_released_prompts().is_empty(),
@@ -206,5 +207,5 @@ fn held_prompts_stay_bounded_when_writes_never_answer() {
 
     let released = bridge.take_released_prompts();
     assert_eq!(released.len(), 2, "the newest prompts survived");
-    assert!(released[0].1.contains(&format!("post {newest}")));
+    assert!(released[0].prompt.contains(&format!("post {newest}")));
 }

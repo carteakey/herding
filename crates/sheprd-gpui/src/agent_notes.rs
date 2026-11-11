@@ -578,14 +578,18 @@ impl SheprdWindow {
     }
 
     /// Delivers a team wake to a terminal agent, but only when it can be
-    /// pasted now. A busy agent returns `Kept` without queueing: the team
-    /// layer holds and retries it, so the generic notes queue's 120s hold
-    /// cannot swallow a wake the team layer believes it delivered. A pane no
-    /// snapshot can prove returns `Unreachable`: the team layer backs off
-    /// instead of re-offering the wake every tick, which once hot-looped the
-    /// drain on panes left over from a previous session.
+    /// pasted now. The member's recorded `host` picks the endpoint, the pane
+    /// must be in that host's snapshot: a wake is never pasted into another
+    /// machine just because a pane id matched there (#40). A busy agent
+    /// returns `Kept` without queueing: the team layer holds and retries it,
+    /// so the generic notes queue's 120s hold cannot swallow a wake the team
+    /// layer believes it delivered. A host or pane no snapshot can prove
+    /// returns `Unreachable`: the team layer backs off instead of re-offering
+    /// the wake every tick, which once hot-looped the drain on panes left
+    /// over from a previous session.
     pub(crate) fn deliver_team_prompt(
         &mut self,
+        host: &str,
         pane_id: &str,
         text: String,
         cx: &mut Context<Self>,
@@ -594,7 +598,9 @@ impl SheprdWindow {
         if self.endpoints.is_empty() {
             return Delivered::Unreachable;
         }
-        let index = self.target_endpoint_for_pane(pane_id);
+        let Some(index) = self.target_endpoint_for_member(host, pane_id) else {
+            return Delivered::Unreachable;
+        };
         let live = if index == self.selected_endpoint {
             &self.live
         } else {
@@ -603,9 +609,6 @@ impl SheprdWindow {
         let Some(snapshot) = live.snapshot.clone() else {
             return Delivered::Unreachable;
         };
-        if !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id) {
-            return Delivered::Unreachable;
-        }
         let Some(found) = agent(&snapshot, pane_id) else {
             return Delivered::Unreachable;
         };
@@ -644,24 +647,29 @@ impl SheprdWindow {
 
     fn paste_into_pane(&mut self, delivery: Delivery, cx: &mut Context<Self>) -> Option<String> {
         let target = InputTarget::Pane(delivery.target.pane_id.clone());
-        let endpoint = self
+        // The endpoint the delivery was resolved against, never the selected
+        // one: pasting into a fallback endpoint would type the text into an
+        // unrelated pane on another host (#40).
+        let pasted = self
             .endpoints
             .iter()
             .position(|endpoint| endpoint.id == delivery.origin.endpoint)
-            .unwrap_or(self.selected_endpoint);
-        let pasted = self.endpoints[endpoint]
-            .connection
-            .handle
-            .as_ref()
             .ok_or(crate::Error::NotConnected)
-            .and_then(|handle| {
-                ConnectionBridge::send_input(
-                    handle,
-                    &delivery.origin.boot_id,
-                    &target,
-                    ClientPaneInputEvent::Paste(delivery.text.clone()),
-                )
-                .map_err(crate::Error::from)
+            .and_then(|endpoint| {
+                self.endpoints[endpoint]
+                    .connection
+                    .handle
+                    .as_ref()
+                    .ok_or(crate::Error::NotConnected)
+                    .and_then(|handle| {
+                        ConnectionBridge::send_input(
+                            handle,
+                            &delivery.origin.boot_id,
+                            &target,
+                            ClientPaneInputEvent::Paste(delivery.text.clone()),
+                        )
+                        .map_err(crate::Error::from)
+                    })
             });
         if let Err(error) = pasted {
             tracing::warn!(%error, "Could not paste notes into the agent's pane");

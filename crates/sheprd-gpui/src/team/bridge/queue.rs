@@ -3,18 +3,27 @@
 //! prompt dispatches in the tick its action was queued, so an agent woken with
 //! "claim this task" or "ack this post" finds the row when it runs the command
 //! it was told to run.
-use super::{Bridge, QueuedPrompt, WAKE_RETRY, roster};
+use super::{Bridge, WAKE_RETRY, roster};
 use std::collections::HashSet;
 use std::time::Instant;
 
-/// A prompt to dispatch: the pane to wake, the prompt text, and the one-line
-/// summary the panel shows.
-pub(super) type PromptDispatch = (String, String, String);
+/// A prompt to dispatch: the member's recorded host and pane to wake, the
+/// prompt text, and the one-line summary the panel shows. The host routes
+/// the wake to the member's own daemon: pane ids are per-daemon and short,
+/// so two connected hosts can both show the same pane id (#40).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PromptDispatch {
+    pub(crate) host: String,
+    pub(crate) pane_id: String,
+    pub(crate) prompt: String,
+    pub(crate) summary: String,
+}
 
 /// A held prompt released for delivery, with the wake signals it reports so
 /// the window can mark them seen only after the delivery succeeds.
 pub(super) struct DrainedPrompt {
     pub(super) team_id: String,
+    pub(super) host: String,
     pub(super) pane_id: String,
     pub(super) prompt: String,
     pub(super) summary: String,
@@ -25,17 +34,65 @@ pub(super) struct DrainedPrompt {
 /// them, oldest first so a worker that never answers drops them.
 pub(super) type HeldPrompts = std::collections::VecDeque<(u64, Vec<PromptDispatch>)>;
 
+pub(crate) const PAUSE_QUEUE_CAPACITY: usize = 64;
+
+/// How many prompts may wait for their action's write to be confirmed.
+/// Oldest-first eviction keeps a worker that never answers from turning the
+/// bridge into a prompt backlog.
+pub(super) const PROMPT_HOLD_CAPACITY: usize = 64;
+
+/// A pending catch-up dispatch for the selected team's supervisor.
+pub(crate) struct SupervisorWake {
+    pub(super) team_id: String,
+    /// The supervisor's recorded host, so the wake routes to the supervisor's
+    /// own daemon instead of any endpoint showing the same pane id (#40).
+    pub(super) host: String,
+    pub(super) pane_id: String,
+    pub(super) prompt: String,
+    pub(super) summary: String,
+    pub(super) signals: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct QueuedPrompt {
+    pub(super) team_id: String,
+    /// The member's recorded host, carried so the dispatch resolves the
+    /// endpoint by daemon boot id rather than by pane id alone (#40).
+    pub(super) host: String,
+    pub(super) pane_id: String,
+    pub(super) prompt: String,
+    pub(super) summary: String,
+    /// Wake signals this prompt reports. Empty for prompts that carry no
+    /// ledger entry (bulletin mentions, action prompts). A held prompt keeps
+    /// them so the drain can mark them seen only once it actually delivers.
+    pub(super) signals: Vec<String>,
+    /// A failed delivery is retried no earlier than this instant, so a pane
+    /// that is briefly unreachable does not spin the drain every tick.
+    pub(super) retry_at: Instant,
+}
+
 impl Bridge {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn enqueue_prompt(
         &mut self,
         team_id: String,
+        host: String,
         pane_id: String,
         prompt: String,
         summary: String,
         signals: Vec<String>,
     ) {
-        self.push_prompt(team_id, pane_id, prompt, summary, signals, Instant::now());
+        self.push_prompt(
+            team_id,
+            PromptDispatch {
+                host,
+                pane_id,
+                prompt,
+                summary,
+            },
+            signals,
+            Instant::now(),
+        );
     }
 
     /// Queues a prompt the dispatch could not deliver now - a paused pane, a
@@ -46,6 +103,7 @@ impl Bridge {
     pub(super) fn hold_prompt(
         &mut self,
         team_id: String,
+        host: String,
         pane_id: String,
         prompt: String,
         summary: String,
@@ -53,9 +111,12 @@ impl Bridge {
     ) {
         self.push_prompt(
             team_id,
-            pane_id,
-            prompt,
-            summary,
+            PromptDispatch {
+                host,
+                pane_id,
+                prompt,
+                summary,
+            },
             signals,
             Instant::now() + WAKE_RETRY,
         );
@@ -68,9 +129,12 @@ impl Bridge {
     pub(super) fn requeue_prompt(&mut self, prompt: DrainedPrompt, retry_at: Instant) {
         self.push_prompt(
             prompt.team_id,
-            prompt.pane_id,
-            prompt.prompt,
-            prompt.summary,
+            PromptDispatch {
+                host: prompt.host,
+                pane_id: prompt.pane_id,
+                prompt: prompt.prompt,
+                summary: prompt.summary,
+            },
             prompt.signals,
             retry_at,
         );
@@ -79,9 +143,7 @@ impl Bridge {
     fn push_prompt(
         &mut self,
         team_id: String,
-        pane_id: String,
-        prompt: String,
-        summary: String,
+        dispatch: PromptDispatch,
         signals: Vec<String>,
         retry_at: Instant,
     ) {
@@ -92,19 +154,22 @@ impl Bridge {
         // repeat.
         if !signals.is_empty()
             && self.queued_prompts.iter().any(|queued| {
-                queued.team_id == team_id && queued.pane_id == pane_id && queued.signals == signals
+                queued.team_id == team_id
+                    && queued.pane_id == dispatch.pane_id
+                    && queued.signals == signals
             })
         {
             return;
         }
-        if self.queued_prompts.len() >= super::PAUSE_QUEUE_CAPACITY {
+        if self.queued_prompts.len() >= PAUSE_QUEUE_CAPACITY {
             self.queued_prompts.remove(0);
         }
         self.queued_prompts.push(QueuedPrompt {
             team_id,
-            pane_id,
-            prompt,
-            summary,
+            host: dispatch.host,
+            pane_id: dispatch.pane_id,
+            prompt: dispatch.prompt,
+            summary: dispatch.summary,
             signals,
             retry_at,
         });
@@ -145,6 +210,7 @@ impl Bridge {
                 } else {
                     ready.push(DrainedPrompt {
                         team_id: item.team_id,
+                        host: item.host,
                         pane_id: item.pane_id,
                         prompt: item.prompt,
                         summary: item.summary,
@@ -237,7 +303,7 @@ impl Bridge {
             (None, false) => return prompts,
         };
         let mut held: usize = self.awaiting_write.iter().map(|(_, held)| held.len()).sum();
-        while held + prompts.len() > super::PROMPT_HOLD_CAPACITY {
+        while held + prompts.len() > PROMPT_HOLD_CAPACITY {
             let Some((_, oldest)) = self.awaiting_write.pop_front() else {
                 break;
             };

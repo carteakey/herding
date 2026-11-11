@@ -4,11 +4,14 @@ use crate::control::server::team_worker::Reply;
 use gpui::App;
 use sheprd_orchestrator::team_store::{Author, Task, TaskStatus, Team};
 
-/// One prompt prepared from a durable team mutation. `signals` marks a
-/// supervisor result wake: the window bridge dedupes on them so an event and
-/// the periodic fallback deliver each result once.
+/// One prompt prepared from a durable team mutation. The member's recorded
+/// `host` routes the wake to its own daemon: pane ids are per-daemon, so a
+/// bare pane id cannot pick the machine (#40). `signals` marks a supervisor
+/// result wake: the window bridge dedupes on them so an event and the
+/// periodic fallback deliver each result once.
 pub(crate) struct TeamDispatch {
     pub(crate) team_id: String,
+    pub(crate) host: String,
     pub(crate) pane_id: String,
     pub(crate) prompt: String,
     pub(crate) summary: String,
@@ -25,7 +28,7 @@ pub(super) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
                     // The escape hatch: a member whose session heartbeat is
                     // dead is never dispatched to; the work stays pending on
                     // the board until a live session takes it.
-                    if view.team_session_dead(&dispatch.pane_id) {
+                    if view.team_session_dead(&dispatch.host, &dispatch.pane_id) {
                         continue;
                     }
                     if !dispatch.signals.is_empty()
@@ -38,9 +41,12 @@ pub(super) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
                     }
                     let outcome = view.enqueue_or_dispatch_team_prompt(
                         Some(dispatch.team_id.as_str()),
-                        &dispatch.pane_id,
-                        dispatch.prompt.clone(),
-                        dispatch.summary.clone(),
+                        crate::team::bridge::PromptDispatch {
+                            host: dispatch.host.clone(),
+                            pane_id: dispatch.pane_id.clone(),
+                            prompt: dispatch.prompt.clone(),
+                            summary: dispatch.summary.clone(),
+                        },
                         dispatch.signals.clone(),
                         cx,
                     );
@@ -75,6 +81,7 @@ pub(super) fn prompts_for_scoped_reply(reply: &Reply) -> Vec<TeamDispatch> {
                     );
                     Some(TeamDispatch {
                         team_id: team_id.clone(),
+                        host: m.target.host.clone(),
                         pane_id: pane_id.clone(),
                         prompt: format!(
                             "[Herdr Team] @{}: new bulletin from {author_name} in team {team_id} (msg {}): \"{}\". Run `{cli} bulletin ack {team_id} {}` to acknowledge and `{cli} bulletin post {team_id} --reply-to {} \"...\"` to reply.",
@@ -102,6 +109,7 @@ pub(super) fn prompts_for_scoped_reply(reply: &Reply) -> Vec<TeamDispatch> {
                     );
                     Some(TeamDispatch {
                         team_id: team_id.clone(),
+                        host: m.target.host.clone(),
                         pane_id: pane_id.clone(),
                         prompt: format!(
                             "[Herdr Team] Task assigned to {} in team {team_id}: {} (\"{}\"). Claim it with `{cli} task claim {team_id} {}` and complete it with `{cli} task complete {team_id} {} --result \"...\"`.",
@@ -183,6 +191,7 @@ fn supervisor_wake(team: &Team, task: &Task) -> Vec<TeamDispatch> {
     };
     vec![TeamDispatch {
         team_id: team_id.clone(),
+        host: team.supervisor.target.host.clone(),
         pane_id,
         prompt: format!(
             "[Herdr Team] Task {} (\"{}\") {situation} in team {team_id}. Run `{cli} task list {team_id}` to review the board, take the next clear action (assign follow-up work, record findings, or ask the human only if a decision genuinely needs them), then go idle. Do not poll or re-check for updates: further results will wake you, and if the goal is complete or nothing clear remains, stop.",

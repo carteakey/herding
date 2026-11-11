@@ -107,6 +107,15 @@ use `herdr --remote <target> pane run` or SSH in and use the host's local
 
 ## File issues in this fork, not upstream
 
+Herding Teams is alpha software in active development, and these issue reports
+are how real-world usage gets tracked. Whenever something gets in the way of
+teamwork or communication (a wake that never arrives, a wrong identity, a
+misleading status, a confusing CLI result, a workaround you had to invent),
+file it on the fork as you go, even mid-task and even if it seems minor. Check
+for an existing issue first and add your evidence there instead of opening a
+duplicate. Include the herding version (`herding --version`), pane and member
+ids, the exact command and output, and what you expected.
+
 Open issues and PRs in `carteakey/herding` (the fork). `penso/herdr-gpui` is
 upstream and a read-only reference: do not open issues, pull requests, or
 comments there unless the user explicitly asks for an upstream report. Team

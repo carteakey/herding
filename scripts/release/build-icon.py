@@ -46,7 +46,7 @@ def main():
     # Desktop shells need not supply their own shape mask or PNG fallback.
     else:
         name = "sheprd-linux-worktree.svg" if worktree == b"1" else "sheprd-linux.svg"
-        print(icons / name, "share/icons/hicolor/scalable/apps/sheprd.svg", sep="\n")
+        print(icons / name, "share/icons/hicolor/scalable/apps/herding.svg", sep="\n")
 
 
 if __name__ == "__main__":

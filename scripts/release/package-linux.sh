@@ -15,7 +15,7 @@ companions=(sheprd-acp sheprd-remote-control sheprd-automate sheprd-nearby herdr
 for companion in "${companions[@]}"; do
     [[ -f $(dirname -- "$3")/$companion ]] || fail "A $companion beside the binary required"
 done
-out=$(cd -- "$4" && pwd)/Sheprd-$1-$2.tar.gz
+out=$(cd -- "$4" && pwd)/Herding-$1-$2.tar.gz
 new_output "$out"
 selection=$(python3 "$release_root/scripts/release/build-icon.py" linux "$3")
 icon=${selection%$'\n'*}
@@ -25,14 +25,15 @@ tmp=$(mktemp -d "${out%/*}/.sheprd-linux.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-name=Sheprd-$1-$2
+name=Herding-$1-$2
 root=$tmp/$name
 mkdir -p "$root/bin" "$root/share/applications" "$root/${icon_path%/*}" "$root/share/licenses/herdr-gpui"
-cp "$3" "$root/bin/sheprd"
-chmod 755 "$root/bin/sheprd"
+cp "$3" "$root/bin/herding"
+chmod 755 "$root/bin/herding"
 # Standalone updates replace the resolved executable, so both commands must
 # follow that same file. Distro packaging materializes its required real copy.
-ln -s sheprd "$root/bin/herdr-gpui"
+ln -s herding "$root/bin/sheprd"
+ln -s herding "$root/bin/herdr-gpui"
 for companion in "${companions[@]}"; do
     cp "$(dirname -- "$3")/$companion" "$root/bin/$companion"
     chmod 755 "$root/bin/$companion"

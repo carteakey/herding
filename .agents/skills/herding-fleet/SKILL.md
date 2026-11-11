@@ -47,6 +47,10 @@ that drifts.
 
 ## Rules
 
+- The probe searches `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, and
+  `~/.cargo/bin` in addition to the shell's `PATH`, because a non-interactive
+  ssh shell has a minimal `PATH` and would report an installed `zcode` as
+  missing. A `not installed` row is therefore real.
 - Read-only. The doctor never installs, edits, or restarts anything.
 - Never report a host as healthy from a partial row; `unreachable` is not
   healthy.

@@ -34,6 +34,11 @@ fi
 # host, zcode, plugin, skills.
 probe='
 set -u
+# A non-interactive ssh shell has a minimal PATH: homebrew, /usr/local, and
+# the per-user bin directories are missing, so zcode looks absent when it is
+# installed. Look where installs actually land.
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:$PATH"
+export PATH
 if command -v zcode >/dev/null 2>&1; then
     ver=$(zcode --version 2>/dev/null | head -1 | awk "{print \$2}")
     [ -n "$ver" ] || ver=unknown

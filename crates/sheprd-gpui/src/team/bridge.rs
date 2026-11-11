@@ -22,7 +22,11 @@ use std::{
 mod actions;
 pub(crate) mod prompts;
 mod queue;
-use queue::{HeldPrompts, PromptDispatch};
+pub(crate) use queue::PromptDispatch;
+use queue::{HeldPrompts, QueuedPrompt, SupervisorWake};
+// The pause-queue bounds are only named outside the queue module by tests.
+#[cfg(test)]
+use queue::{PAUSE_QUEUE_CAPACITY, PROMPT_HOLD_CAPACITY};
 mod views;
 pub(super) use views::*;
 
@@ -113,37 +117,6 @@ pub(crate) struct Bridge {
     last_fallback: Option<Instant>,
     last_activity: Option<SharedString>,
     dirty: bool,
-}
-
-/// A pending catch-up dispatch for the selected team's supervisor.
-pub(super) struct SupervisorWake {
-    pub(super) team_id: String,
-    pub(super) pane_id: String,
-    pub(super) prompt: String,
-    pub(super) summary: String,
-    pub(super) signals: Vec<String>,
-}
-
-pub(crate) const PAUSE_QUEUE_CAPACITY: usize = 64;
-
-/// How many prompts may wait for their action's write to be confirmed.
-/// Oldest-first eviction keeps a worker that never answers from turning the
-/// bridge into a prompt backlog.
-const PROMPT_HOLD_CAPACITY: usize = 64;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct QueuedPrompt {
-    pub(super) team_id: String,
-    pub(super) pane_id: String,
-    pub(super) prompt: String,
-    pub(super) summary: String,
-    /// Wake signals this prompt reports. Empty for prompts that carry no
-    /// ledger entry (bulletin mentions, action prompts). A held prompt keeps
-    /// them so the drain can mark them seen only once it actually delivers.
-    pub(super) signals: Vec<String>,
-    /// A failed delivery is retried no earlier than this instant, so a pane
-    /// that is briefly unreachable does not spin the drain every tick.
-    pub(super) retry_at: Instant,
 }
 
 impl Bridge {
@@ -308,6 +281,7 @@ impl Bridge {
         }
         Some(SupervisorWake {
             team_id: team_id.clone(),
+            host: team.supervisor.target.host.clone(),
             pane_id,
             prompt: format!(
                 "[Herdr Team] Supervisor catch-up for team {team_id}: {} stored task result(s) not yet reviewed:{list} Run `{cli} task list {team_id}` to review the board, take the next clear actions, then go idle. Do not poll or re-check for updates: further results will wake you, and if the goal is complete or nothing clear remains, stop.",
@@ -555,6 +529,9 @@ mod tests;
 
 #[cfg(test)]
 mod view_tests;
+
+#[cfg(test)]
+mod wake_host_tests;
 
 #[cfg(test)]
 mod wake_tests;

@@ -55,8 +55,8 @@ fn bulletin_post_targets_only_mentioned_recipient() {
     };
     let prompts = prompts_for_team_action(&action, Some(&team), &[]);
     assert_eq!(prompts.len(), 1);
-    assert_eq!(prompts[0].0, "p_w1");
-    assert!(prompts[0].1.contains("@worker1 please check this"));
+    assert_eq!(prompts[0].pane_id, "p_w1");
+    assert!(prompts[0].prompt.contains("@worker1 please check this"));
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn bulletin_prompts_instruct_explicit_ack() {
         body: "@worker1 please check this".into(),
     };
     let prompts = prompts_for_team_action(&post_action, Some(&team), &[]);
-    assert!(prompts[0].1.contains("bulletin ack t1"));
+    assert!(prompts[0].prompt.contains("bulletin ack t1"));
 
     let worker_action = TeamAction::AddWorker {
         team_id: "t1".into(),
@@ -83,7 +83,7 @@ fn bulletin_prompts_instruct_explicit_ack() {
         },
     };
     let worker_prompts = prompts_for_team_action(&worker_action, Some(&team), &[]);
-    assert!(worker_prompts[0].1.contains("bulletin ack t1"));
+    assert!(worker_prompts[0].prompt.contains("bulletin ack t1"));
 }
 
 #[test]
@@ -98,7 +98,10 @@ fn bulletin_post_broadcasts_to_all_when_no_mention() {
     };
     let prompts = prompts_for_team_action(&action, Some(&team), &[]);
     assert_eq!(prompts.len(), 3);
-    let panes: Vec<_> = prompts.iter().map(|(p, _, _)| p.as_str()).collect();
+    let panes: Vec<_> = prompts
+        .iter()
+        .map(|dispatch| dispatch.pane_id.as_str())
+        .collect();
     assert!(panes.contains(&"p_sup"));
     assert!(panes.contains(&"p_w1"));
     assert!(panes.contains(&"p_w2"));
@@ -116,7 +119,10 @@ fn bulletin_post_excludes_member_author_from_all_broadcast() {
     };
     let prompts = prompts_for_team_action(&action, Some(&team), &[]);
     assert_eq!(prompts.len(), 2);
-    let panes: Vec<_> = prompts.iter().map(|(p, _, _)| p.as_str()).collect();
+    let panes: Vec<_> = prompts
+        .iter()
+        .map(|dispatch| dispatch.pane_id.as_str())
+        .collect();
     assert!(panes.contains(&"p_sup"));
     assert!(panes.contains(&"p_w2"));
     assert!(!panes.contains(&"p_w1"));
@@ -264,12 +270,16 @@ fn a_dead_session_is_never_dispatched_to(cx: &mut gpui::TestAppContext) {
             )));
 
             assert!(
-                view.team_session_dead("w1X:p1"),
+                view.team_session_dead("boot", "w1X:p1"),
                 "a crashed session is dead and skipped"
             );
             assert!(
-                !view.team_session_dead("w1X:other"),
+                !view.team_session_dead("boot", "w1X:other"),
                 "a pane without an agent is not reported dead; delivery simply finds no agent"
+            );
+            assert!(
+                !view.team_session_dead("other-boot", "w1X:p1"),
+                "an unknown host resolves to no endpoint, so nothing is reported dead"
             );
 
             // The rate-limit vocabulary is the PTO state, not death.
@@ -280,7 +290,7 @@ fn a_dead_session_is_never_dispatched_to(cx: &mut gpui::TestAppContext) {
                 "codex",
                 &[("working", "rate limit 429, retry later")],
             )));
-            assert!(!view.team_session_dead("w1X:p1"));
+            assert!(!view.team_session_dead("boot", "w1X:p1"));
 
             // A healthy agent is alive.
             view.live.snapshot = Some(Arc::new(test_snapshot(
@@ -289,7 +299,7 @@ fn a_dead_session_is_never_dispatched_to(cx: &mut gpui::TestAppContext) {
                 "w1X:p1",
                 Some("codex"),
             )));
-            assert!(!view.team_session_dead("w1X:p1"));
+            assert!(!view.team_session_dead("boot", "w1X:p1"));
         })
     });
 }
@@ -354,7 +364,7 @@ fn team_candidates_discovers_agents_across_all_endpoints(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
-fn target_endpoint_for_pane_routes_to_owner_endpoint(cx: &mut gpui::TestAppContext) {
+fn target_endpoint_for_member_routes_by_recorded_host(cx: &mut gpui::TestAppContext) {
     cx.add_window(fixture_window)
         .update(cx, |view, _, _| {
             // Local is index 0
@@ -381,23 +391,53 @@ fn target_endpoint_for_pane_routes_to_owner_endpoint(cx: &mut gpui::TestAppConte
             // While viewing local (selected_endpoint = 0):
             assert_eq!(view.selected_endpoint, 0);
 
-            // Local pane routes to index 0
-            assert_eq!(view.target_endpoint_for_pane("w0:p1"), 0);
+            // A member recorded on the local boot routes to index 0
+            assert_eq!(
+                view.target_endpoint_for_member("boot-local", "w0:p1"),
+                Some(0)
+            );
 
-            // Remote pane routes to index 1
-            assert_eq!(view.target_endpoint_for_pane("w2X:p1"), 1);
+            // A member recorded on m2 routes to index 1
+            assert_eq!(
+                view.target_endpoint_for_member("boot-m2", "w2X:p1"),
+                Some(1)
+            );
 
             // Scope resolution resolves to remote endpoint
-            let target_index = view.target_endpoint_for_pane("w2X:p1");
+            let target_index = view
+                .target_endpoint_for_member("boot-m2", "w2X:p1")
+                .expect("the remote member resolves");
             let scope = crate::browser::scope(&view.endpoints[target_index]);
             assert_eq!(scope, crate::browser::scope(&view.endpoints[1]));
 
-            // Unknown pane falls back to selected_endpoint
-            assert_eq!(view.target_endpoint_for_pane("unknown:pane"), 0);
+            // A recorded host that is not connected is a refusal, never a
+            // fall back to the selected endpoint: the same pane id can name
+            // an unrelated agent there (#40).
+            assert_eq!(view.target_endpoint_for_member("boot-gone", "w0:p1"), None);
+            assert_eq!(
+                view.target_endpoint_for_member("boot-gone", "unknown:pane"),
+                None
+            );
 
-            // If viewing remote (selected_endpoint = 1), fallback is 1
+            // A connected host whose snapshot no longer shows the pane is a
+            // refusal too.
+            assert_eq!(
+                view.target_endpoint_for_member("boot-m2", "unknown:pane"),
+                None
+            );
+            assert_eq!(
+                view.target_endpoint_for_member("boot-local", "w2X:p1"),
+                None
+            );
+
+            // If viewing remote (selected_endpoint = 1), the recorded host
+            // still wins over the selection.
             view.selected_endpoint = 1;
-            assert_eq!(view.target_endpoint_for_pane("unknown:pane"), 1);
+            assert_eq!(
+                view.target_endpoint_for_member("boot-local", "w0:p1"),
+                Some(0)
+            );
+            assert_eq!(view.target_endpoint_for_member("boot-gone", "w2X:p1"), None);
         })
         .expect("window stays open");
 }

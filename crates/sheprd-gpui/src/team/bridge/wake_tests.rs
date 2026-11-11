@@ -72,6 +72,7 @@ fn queue_wake(bridge: &mut Bridge) -> SupervisorWake {
     };
     bridge.enqueue_prompt(
         wake.team_id.clone(),
+        wake.host.clone(),
         wake.pane_id.clone(),
         wake.prompt.clone(),
         wake.summary.clone(),
@@ -199,6 +200,7 @@ fn an_unreachable_wake_waits_out_its_retry_then_is_marked_undeliverable() {
     // pane may return before the retry comes due.
     bridge.hold_prompt(
         "t1".into(),
+        "local".into(),
         "p_sup".into(),
         "late wake".into(),
         "summary".into(),
@@ -222,6 +224,7 @@ fn an_unreachable_wake_waits_out_its_retry_then_is_marked_undeliverable() {
     bridge.requeue_prompt(
         DrainedPrompt {
             team_id: item.team_id,
+            host: item.host,
             pane_id: item.pane_id,
             prompt: item.prompt,
             summary: item.summary,
@@ -267,6 +270,7 @@ fn an_undeliverable_wake_is_requeued_and_retried() {
     bridge.requeue_prompt(
         DrainedPrompt {
             team_id: item.team_id,
+            host: item.host,
             pane_id: item.pane_id,
             prompt: item.prompt,
             summary: item.summary,

@@ -79,6 +79,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host that is not connected is unreachable (the issue #35 backoff path)
   and is never pasted into the selected endpoint, where the same short
   pane id can name an unrelated agent on another machine.
+- Team wakes are delivered the way `herdr pane run` delivers (issue #62):
+  the prompt is committed to the daemon's pane input as typed text and
+  Enter in one ordered batch, which every TUI accepts, instead of a
+  bracketed paste that some agents truncate to fragments. The wake queue
+  drains on every window tick, so wakes held while the GUI was away land
+  when the pane is idle even if nobody has opened the Team board since a
+  restart. Every delivery decision logs at info with the team, member,
+  host and pane: sent, held for a paused pane or a mid-turn agent,
+  requeued while busy, deduped against a stored state, skipped for a dead
+  session, unreachable host, agentless pane, a batch the daemon could not
+  take, and wakes marked undeliverable; a window update that fails warns
+  instead of swallowing the decision. Bulletin mention wakes carry a
+  dedupe signal like supervisor and assignment wakes, so a mention wakes
+  its member once per post. A wake the daemon could not take stays queued
+  for a retry instead of being recorded as delivered, which is what the
+  old paste fallback silently claimed.
 
 ### Planned & In Progress
 - **Cross-Host Agent Fleet (Remote Coordination)**:

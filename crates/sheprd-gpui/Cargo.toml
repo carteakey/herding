@@ -101,6 +101,7 @@ sheprd-usage = { features = ["test-support"], workspace = true }
 sheprd-vcs = { features = ["test-support"], workspace = true }
 socket2.workspace = true
 test-case.workspace = true
+tracing-core.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true

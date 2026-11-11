@@ -71,6 +71,7 @@ pub(super) fn worker_error(error: WorkerError) -> Response {
                 | team_store::Error::AmbiguousId { .. }
                 | team_store::Error::NotMentioned { .. }
                 | team_store::Error::TaskUnavailable(_)
+                | team_store::Error::TaskNotPermitted { .. }
                 | team_store::Error::InvalidTaskTransition { .. } => ErrorCode::InvalidRequest,
                 _ => ErrorCode::Failed,
             };

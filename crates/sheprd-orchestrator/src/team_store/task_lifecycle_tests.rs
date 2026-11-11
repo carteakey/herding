@@ -184,15 +184,15 @@ fn only_the_assignee_supervisor_or_open_creator_transitions_a_task() {
     store.claim_task("t", "open", "w1").unwrap();
     assert!(matches!(
         store.block_task("t", "open", &w2(), "hostile"),
-        Err(Error::TaskUnavailable(_))
+        Err(Error::TaskNotPermitted { .. })
     ));
     assert!(matches!(
         store.cancel_task("t", "open", &w2()),
-        Err(Error::TaskUnavailable(_))
+        Err(Error::TaskNotPermitted { .. })
     ));
     assert!(matches!(
         store.update_task("t", "open", &w2(), "Stolen", "", Some("w2")),
-        Err(Error::TaskUnavailable(_))
+        Err(Error::TaskNotPermitted { .. })
     ));
     assert_eq!(task(&store, "open").assignee.as_deref(), Some("w1"));
 
@@ -241,6 +241,6 @@ fn a_worker_may_hand_off_their_own_claim_but_not_steal_another() {
     // Taking another worker's claim through an edit is refused.
     assert!(matches!(
         store.update_task("t", "mine", &w1(), "Mine", "", Some("w1")),
-        Err(Error::TaskUnavailable(_))
+        Err(Error::TaskNotPermitted { .. })
     ));
 }

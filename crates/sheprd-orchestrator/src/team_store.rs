@@ -79,6 +79,10 @@ pub enum Error {
     TaskNotFound(String),
     #[error("Task {0:?} is not available for this member or transition")]
     TaskUnavailable(String),
+    #[error(
+        "Task {task_id:?} can only be transitioned by the supervisor or the current assignee (or the creator of an open, unassigned task)"
+    )]
+    TaskNotPermitted { task_id: String },
     #[error("Task {task_id:?} cannot transition from status {status:?}")]
     InvalidTaskTransition { task_id: String, status: String },
     #[error("Finding {0:?} was not found")]

@@ -149,8 +149,13 @@ impl SheprdWindow {
         candidates
     }
 
-    /// Runs on each window tick. Idle until the Team panel is first shown.
+    /// Runs on each window tick. The wake queue drains on every tick even
+    /// before the Team panel is first shown (#62): after a GUI restart, held
+    /// wakes must retry without a human opening the board first. Everything
+    /// else - candidates, actions, the shown team's refresh - waits until the
+    /// panel is shown or a prior tick already started the bridge.
     pub(crate) fn poll_team(&mut self, cx: &mut Context<Self>) {
+        self.dispatch_drained_team_prompts();
         let shown = self.team_panel_shown();
         if !shown && !self.team_bridge.started {
             return;
@@ -208,7 +213,6 @@ impl SheprdWindow {
         {
             bridge.refresh(&team_id);
         }
-        self.dispatch_drained_team_prompts(cx);
         // The bounded periodic supervisor check: only the shown team, only
         // unseen results, at most one attempt per SUPERVISOR_FALLBACK.
         if shown && let Some(wake) = self.team_bridge.supervisor_fallback_due(Instant::now()) {
@@ -230,7 +234,6 @@ impl SheprdWindow {
                 Some(team_id.as_str()),
                 dispatch,
                 signals.clone(),
-                cx,
             );
             if matches!(outcome, PromptOutcome::Sent) {
                 self.team_bridge.mark_supervisor_woken(&team_id, signals);
@@ -244,7 +247,7 @@ impl SheprdWindow {
         }
         let current_team = self.team_bridge.current_team_id().map(ToOwned::to_owned);
         for dispatch in prompts {
-            self.enqueue_or_dispatch_team_prompt(current_team.as_deref(), dispatch, Vec::new(), cx);
+            self.enqueue_or_dispatch_team_prompt(current_team.as_deref(), dispatch, Vec::new());
         }
         let identities: Vec<_> = candidates.iter().map(|c| c.identity.clone()).collect();
         let focus = focus.filter(|pane| {
@@ -287,7 +290,7 @@ impl SheprdWindow {
     /// tick instead of being swallowed. A wake whose pane is gone from both
     /// the roster and every connected snapshot is marked undeliverable once
     /// its retry waits out, instead of being re-offered forever.
-    pub(crate) fn dispatch_drained_team_prompts(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dispatch_drained_team_prompts(&mut self) {
         // A drain while the daemon is reconnecting has no snapshot to prove a
         // pane against, so it would fail every delivery. Keep the queue.
         if !self.live.status.is_connected() || self.live.snapshot.is_none() {
@@ -314,6 +317,11 @@ impl SheprdWindow {
             .collect();
         let expired = self.team_bridge.expire_unreachable_prompts(&live_panes);
         if !expired.is_empty() {
+            tracing::info!(
+                panes = %expired.join(", "),
+                outcome = "undeliverable",
+                "team wake drain marked wakes undeliverable: no agent in the panes"
+            );
             self.team_bridge.last_activity =
                 Some(format!("Marked undeliverable: no agent in {}", expired.join(", ")).into());
             self.team_bridge.dirty = true;
@@ -324,6 +332,13 @@ impl SheprdWindow {
             // turn ends, so keep it queued until the pane is idle. The drain
             // retries it on a later tick.
             if self.team_pane_busy(&item.host, &item.pane_id) {
+                tracing::info!(
+                    team = %item.team_id,
+                    host = %item.host,
+                    pane = %item.pane_id,
+                    outcome = "requeued_busy",
+                    "team wake drain requeued the wake: the pane is busy"
+                );
                 self.team_bridge
                     .requeue_prompt(item, Instant::now() + WAKE_RETRY);
                 continue;
@@ -337,13 +352,13 @@ impl SheprdWindow {
                     summary: item.summary.clone(),
                 },
                 item.signals.clone(),
-                cx,
             );
-            tracing::debug!(
+            tracing::info!(
+                team = %item.team_id,
                 pane = %item.pane_id,
                 ?outcome,
                 signals = item.signals.len(),
-                "team wake drain"
+                "team wake drain delivered a held wake"
             );
             match outcome {
                 PromptOutcome::Sent => {
@@ -371,7 +386,6 @@ impl SheprdWindow {
         team_id: Option<&str>,
         dispatch: PromptDispatch,
         signals: Vec<String>,
-        cx: &mut Context<Self>,
     ) -> PromptOutcome {
         let team_id = team_id
             .map(ToOwned::to_owned)
@@ -386,6 +400,13 @@ impl SheprdWindow {
             .is_pane_paused_for_team(&team_id, &dispatch.pane_id)
             || self.team_pane_busy(&dispatch.host, &dispatch.pane_id)
         {
+            tracing::info!(
+                team = %team_id,
+                host = %dispatch.host,
+                pane = %pane_id,
+                outcome = "held",
+                "team wake held: the pane is paused for the team or the agent is mid-turn"
+            );
             self.team_bridge.hold_prompt(
                 team_id,
                 dispatch.host,
@@ -400,12 +421,8 @@ impl SheprdWindow {
             self.team_bridge.dirty = true;
             return PromptOutcome::Held;
         }
-        let outcome = self.dispatch_team_prompt(
-            &dispatch.host,
-            &dispatch.pane_id,
-            dispatch.prompt.clone(),
-            cx,
-        );
+        let outcome =
+            self.dispatch_team_prompt(&dispatch.host, &dispatch.pane_id, dispatch.prompt.clone());
         // The dispatch can discover a busy pane the pre-check missed, or no
         // reachable agent at all; keep the wake in the team queue either way,
         // backed off by WAKE_RETRY so an unavailable pane cannot hot-loop the
@@ -464,13 +481,7 @@ impl SheprdWindow {
             .then_some(index)
     }
 
-    fn dispatch_team_prompt(
-        &mut self,
-        host: &str,
-        pane_id: &str,
-        prompt: String,
-        cx: &mut Context<Self>,
-    ) -> PromptOutcome {
+    fn dispatch_team_prompt(&mut self, host: &str, pane_id: &str, prompt: String) -> PromptOutcome {
         // ACP chats are window-local, so only a member recorded on this
         // window's own daemon may be prompted through one: on another host
         // the same pane id can name a different agent entirely (#40).
@@ -494,12 +505,12 @@ impl SheprdWindow {
         if self.endpoints.is_empty() {
             return PromptOutcome::Unavailable;
         }
-        // Team wakes paste only into an idle agent; a busy one comes back as
-        // Held so the team queue retries it, instead of the generic notes
-        // queue holding it for 120s and then pasting into a mid-turn program.
+        // Team wakes are typed only into an idle agent; a busy one comes back
+        // as Held so the team queue retries it, instead of the generic notes
+        // queue holding it for 120s and then typing into a mid-turn program.
         // A pane no snapshot proves comes back as Unreachable so the drain
         // backs off and expires it instead of re-offering it every tick.
-        match self.deliver_team_prompt(host, pane_id, prompt, cx) {
+        match self.deliver_team_prompt(host, pane_id, prompt) {
             crate::agent_notes::Delivered::Agent => PromptOutcome::Sent,
             crate::agent_notes::Delivered::Kept => PromptOutcome::Held,
             crate::agent_notes::Delivered::Unreachable => PromptOutcome::Unreachable,
@@ -912,3 +923,7 @@ fn supervisor_target(team: &Team) -> Option<(String, String)> {
 #[cfg(test)]
 #[path = "prompts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "wake_land_tests.rs"]
+mod wake_land_tests;

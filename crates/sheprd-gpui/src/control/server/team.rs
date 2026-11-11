@@ -18,7 +18,7 @@ use gpui::App;
 use sheprd_orchestrator::team_store::Confidence;
 use std::{sync::mpsc, time::Duration};
 
-mod dispatch;
+pub(crate) mod dispatch;
 mod heartbeat;
 mod identity;
 mod projection;

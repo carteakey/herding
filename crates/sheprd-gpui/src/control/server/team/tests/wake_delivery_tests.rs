@@ -116,7 +116,7 @@ fn supervisor_wake_on_unreachable_pane_stays_pending_and_honest(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn a_held_wake_is_recorded_only_after_it_is_delivered(cx: &mut gpui::TestAppContext) {
+fn a_held_wake_is_never_recorded_as_delivered_before_it_lands(cx: &mut gpui::TestAppContext) {
     let window = cx.add_window(fixture_window);
     let reply = supervisor_wake_reply();
     let signal = "task9|done|10000";
@@ -152,35 +152,24 @@ fn a_held_wake_is_recorded_only_after_it_is_delivered(cx: &mut gpui::TestAppCont
         })
         .expect("window open");
 
-    // The pause clears; once the wake's retry waits out, the drain delivers
-    // to the reachable supervisor pane and only then records the signal.
-    window
-        .update(cx, |view, _, cx| {
-            view.team_bridge.unpause_all_for_test();
-            view.team_bridge.force_retry_due_for_test();
-            view.dispatch_drained_team_prompts(cx);
-        })
-        .expect("window open");
+    // The pause clears; once the wake's retry waits out, the drain re-offers
+    // it to the reachable supervisor pane. The fixture's daemon input is not
+    // connected, so the idle pane cannot take the typed batch yet: the wake
+    // stays queued for a retry, and only a real delivery records the signal.
     window
         .update(cx, |view, _, _| {
+            view.team_bridge.unpause_all_for_test();
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts();
             assert_eq!(
                 view.team_bridge.queued_count_for_test(),
-                0,
-                "the held wake is released once"
+                1,
+                "a wake the daemon could not take waits for a retry"
             );
             assert!(
-                view.team_bridge.wake_seen("t-x", signal),
-                "a delivered wake is recorded"
+                !view.team_bridge.wake_seen("t-x", signal),
+                "only a delivered wake is recorded"
             );
-        })
-        .expect("window open");
-
-    // A repeated event and a further tick deliver nothing further.
-    cx.update(|app| notify_team_mutation(&reply, app));
-    window
-        .update(cx, |view, _, cx| {
-            view.dispatch_drained_team_prompts(cx);
-            assert_eq!(view.team_bridge.queued_count_for_test(), 0);
         })
         .expect("window open");
 }
@@ -208,11 +197,11 @@ fn a_wake_waits_for_a_busy_agent_to_finish_its_turn(cx: &mut gpui::TestAppContex
 
     cx.update(|app| notify_team_mutation(&reply, app));
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, _, _| {
             view.team_bridge.unpause_all_for_test();
             // The agent is mid-turn: the wake must wait, not paste into an
             // input the turn will clear.
-            view.dispatch_drained_team_prompts(cx);
+            view.dispatch_drained_team_prompts();
             assert_eq!(
                 view.team_bridge.queued_count_for_test(),
                 1,
@@ -226,7 +215,7 @@ fn a_wake_waits_for_a_busy_agent_to_finish_its_turn(cx: &mut gpui::TestAppContex
         .expect("window open");
 
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, _, _| {
             view.live.snapshot = Some(Arc::new(snapshot_with_status(
                 "boot-local",
                 "w1X",
@@ -235,17 +224,20 @@ fn a_wake_waits_for_a_busy_agent_to_finish_its_turn(cx: &mut gpui::TestAppContex
                 "idle",
             )));
             view.endpoints[0].live.snapshot = view.live.snapshot.clone();
-            // The retry is due; the idle pane takes it now.
+            // The retry is due and the agent's turn is over: the drain
+            // re-offers the wake through the daemon's typed pane input. The
+            // fixture's daemon input is not connected, so the wake stays
+            // queued for a retry and is not recorded as delivered.
             view.team_bridge.force_retry_due_for_test();
-            view.dispatch_drained_team_prompts(cx);
+            view.dispatch_drained_team_prompts();
             assert_eq!(
                 view.team_bridge.queued_count_for_test(),
-                0,
-                "the idle agent takes the wake"
+                1,
+                "a wake the daemon could not take waits for a retry"
             );
             assert!(
-                view.team_bridge.wake_seen("t-x", signal),
-                "the delivered wake is recorded"
+                !view.team_bridge.wake_seen("t-x", signal),
+                "only a delivered wake is recorded"
             );
         })
         .expect("window open");
@@ -285,7 +277,7 @@ fn a_wake_to_a_busy_pane_is_held_until_it_is_idle(cx: &mut gpui::TestAppContext)
         .expect("window open");
 
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, _, _| {
             view.live.snapshot = Some(Arc::new(snapshot_with_status(
                 "boot-local",
                 "w1X",
@@ -294,10 +286,13 @@ fn a_wake_to_a_busy_pane_is_held_until_it_is_idle(cx: &mut gpui::TestAppContext)
                 "idle",
             )));
             view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            // The fixture's daemon input is not connected, so the idle pane's
+            // wake stays queued for a retry instead of being recorded as
+            // delivered.
             view.team_bridge.force_retry_due_for_test();
-            view.dispatch_drained_team_prompts(cx);
-            assert_eq!(view.team_bridge.queued_count_for_test(), 0);
-            assert!(view.team_bridge.wake_seen("t-x", signal));
+            view.dispatch_drained_team_prompts();
+            assert_eq!(view.team_bridge.queued_count_for_test(), 1);
+            assert!(!view.team_bridge.wake_seen("t-x", signal));
         })
         .expect("window open");
 }
@@ -328,8 +323,8 @@ fn a_wake_to_a_gone_pane_waits_out_its_retry_then_is_marked_undeliverable(
 
     cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
     window
-        .update(cx, |view, _, cx| {
-            view.dispatch_drained_team_prompts(cx);
+        .update(cx, |view, _, _| {
+            view.dispatch_drained_team_prompts();
             assert_eq!(
                 view.team_bridge.queued_count_for_test(),
                 1,
@@ -358,9 +353,9 @@ fn a_wake_to_a_gone_pane_waits_out_its_retry_then_is_marked_undeliverable(
         })
         .expect("window open");
     window
-        .update(cx, |view, _, cx| {
+        .update(cx, |view, _, _| {
             view.team_bridge.force_retry_due_for_test();
-            view.dispatch_drained_team_prompts(cx);
+            view.dispatch_drained_team_prompts();
             assert_eq!(
                 view.team_bridge.queued_count_for_test(),
                 0,

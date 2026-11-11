@@ -213,6 +213,7 @@ time                 = { default-features = false, features = ["std"], version =
 toml                 = "1.1"
 toml_edit            = "0.25"
 tracing              = "0.1"
+tracing-core         = "0.1"
 # The Azure sandbox exec stream; TLS comes from `rustls` above.
 tungstenite          = { default-features = false, features = ["handshake"], version = "0.30" }
 # The response head of boxd's exec stream (grpc-web over HTTP/1.1); tungstenite

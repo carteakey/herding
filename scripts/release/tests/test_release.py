@@ -70,15 +70,16 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(target=target):
                 result = self.run_script("package-linux.sh", "20260920.3", target, binary, self.work, self.notices)
                 with tarfile.open(result.stdout.strip()) as archive:
-                    base = f"Sheprd-20260920.3-{target}/"
-                    files = {m.name: m for m in archive.getmembers() if m.isfile()}
-                    self.assertEqual(set(files), {base + p for p in [
-                        "bin/sheprd", "bin/sheprd-acp", "bin/sheprd-remote-control", "bin/sheprd-automate",
+                    base = f"Herding-20260920.3-{target}/"
+                    files = {m.name: m for m in archive.getmembers() if m.isfile() or m.issym()}
+                    regular = {name: member for name, member in files.items() if member.isfile()}
+                    self.assertEqual(set(regular), {base + p for p in [
+                        "bin/herding", "bin/sheprd-acp", "bin/sheprd-remote-control", "bin/sheprd-automate",
                         "bin/herdr-acp", "bin/herdr-remote-control", "bin/herdr-automate", "bin/herdr-nearby",
                         "bin/sheprd-nearby",
                         "bin/herdr-core",
                         "share/applications/org.sheprd.Sheprd.desktop",
-                        "share/icons/hicolor/scalable/apps/sheprd.svg",
+                        "share/icons/hicolor/scalable/apps/herding.svg",
                         "share/licenses/herdr-gpui/LICENSE-APACHE", "share/licenses/herdr-gpui/NOTICE.md",
                         "share/licenses/herdr-gpui/LICENSE", "share/licenses/herdr-gpui/NOTICE",
                         "share/licenses/herdr-gpui/LICENSE-octicons",
@@ -86,10 +87,13 @@ class ReleaseTests(unittest.TestCase):
                         "share/licenses/herdr-gpui/SOUND-NOTICE.md",
                         "share/licenses/herdr-gpui/HERDR-CORE-LICENSES.txt",
                     ]})
-                    alias = archive.getmember(base + "bin/herdr-gpui")
-                    self.assertTrue(alias.issym())
-                    self.assertEqual(alias.linkname, "sheprd")
-                    self.assertEqual(archive.extractfile(base + "bin/herdr-gpui").read(), binary.read_bytes())
+                    for alias in ("bin/sheprd", "bin/herdr-gpui"):
+                        link = archive.getmember(base + alias)
+                        self.assertTrue(link.issym(), alias)
+                        self.assertEqual(link.linkname, "herding", alias)
+                        self.assertEqual(archive.extractfile(base + alias).read(), binary.read_bytes())
+                    self.assertEqual(files[base + "bin/herding"].mode & 0o777, 0o755)
+                    self.assertEqual(archive.extractfile(base + "bin/herding").read(), binary.read_bytes())
                     for legacy, canonical in [(f"herdr-{helper}", f"sheprd-{helper}")
                                               for helper in ("acp", "remote-control", "automate", "nearby")]:
                         for name in (legacy, canonical):
@@ -110,19 +114,20 @@ class ReleaseTests(unittest.TestCase):
                     self.assertEqual(archive.extractfile(base + "bin/herdr-core").read(), core.read_bytes())
                     self.assertEqual(archive.extractfile(base + "share/licenses/herdr-gpui/HERDR-CORE-LICENSES.txt").read(),
                                      (SCRIPTS / "herdr-core-licenses.txt").read_bytes())
-                    self.assertEqual(archive.extractfile(base + "share/icons/hicolor/scalable/apps/sheprd.svg").read(), (ROOT / "assets/icons/sheprd-linux.svg").read_bytes())
+                    self.assertEqual(archive.extractfile(base + "share/icons/hicolor/scalable/apps/herding.svg").read(), (ROOT / "assets/icons/sheprd-linux.svg").read_bytes())
                     self.assertEqual(archive.extractfile(base + "share/licenses/herdr-gpui/THIRD-PARTY-NOTICES.txt").read(), self.notices.read_bytes())
                     for source in ("LICENSE", "NOTICE", "assets/icons/LICENSE-octicons", "crates/sheprd-protocol/NOTICE.md", "crates/sheprd-gpui/SOUND-NOTICE.md"):
                         self.assertEqual(archive.extractfile(base + "share/licenses/herdr-gpui/" + Path(source).name).read(), (ROOT / source).read_bytes())
                     installed = self.work / f"installed-{target}"
                     archive.extractall(installed, filter="data")
-                    canonical = installed / base / "bin/sheprd"
+                    canonical = installed / base / "bin/herding"
                     replacement = canonical.with_name("replacement")
                     replacement.write_bytes(b"updated executable")
                     replacement.replace(canonical)
-                    legacy = canonical.with_name("herdr-gpui")
-                    self.assertEqual(legacy.resolve(), canonical.resolve())
-                    self.assertEqual(legacy.read_bytes(), b"updated executable")
+                    for alias in ("bin/sheprd", "bin/herdr-gpui"):
+                        link = canonical.with_name(Path(alias).name)
+                        self.assertEqual(link.resolve(), canonical.resolve(), alias)
+                        self.assertEqual(link.read_bytes(), b"updated executable", alias)
                 # The updater ships the same binary, without changing the manual tree.
                 update = self.work / f"sheprd-20260920.3-{target}-update.tar.gz"
                 subprocess.run(["python3", str(ROOT / "scripts/update-manifest.py"), "package-linux",
@@ -376,7 +381,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((self.work / "Sheprd.app/Contents/Resources/Assets.car").read_bytes(), (fixture / "assets/icons/Sheprd-worktree.car").read_bytes())
         result = self.run_script("package-linux.sh", "20260920.3", "aarch64-unknown-linux-gnu", arm, self.work, self.notices)
         with tarfile.open(result.stdout.strip()) as archive:
-            self.assertEqual(archive.extractfile("Sheprd-20260920.3-aarch64-unknown-linux-gnu/share/icons/hicolor/scalable/apps/sheprd.svg").read(), (fixture / "assets/icons/sheprd-linux-worktree.svg").read_bytes())
+            self.assertEqual(archive.extractfile("Herding-20260920.3-aarch64-unknown-linux-gnu/share/icons/hicolor/scalable/apps/herding.svg").read(), (fixture / "assets/icons/sheprd-linux-worktree.svg").read_bytes())
 
     def test_missing_malformed_conflicting_identity_fails_closed(self):
         binary = self.work / "binary"

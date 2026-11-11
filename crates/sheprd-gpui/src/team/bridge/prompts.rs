@@ -8,6 +8,9 @@ use sheprd_orchestrator::team_store::{Task, Team};
 use std::collections::HashSet;
 use std::time::Instant;
 
+pub(crate) mod stall;
+pub(crate) use stall::StallTracker;
+
 impl SheprdWindow {
     /// The connected endpoint whose snapshot reports `host` as its daemon
     /// boot id. `None` when no connected daemon currently runs that boot:
@@ -133,6 +136,13 @@ impl SheprdWindow {
                 } else {
                     fl!("team-status-live").into()
                 };
+                // A detected stall outranks the harness's own status: this
+                // is the roster's "needs a supervisor look" badge.
+                let status = if self.team_stall_for_pane(&pane.pane_id).is_some() {
+                    stall::stalled_label().into()
+                } else {
+                    status
+                };
                 candidates.push(PaneCandidate {
                     identity: PaneIdentity {
                         daemon_id: snapshot.boot_id.clone(),
@@ -149,12 +159,17 @@ impl SheprdWindow {
         candidates
     }
 
-    /// Runs on each window tick. The wake queue drains on every tick even
-    /// before the Team panel is first shown (#62): after a GUI restart, held
-    /// wakes must retry without a human opening the board first. Everything
-    /// else - candidates, actions, the shown team's refresh - waits until the
-    /// panel is shown or a prior tick already started the bridge.
+    /// Runs on each window tick. Stall tracking and the wake queue drain on
+    /// every tick even before the Team panel is first shown (#62): after a
+    /// GUI restart, held wakes must retry and a stalled worker must be
+    /// reported without a human opening the board first. Everything else -
+    /// candidates, actions, the shown team's refresh - waits until the panel
+    /// is shown or a prior tick already started the bridge.
     pub(crate) fn poll_team(&mut self, cx: &mut Context<Self>) {
+        // Stall detection runs before the panel gate: a supervisor who has
+        // not opened the board since a restart still gets woken about a
+        // worker holding assigned work that stopped making progress.
+        self.track_team_stalls(Instant::now());
         self.dispatch_drained_team_prompts();
         let shown = self.team_panel_shown();
         if !shown && !self.team_bridge.started {

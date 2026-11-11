@@ -334,6 +334,7 @@ impl SheprdWindow {
             team_action_overflow: false,
             team_actions: Default::default(),
             team_bridge: Default::default(),
+            team_stalls: crate::team::bridge::prompts::StallTracker::new(),
             team_view,
             teleport: None,
             teleport_follow: None,

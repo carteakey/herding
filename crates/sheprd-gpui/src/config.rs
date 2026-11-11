@@ -42,6 +42,7 @@ mod opensandbox;
 mod option_as_alt;
 mod padding;
 pub(crate) mod preferences;
+pub(crate) mod team;
 pub(crate) use sheprd_remote_control::app::config as remote;
 pub(crate) mod sidebar;
 mod sidebar_style;
@@ -319,6 +320,8 @@ pub struct Config {
     /// How tab strips draw their tabs, from View > Tab Layout.
     pub tab_layout: TabLayoutMode,
     pub tabs: FontConfig,
+    /// The `[teams]` table: how long assigned workers may sit silent.
+    pub teams: team::TeamConfig,
     pub terminal: FontConfig,
     /// Blank space around every terminal's cells.
     pub terminal_padding: Padding,
@@ -497,6 +500,7 @@ impl Default for Config {
             // Tabs are terminal chrome, so they read in the monospace face the
             // sidebar and terminal use, as they do in the reference UI.
             tabs: font(monospace, 12.0),
+            teams: team::TeamConfig::default(),
             terminal: font(monospace, 14.0),
             terminal_padding: Padding::default(),
             theme: "Default".into(), // i18n: data
@@ -583,6 +587,7 @@ struct Settings {
     tab_labels: TabLabels,
     tab_layout: TabLayoutMode,
     tabs: FontSettings,
+    teams: team::TeamConfig,
     terminal: FontSettings,
     theme: Option<String>,
     ui: FontSettings,
@@ -915,6 +920,7 @@ impl Config {
         config.status_bar = settings.status_bar;
         config.tab_labels = settings.tab_labels;
         config.tab_layout = settings.tab_layout;
+        config.teams = settings.teams;
         settings.ssh.check()?;
         config.ssh = settings.ssh;
         let (status_icons, legacy_rail) = status_icons::SavedIcons::resolve(settings.status_icons);

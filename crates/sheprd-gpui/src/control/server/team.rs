@@ -71,6 +71,9 @@ pub(super) fn serve(
             Ok(identity) => identity,
             Err(response) => return response,
         };
+        // The call itself is the stall detector's activity signal (issue #56
+        // point 2): any proven team CLI call, read or mutation, counts.
+        view.note_team_member_call(&target.session);
         // Registration records the pane's agent process for every later
         // request: the CLI call itself is a fresh process each time, so the
         // binding anchors on the agent that spawns those calls, which the

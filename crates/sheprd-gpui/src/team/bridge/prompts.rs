@@ -5,6 +5,9 @@ use sheprd_orchestrator::team_store::{Task, Team};
 use std::collections::HashSet;
 use std::time::Instant;
 
+pub(crate) mod stall;
+pub(crate) use stall::StallTracker;
+
 impl SheprdWindow {
     /// Sessions this window can prove across all connected host endpoints:
     /// native ACP chats, verified CLI bindings, and active terminal agent
@@ -103,6 +106,13 @@ impl SheprdWindow {
                 } else {
                     fl!("team-status-live").into()
                 };
+                // A detected stall outranks the harness's own status: this
+                // is the roster's "needs a supervisor look" badge.
+                let status = if self.team_stall_for_pane(&pane.pane_id).is_some() {
+                    stall::stalled_label().into()
+                } else {
+                    status
+                };
                 candidates.push(PaneCandidate {
                     identity: PaneIdentity {
                         daemon_id: snapshot.boot_id.clone(),
@@ -121,6 +131,10 @@ impl SheprdWindow {
 
     /// Runs on each window tick. Idle until the Team panel is first shown.
     pub(crate) fn poll_team(&mut self, cx: &mut Context<Self>) {
+        // Stall detection runs before the panel gate: a supervisor who has
+        // not opened the board since a restart still gets woken about a
+        // worker holding assigned work that stopped making progress.
+        self.track_team_stalls(Instant::now(), cx);
         let shown = self.team_panel_shown();
         if !shown && !self.team_bridge.started {
             return;

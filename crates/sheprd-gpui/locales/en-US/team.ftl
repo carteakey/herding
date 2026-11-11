@@ -38,6 +38,7 @@ team-status-idle = Idle
 team-status-working = Working
 team-status-blocked = Blocked
 team-status-done = Done
+team-status-stalled = Stalled
 team-status-unavailable = Session not attached
 team-author-human = You
 team-action-switch = Switch team

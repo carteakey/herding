@@ -417,6 +417,8 @@ pub(crate) struct SheprdWindow {
     /// Team mutations requested by the view, drained by the service owner.
     /// Owns the Team service queue and the snapshot prepared from it.
     pub(crate) team_bridge: crate::team::Bridge,
+    /// Assigned workers gone quiet, detected per tick and shown on the roster.
+    pub(crate) team_stalls: crate::team::bridge::prompts::StallTracker,
     /// The event-driven Team panel and its prepared snapshot.
     pub(crate) team_view: Entity<crate::team::TeamView>,
     /// A teleport being set up or under way; a move outlives its dialog.

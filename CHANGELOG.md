@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending on the board. Held wakes (paused pane, busy agent) also back off
   by the retry interval instead of being re-offered every tick, and a
   reconnecting pane (still in the roster) keeps its wakes.
+- Team wakes route by the member's recorded host (issue #40). The host and
+  pane a wake targets travel together from the roster through the held
+  queue to the dispatch, which resolves the endpoint whose connected
+  snapshot reports that daemon boot id and then the pane inside it; busy
+  and dead-session checks are scoped to the same endpoint. A wake for a
+  host that is not connected is unreachable (the issue #35 backoff path)
+  and is never pasted into the selected endpoint, where the same short
+  pane id can name an unrelated agent on another machine.
 
 ### Planned & In Progress
 - **Cross-Host Agent Fleet (Remote Coordination)**:

@@ -117,6 +117,7 @@ fn pause_queue_is_bounded_and_scoped_per_team() {
     for i in 0..100 {
         bridge.enqueue_prompt(
             "team1".into(),
+            "boot".into(),
             format!("pane-{i}"),
             format!("prompt-{i}"),
             format!("summary-{i}"),
@@ -136,6 +137,7 @@ fn drain_unpaused_prompts_retains_prompts_when_team_is_none() {
     let mut bridge = Bridge::default();
     bridge.enqueue_prompt(
         "team1".into(),
+        "boot".into(),
         "p1".into(),
         "prompt1".into(),
         "summary1".into(),
@@ -171,6 +173,7 @@ fn select_team_does_not_flush_paused_prompts() {
     bridge.paused_members.insert("sup".into());
     bridge.enqueue_prompt(
         "team1".into(),
+        "boot".into(),
         "p1".into(),
         "prompt1".into(),
         "summary1".into(),

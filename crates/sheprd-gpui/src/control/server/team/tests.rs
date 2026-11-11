@@ -409,7 +409,7 @@ fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
 }
 
 /// A done task completed by its worker on a team whose supervisor pane is
-/// `p_sup`, which the fixture window's daemon does not show.
+/// `p_sup` (not shown by the fixture daemon); hosts match its boot id.
 fn supervisor_wake_team() -> Team {
     Team {
         team_id: "t-x".into(),
@@ -418,7 +418,7 @@ fn supervisor_wake_team() -> Team {
             member_id: "m_sup".into(),
             display_name: "supervisor".into(),
             target: SessionTarget {
-                host: "local".into(),
+                host: "boot-local".into(),
                 session: "default".into(),
                 workspace: Some("w1X".into()),
                 pane: Some("p_sup".into()),
@@ -428,7 +428,7 @@ fn supervisor_wake_team() -> Team {
             member_id: "m_w1".into(),
             display_name: "worker1".into(),
             target: SessionTarget {
-                host: "local".into(),
+                host: "boot-local".into(),
                 session: "default".into(),
                 workspace: Some("w1X".into()),
                 pane: Some("w1X:p9".into()),

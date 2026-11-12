@@ -17,4 +17,4 @@ pub(crate) use view::{
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod tests;
+pub(crate) mod tests;

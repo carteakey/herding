@@ -420,6 +420,15 @@ mod tests;
 /// `--issue` may repeat, and an empty `--issue` list on `watch` watches the
 /// whole repository.
 fn parse_issue_watch(args: &mut Args, verb: &str) -> Result<TeamCommand, CliError> {
+    if verb == "watches" {
+        // `watches` takes no issue list; the numbers belong to watch/unwatch.
+        if !args.options("--issue")?.is_empty() {
+            return Err(CliError::InvalidValue("--issue"));
+        }
+        return Ok(TeamCommand::IssueWatches {
+            team_id: team_id(args)?,
+        });
+    }
     let repo = bounded(
         args.text_option("--repo")?
             .ok_or(CliError::MissingValue("--repo"))?,

@@ -565,7 +565,10 @@ impl TeamStore {
         }
         let (_, stamp) = now_stamp()?;
         let tx = self.db.transaction()?;
-        let existing: Option<(String, String, String, Option<String>, Option<String>)> = tx
+        /// What the task currently records: title, brief, status, result,
+        /// and the issue state the last sync saw.
+        type ExistingRecord = (String, String, String, Option<String>, Option<String>);
+        let existing: Option<ExistingRecord> = tx
             .query_row(
                 "SELECT title, brief, status, result, issue_state FROM tasks
                  WHERE team_id = ?1 AND issue_repo = ?2 AND issue_number = ?3",
@@ -691,7 +694,7 @@ impl TeamStore {
                     assignee_id, status, blocker_reason, result, created_at, updated_at
              FROM tasks WHERE team_id = ?1 AND issue_repo = ?2 AND issue_number = ?3",
             params![team_id, repo, number],
-            |row| read_task_row(row),
+            read_task_row,
         )?
     }
 }

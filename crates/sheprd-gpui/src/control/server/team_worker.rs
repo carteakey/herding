@@ -633,7 +633,7 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             caller,
             action,
             live_hosts,
-        } => scoped::scoped(store, &team_id, &caller, action, &live_hosts)?,
+        } => scoped(store, &team_id, &caller, action, &live_hosts)?,
     };
     Ok(reply)
 }
@@ -718,6 +718,8 @@ fn page_cursor(page: &[(i64, impl Sized)], limit: usize) -> Option<i64> {
 
 mod github_import;
 mod scoped;
+// The scoped handler keeps its short name at the worker's call sites.
+use scoped::scoped;
 
 #[cfg(test)]
 #[path = "team_worker/tests.rs"]

@@ -1,5 +1,5 @@
 use super::*;
 
 mod e2e;
-mod fake_github;
+pub(crate) mod fake_github;
 mod project_fixtures;

@@ -9,10 +9,7 @@ use super::*;
 use sheprd_orchestrator::team_store::{Author, Member, SessionTarget, Team, TeamStore};
 use std::sync::Arc;
 
-#[path = "../../../orchestrator/tests/fake_github.rs"]
-mod fake_github;
-
-use fake_github::FakeGithub;
+use crate::orchestrator::tests::fake_github::{FakeGithub, ISSUE_NUMBER, ISSUE_TITLE};
 
 fn store(dir: &tempfile::TempDir) -> TeamStore {
     let mut store = TeamStore::open(&dir.path().join("team").join("db.sqlite3")).unwrap();
@@ -78,14 +75,10 @@ fn a_sync_pass_creates_the_watched_issue_task_and_a_quiet_pass_changes_nothing()
     // The task is bound to the issue's ref, headed by its number and title,
     // and created under the supervisor's own identity.
     let task = store
-        .task_for_issue("t", "penso/e2e-app", fake_github::ISSUE_NUMBER)
+        .task_for_issue("t", "penso/e2e-app", ISSUE_NUMBER)
         .unwrap()
         .unwrap_or_else(|| panic!("the synced issue owns a task"));
-    assert!(
-        task.title.contains(fake_github::ISSUE_TITLE),
-        "{}",
-        task.title
-    );
+    assert!(task.title.contains(ISSUE_TITLE), "{}", task.title);
     assert!(
         task.brief
             .contains("https://github.com/penso/e2e-app/issues/7")

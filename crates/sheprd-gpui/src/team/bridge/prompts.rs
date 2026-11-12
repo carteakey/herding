@@ -1,4 +1,7 @@
-use super::{PaneCandidate, REFRESH, TeamAction, WAKE_RETRY, roster, status_label};
+use super::{
+    PaneCandidate, PromptDispatch, REFRESH, SupervisorWake, TeamAction, WAKE_RETRY, roster,
+    status_label,
+};
 use crate::{SheprdWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
 use gpui::Context;
 use sheprd_orchestrator::team_store::{Task, Team};
@@ -6,22 +9,47 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 impl SheprdWindow {
-    /// Sessions this window can prove across all connected host endpoints:
-    /// native ACP chats, verified CLI bindings, and active terminal agent
-    /// sessions in each daemon's snapshot.
-    /// Whether the agent session in `pane_id` is dead: its state labels
-    /// carry the crash vocabulary the heartbeat inspection reports. A dead
-    /// session is never dispatched to; the work stays pending on the board.
-    pub(crate) fn team_session_dead(&self, pane_id: &str) -> bool {
-        self.endpoints.iter().enumerate().any(|(index, endpoint)| {
-            let live = if index == self.selected_endpoint {
-                &self.live
-            } else {
-                &endpoint.live
-            };
-            let Some(snapshot) = live.snapshot.as_deref() else {
-                return false;
-            };
+    /// The connected endpoint whose snapshot reports `host` as its daemon
+    /// boot id. `None` when no connected daemon currently runs that boot:
+    /// the member's host is unreachable, and there is nothing to fall back
+    /// to, because a bare pane id names no machine (#40).
+    pub(crate) fn endpoint_for_host(&self, host: &str) -> Option<usize> {
+        if host.is_empty() {
+            return None;
+        }
+        self.endpoints
+            .iter()
+            .enumerate()
+            .find(|(index, endpoint)| {
+                let live = if *index == self.selected_endpoint {
+                    &self.live
+                } else {
+                    &endpoint.live
+                };
+                live.status.is_connected()
+                    && live
+                        .snapshot
+                        .as_deref()
+                        .is_some_and(|snapshot| snapshot.boot_id == host)
+            })
+            .map(|(index, _)| index)
+    }
+
+    /// Whether the agent session in `pane_id`, recorded on `host`, is dead:
+    /// its state labels carry the crash vocabulary the heartbeat inspection
+    /// reports. A dead session is never dispatched to; the work stays pending
+    /// on the board. Scoped to the host's own endpoint: a crashed pane that
+    /// happens to share the id on another host says nothing about this one.
+    pub(crate) fn team_session_dead(&self, host: &str, pane_id: &str) -> bool {
+        let Some(index) = self.endpoint_for_host(host) else {
+            return false;
+        };
+        let live = if index == self.selected_endpoint {
+            &self.live
+        } else {
+            &self.endpoints[index].live
+        };
+        live.snapshot.as_deref().is_some_and(|snapshot| {
             snapshot.agents.iter().any(|agent| {
                 agent.pane_id == pane_id
                     && session_health(&agent.state_labels) == SessionHealth::Crashed
@@ -29,18 +57,20 @@ impl SheprdWindow {
         })
     }
 
-    /// Whether the agent in `pane_id` is mid-turn, so a wake must wait rather
-    /// than be pasted into an input the program will clear when it finishes.
-    pub(crate) fn team_pane_busy(&self, pane_id: &str) -> bool {
-        self.endpoints.iter().enumerate().any(|(index, endpoint)| {
-            let live = if index == self.selected_endpoint {
-                &self.live
-            } else {
-                &endpoint.live
-            };
-            let Some(snapshot) = live.snapshot.as_deref() else {
-                return false;
-            };
+    /// Whether the agent in `pane_id`, recorded on `host`, is mid-turn, so a
+    /// wake must wait rather than be pasted into an input the program will
+    /// clear when it finishes. Scoped to the host's own endpoint for the
+    /// same reason as [`Self::team_session_dead`].
+    pub(crate) fn team_pane_busy(&self, host: &str, pane_id: &str) -> bool {
+        let Some(index) = self.endpoint_for_host(host) else {
+            return false;
+        };
+        let live = if index == self.selected_endpoint {
+            &self.live
+        } else {
+            &self.endpoints[index].live
+        };
+        live.snapshot.as_deref().is_some_and(|snapshot| {
             snapshot.agents.iter().any(|agent| {
                 agent.pane_id == pane_id
                     && matches!(
@@ -119,8 +149,13 @@ impl SheprdWindow {
         candidates
     }
 
-    /// Runs on each window tick. Idle until the Team panel is first shown.
+    /// Runs on each window tick. The wake queue drains on every tick even
+    /// before the Team panel is first shown (#62): after a GUI restart, held
+    /// wakes must retry without a human opening the board first. Everything
+    /// else - candidates, actions, the shown team's refresh - waits until the
+    /// panel is shown or a prior tick already started the bridge.
     pub(crate) fn poll_team(&mut self, cx: &mut Context<Self>) {
+        self.dispatch_drained_team_prompts();
         let shown = self.team_panel_shown();
         if !shown && !self.team_bridge.started {
             return;
@@ -178,19 +213,27 @@ impl SheprdWindow {
         {
             bridge.refresh(&team_id);
         }
-        self.dispatch_drained_team_prompts(cx);
         // The bounded periodic supervisor check: only the shown team, only
         // unseen results, at most one attempt per SUPERVISOR_FALLBACK.
         if shown && let Some(wake) = self.team_bridge.supervisor_fallback_due(Instant::now()) {
-            let team_id = wake.team_id.clone();
-            let signals = wake.signals.clone();
+            let SupervisorWake {
+                team_id,
+                host,
+                pane_id,
+                prompt,
+                summary,
+                signals,
+            } = wake;
+            let dispatch = PromptDispatch {
+                host,
+                pane_id,
+                prompt,
+                summary,
+            };
             let outcome = self.enqueue_or_dispatch_team_prompt(
                 Some(team_id.as_str()),
-                &wake.pane_id,
-                wake.prompt,
-                wake.summary,
+                dispatch,
                 signals.clone(),
-                cx,
             );
             if matches!(outcome, PromptOutcome::Sent) {
                 self.team_bridge.mark_supervisor_woken(&team_id, signals);
@@ -203,15 +246,8 @@ impl SheprdWindow {
             self.split_team_pane(cx);
         }
         let current_team = self.team_bridge.current_team_id().map(ToOwned::to_owned);
-        for (pane_id, prompt, summary) in prompts {
-            self.enqueue_or_dispatch_team_prompt(
-                current_team.as_deref(),
-                &pane_id,
-                prompt,
-                summary,
-                Vec::new(),
-                cx,
-            );
+        for dispatch in prompts {
+            self.enqueue_or_dispatch_team_prompt(current_team.as_deref(), dispatch, Vec::new());
         }
         let identities: Vec<_> = candidates.iter().map(|c| c.identity.clone()).collect();
         let focus = focus.filter(|pane| {
@@ -254,10 +290,23 @@ impl SheprdWindow {
     /// tick instead of being swallowed. A wake whose pane is gone from both
     /// the roster and every connected snapshot is marked undeliverable once
     /// its retry waits out, instead of being re-offered forever.
-    pub(crate) fn dispatch_drained_team_prompts(&mut self, cx: &mut Context<Self>) {
-        // A drain while the daemon is reconnecting has no snapshot to prove a
-        // pane against, so it would fail every delivery. Keep the queue.
-        if !self.live.status.is_connected() || self.live.snapshot.is_none() {
+    pub(crate) fn dispatch_drained_team_prompts(&mut self) {
+        // A drain with no connected daemon has no snapshot to prove a pane
+        // against, so it would fail every delivery. Keep the queue. One host
+        // being down must not stall the rest: the drain runs whenever any
+        // endpoint is connected, and the per-member host resolution decides
+        // what each wake can reach - an unreachable host is held with the
+        // regular backoff instead of waiting for the selected endpoint
+        // (finding 736a1b22).
+        let any_endpoint_provable = self.endpoints.iter().enumerate().any(|(index, endpoint)| {
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            live.status.is_connected() && live.snapshot.is_some()
+        });
+        if !any_endpoint_provable {
             return;
         }
         // Panes the connected daemons currently show, the same proof the
@@ -281,6 +330,11 @@ impl SheprdWindow {
             .collect();
         let expired = self.team_bridge.expire_unreachable_prompts(&live_panes);
         if !expired.is_empty() {
+            tracing::info!(
+                panes = %expired.join(", "),
+                outcome = "undeliverable",
+                "team wake drain marked wakes undeliverable: no agent in the panes"
+            );
             self.team_bridge.last_activity =
                 Some(format!("Marked undeliverable: no agent in {}", expired.join(", ")).into());
             self.team_bridge.dirty = true;
@@ -290,24 +344,34 @@ impl SheprdWindow {
             // A wake pasted while the agent is mid-turn is cleared when the
             // turn ends, so keep it queued until the pane is idle. The drain
             // retries it on a later tick.
-            if self.team_pane_busy(&item.pane_id) {
+            if self.team_pane_busy(&item.host, &item.pane_id) {
+                tracing::info!(
+                    team = %item.team_id,
+                    host = %item.host,
+                    pane = %item.pane_id,
+                    outcome = "requeued_busy",
+                    "team wake drain requeued the wake: the pane is busy"
+                );
                 self.team_bridge
                     .requeue_prompt(item, Instant::now() + WAKE_RETRY);
                 continue;
             }
             let outcome = self.enqueue_or_dispatch_team_prompt(
                 None,
-                &item.pane_id,
-                item.prompt.clone(),
-                item.summary.clone(),
+                PromptDispatch {
+                    host: item.host.clone(),
+                    pane_id: item.pane_id.clone(),
+                    prompt: item.prompt.clone(),
+                    summary: item.summary.clone(),
+                },
                 item.signals.clone(),
-                cx,
             );
-            tracing::debug!(
+            tracing::info!(
+                team = %item.team_id,
                 pane = %item.pane_id,
                 ?outcome,
                 signals = item.signals.len(),
-                "team wake drain"
+                "team wake drain delivered a held wake"
             );
             match outcome {
                 PromptOutcome::Sent => {
@@ -333,27 +397,35 @@ impl SheprdWindow {
     pub(crate) fn enqueue_or_dispatch_team_prompt(
         &mut self,
         team_id: Option<&str>,
-        pane_id: &str,
-        prompt: String,
-        summary: String,
+        dispatch: PromptDispatch,
         signals: Vec<String>,
-        cx: &mut Context<Self>,
     ) -> PromptOutcome {
         let team_id = team_id
             .map(ToOwned::to_owned)
             .or_else(|| self.team_bridge.current_team_id().map(ToOwned::to_owned))
             .unwrap_or_default();
+        let pane_id = dispatch.pane_id.clone();
         // A wake pasted into a busy agent is cleared when its turn ends, so
         // hold it until the pane is idle. The drain retries it on a later
         // tick, which is also how an assignment survives a busy worker.
-        if self.team_bridge.is_pane_paused_for_team(&team_id, pane_id)
-            || self.team_pane_busy(pane_id)
+        if self
+            .team_bridge
+            .is_pane_paused_for_team(&team_id, &dispatch.pane_id)
+            || self.team_pane_busy(&dispatch.host, &dispatch.pane_id)
         {
+            tracing::info!(
+                team = %team_id,
+                host = %dispatch.host,
+                pane = %pane_id,
+                outcome = "held",
+                "team wake held: the pane is paused for the team or the agent is mid-turn"
+            );
             self.team_bridge.hold_prompt(
-                team_id.clone(),
-                pane_id.to_owned(),
-                prompt,
-                summary,
+                team_id,
+                dispatch.host,
+                dispatch.pane_id,
+                dispatch.prompt,
+                dispatch.summary,
                 signals,
             );
             let held = self.team_bridge.queued_count();
@@ -362,7 +434,8 @@ impl SheprdWindow {
             self.team_bridge.dirty = true;
             return PromptOutcome::Held;
         }
-        let outcome = self.dispatch_team_prompt(pane_id, prompt.clone(), cx);
+        let outcome =
+            self.dispatch_team_prompt(&dispatch.host, &dispatch.pane_id, dispatch.prompt.clone());
         // The dispatch can discover a busy pane the pre-check missed, or no
         // reachable agent at all; keep the wake in the team queue either way,
         // backed off by WAKE_RETRY so an unavailable pane cannot hot-loop the
@@ -371,10 +444,11 @@ impl SheprdWindow {
         // then marked undeliverable if the pane is still gone.
         if matches!(outcome, PromptOutcome::Held | PromptOutcome::Unreachable) {
             self.team_bridge.hold_prompt(
-                team_id.clone(),
-                pane_id.to_owned(),
-                prompt,
-                summary,
+                team_id,
+                dispatch.host,
+                dispatch.pane_id,
+                dispatch.prompt,
+                dispatch.summary,
                 signals,
             );
             let held = self.team_bridge.queued_count();
@@ -383,10 +457,11 @@ impl SheprdWindow {
             self.team_bridge.dirty = true;
             return outcome;
         }
+        let summary = dispatch.summary;
         self.team_bridge.last_activity = Some(
             match outcome {
-                PromptOutcome::Sent => summary,
-                PromptOutcome::Held | PromptOutcome::Unreachable => summary,
+                PromptOutcome::Sent => summary.clone(),
+                PromptOutcome::Held | PromptOutcome::Unreachable => summary.clone(),
                 PromptOutcome::Unavailable => format!(
                     "{summary}: not delivered, no reachable agent in {pane_id}; work stays pending"
                 ),
@@ -400,34 +475,36 @@ impl SheprdWindow {
         outcome
     }
 
-    /// Resolves which endpoint currently contains `pane_id` in its snapshot,
-    /// falling back to the selected endpoint if unknown or if the pane cannot
-    /// be located across connected endpoints.
-    pub(crate) fn target_endpoint_for_pane(&self, pane_id: &str) -> usize {
-        self.endpoints
-            .iter()
-            .enumerate()
-            .find(|(i, ep)| {
-                let live = if *i == self.selected_endpoint {
-                    &self.live
-                } else {
-                    &ep.live
-                };
-                live.snapshot
-                    .as_deref()
-                    .is_some_and(|s| s.panes.iter().any(|p| p.pane_id == pane_id))
-            })
-            .map(|(i, _)| i)
-            .unwrap_or(self.selected_endpoint)
+    /// Resolves the endpoint that hosts `pane_id` for a member recorded on
+    /// `host`: the connected endpoint whose daemon boot id is the recorded
+    /// host and whose snapshot still shows the pane. `None` when the host is
+    /// not connected or no longer shows the pane: the wake is unreachable,
+    /// and it never falls back to the selected endpoint, where the same pane
+    /// id may name an unrelated agent on another machine (#40).
+    pub(crate) fn target_endpoint_for_member(&self, host: &str, pane_id: &str) -> Option<usize> {
+        let index = self.endpoint_for_host(host)?;
+        let live = if index == self.selected_endpoint {
+            &self.live
+        } else {
+            &self.endpoints[index].live
+        };
+        live.snapshot
+            .as_deref()
+            .is_some_and(|snapshot| snapshot.panes.iter().any(|pane| pane.pane_id == pane_id))
+            .then_some(index)
     }
 
-    fn dispatch_team_prompt(
-        &mut self,
-        pane_id: &str,
-        prompt: String,
-        cx: &mut Context<Self>,
-    ) -> PromptOutcome {
-        if let Some(chat) = self.chats.pane_mut(pane_id)
+    fn dispatch_team_prompt(&mut self, host: &str, pane_id: &str, prompt: String) -> PromptOutcome {
+        // ACP chats are window-local, so only a member recorded on this
+        // window's own daemon may be prompted through one: on another host
+        // the same pane id can name a different agent entirely (#40).
+        let local_boot = self
+            .live
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.boot_id.clone());
+        if local_boot.as_deref() == Some(host)
+            && let Some(chat) = self.chats.pane_mut(pane_id)
             && chat.target.existing.is_none()
             && !chat.session.transcript().read_only
         {
@@ -441,12 +518,12 @@ impl SheprdWindow {
         if self.endpoints.is_empty() {
             return PromptOutcome::Unavailable;
         }
-        // Team wakes paste only into an idle agent; a busy one comes back as
-        // Held so the team queue retries it, instead of the generic notes
-        // queue holding it for 120s and then pasting into a mid-turn program.
+        // Team wakes are typed only into an idle agent; a busy one comes back
+        // as Held so the team queue retries it, instead of the generic notes
+        // queue holding it for 120s and then typing into a mid-turn program.
         // A pane no snapshot proves comes back as Unreachable so the drain
         // backs off and expires it instead of re-offering it every tick.
-        match self.deliver_team_prompt(pane_id, prompt, cx) {
+        match self.deliver_team_prompt(host, pane_id, prompt) {
             crate::agent_notes::Delivered::Agent => PromptOutcome::Sent,
             crate::agent_notes::Delivered::Kept => PromptOutcome::Held,
             crate::agent_notes::Delivered::Unreachable => PromptOutcome::Unreachable,
@@ -516,32 +593,34 @@ fn prompts_for_team_action(
     action: &TeamAction,
     team: Option<&Team>,
     tasks: &[Task],
-) -> Vec<(String, String, String)> {
+) -> Vec<PromptDispatch> {
     match action {
         TeamAction::CreateTeam { name, supervisor } if !name.trim().is_empty() => {
             let cli = team_cli_prefix(&supervisor.pane_id, Some(&supervisor.workspace_id));
-            vec![(
-                supervisor.pane_id.clone(),
-                format!(
+            vec![PromptDispatch {
+                host: supervisor.daemon_id.clone(),
+                pane_id: supervisor.pane_id.clone(),
+                prompt: format!(
                     "[Herdr Team] You are the Supervisor of team \"{}\". Strictly supervise: decompose the goal into tasks, assign tasks to workers, review findings, and coordinate via the bulletin rather than doing implementation work yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status` to get your TEAM_ID, `{cli} roster <TEAM_ID>` to inspect workers, `{cli} task list <TEAM_ID>` to manage tasks, and `{cli} bulletin list <TEAM_ID>` to read messages (run `{cli} bulletin ack <TEAM_ID> <MESSAGE_ID>` to acknowledge).",
                     name.trim()
                 ),
-                format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
-            )]
+                summary: format!("Started team \"{}\" with supervisor {}", name.trim(), supervisor.pane_id),
+            }]
         }
         TeamAction::SetGoal { team_id, goal } if !goal.trim().is_empty() => team
-            .and_then(supervisor_pane_id)
+            .and_then(supervisor_target)
             .into_iter()
-            .map(|pane_id| {
+            .map(|(host, pane_id)| {
                 let cli = cli_for_member(team, &pane_id);
-                (
-                    pane_id.clone(),
-                    format!(
+                PromptDispatch {
+                    host,
+                    pane_id: pane_id.clone(),
+                    prompt: format!(
                         "[Herdr Team] Team goal set for {team_id}: \"{}\". As Supervisor, do not implement everything yourself — break this goal into concrete tasks with `{cli} task create {team_id} --title \"...\" --assign <worker>`, delegate to workers, and coordinate via `{cli} bulletin post {team_id} \"...\"`.",
                         goal.trim()
                     ),
-                    format!("Sent updated goal to supervisor ({pane_id})"),
-                )
+                    summary: format!("Sent updated goal to supervisor ({pane_id})"),
+                }
             })
             .collect(),
         TeamAction::AddWorker {
@@ -550,14 +629,15 @@ fn prompts_for_team_action(
             pane,
         } if !name.trim().is_empty() => {
             let cli = team_cli_prefix(&pane.pane_id, Some(&pane.workspace_id));
-            vec![(
-                pane.pane_id.clone(),
-                format!(
+            vec![PromptDispatch {
+                host: pane.daemon_id.clone(),
+                pane_id: pane.pane_id.clone(),
+                prompt: format!(
                     "[Herdr Team] You joined team {team_id} as Worker \"{}\". Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}` to view the goal, `{cli} task list {team_id}` to claim open tasks (`{cli} task claim {team_id} <TASK_ID>`), and `{cli} bulletin list {team_id}` to read messages (run `{cli} bulletin ack {team_id} <MESSAGE_ID>` to acknowledge).",
                     name.trim()
                 ),
-                format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
-            )]
+                summary: format!("Added worker \"{}\" ({})", name.trim(), pane.pane_id),
+            }]
         }
         TeamAction::NudgeMember { member_id } => {
             let Some(team) = team else {
@@ -569,14 +649,15 @@ fn prompts_for_team_action(
                 .and_then(|m| {
                     let pane_id = m.target.pane.clone()?;
                     let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
-                    Some((
-                        pane_id.clone(),
-                        format!(
+                    Some(PromptDispatch {
+                        host: m.target.host.clone(),
+                        pane_id: pane_id.clone(),
+                        prompt: format!(
                             "[Herdr Team] Status check for {} in team {team_id}: please run `{cli} status {team_id}`, `{cli} task list {team_id}`, and `{cli} bulletin list {team_id}` to check active tasks and acknowledge messages with `{cli} bulletin ack {team_id} <MESSAGE_ID>`.",
                             m.display_name
                         ),
-                        format!("Nudged {} ({pane_id})", m.display_name),
-                    ))
+                        summary: format!("Nudged {} ({pane_id})", m.display_name),
+                    })
                 })
                 .into_iter()
                 .collect()
@@ -590,14 +671,15 @@ fn prompts_for_team_action(
                 .and_then(|m| {
                     let pane_id = m.target.pane.clone()?;
                     let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
-                    Some((
-                        pane_id.clone(),
-                        format!(
+                    Some(PromptDispatch {
+                        host: m.target.host.clone(),
+                        pane_id: pane_id.clone(),
+                        prompt: format!(
                             "[Herdr Team] You ({}) have been promoted to Supervisor of team \"{}\" ({team_id}). Strictly supervise: delegate tasks to workers, review their findings, and coordinate via the bulletin rather than implementing tasks yourself. Load skill \"herdr-team\" for workflow and workspace rules. Run `{cli} status {team_id}`, `{cli} roster {team_id}`, `{cli} task list {team_id}`, and `{cli} bulletin list {team_id}` (run `{cli} bulletin ack {team_id} <MESSAGE_ID>` to acknowledge).",
                             m.display_name, team.name
                         ),
-                        format!("Promoted {} to supervisor ({pane_id})", m.display_name),
-                    ))
+                        summary: format!("Promoted {} to supervisor ({pane_id})", m.display_name),
+                    })
                 })
                 .into_iter()
                 .collect()
@@ -608,28 +690,29 @@ fn prompts_for_team_action(
             brief,
             assignee,
         } if !title.trim().is_empty() => {
-            let target_pane = team.and_then(|team| {
-                resolve_assignee_pane(team, assignee.as_deref())
-                    .or_else(|| supervisor_pane_id(team))
+            let target = team.and_then(|team| {
+                resolve_assignee_target(team, assignee.as_deref())
+                    .or_else(|| supervisor_target(team))
             });
             let brief_part = if brief.trim().is_empty() {
                 String::new()
             } else {
                 format!(" — {}", brief.trim())
             };
-            target_pane
+            target
                 .into_iter()
-                .map(|pane_id| {
+                .map(|(host, pane_id)| {
                     let cli = cli_for_member(team, &pane_id);
-                    (
-                        pane_id.clone(),
-                        format!(
+                    PromptDispatch {
+                        host,
+                        pane_id: pane_id.clone(),
+                        prompt: format!(
                             "[Herdr Team] New task in team {team_id}: \"{}\"{}. Run `{cli} task list {team_id}` to inspect it, `{cli} task claim {team_id} <TASK_ID>` to start working on it, and `{cli} task complete {team_id} <TASK_ID> --result \"...\"` when finished.",
                             title.trim(),
                             brief_part
                         ),
-                        format!("Dispatched task \"{}\" to {pane_id}", title.trim()),
-                    )
+                        summary: format!("Dispatched task \"{}\" to {pane_id}", title.trim()),
+                    }
                 })
                 .collect()
         }
@@ -640,26 +723,27 @@ fn prompts_for_team_action(
             brief,
             assignee,
         } if !title.trim().is_empty() => {
-            let target_pane =
-                team.and_then(|team| resolve_assignee_pane(team, assignee.as_deref()));
+            let target =
+                team.and_then(|team| resolve_assignee_target(team, assignee.as_deref()));
             let brief_part = if brief.trim().is_empty() {
                 String::new()
             } else {
                 format!(" — {}", brief.trim())
             };
-            target_pane
+            target
                 .into_iter()
-                .map(|pane_id| {
+                .map(|(host, pane_id)| {
                     let cli = cli_for_member(team, &pane_id);
-                    (
-                        pane_id.clone(),
-                        format!(
+                    PromptDispatch {
+                        host,
+                        pane_id: pane_id.clone(),
+                        prompt: format!(
                             "[Herdr Team] Task {task_id} assigned to you in team {team_id}: \"{}\"{}. Claim it with `{cli} task claim {team_id} {task_id}` and complete it with `{cli} task complete {team_id} {task_id} --result \"...\"`.",
                             title.trim(),
                             brief_part
                         ),
-                        format!("Assigned task \"{}\" to {pane_id}", title.trim()),
-                    )
+                        summary: format!("Assigned task \"{}\" to {pane_id}", title.trim()),
+                    }
                 })
                 .collect()
         }
@@ -671,28 +755,29 @@ fn prompts_for_team_action(
             let Some(task) = tasks.iter().find(|t| t.task_id == *task_id) else {
                 return Vec::new();
             };
-            let target_pane = task
+            let target = task
                 .assignee
                 .as_deref()
-                .and_then(|id| resolve_assignee_pane(team, Some(id)))
-                .or_else(|| supervisor_pane_id(team));
+                .and_then(|id| resolve_assignee_target(team, Some(id)))
+                .or_else(|| supervisor_target(team));
             let brief_part = if task.brief.trim().is_empty() {
                 String::new()
             } else {
                 format!(" — {}", task.brief.trim())
             };
-            target_pane
+            target
                 .into_iter()
-                .map(|pane_id| {
+                .map(|(host, pane_id)| {
                     let cli = cli_for_member(Some(team), &pane_id);
-                    (
-                        pane_id.clone(),
-                        format!(
+                    PromptDispatch {
+                        host,
+                        pane_id: pane_id.clone(),
+                        prompt: format!(
                             "[Herdr Team] Please work on task {} (\"{}\"){} in team {team_id}. Claim it with `{cli} task claim {team_id} {}` and complete it with `{cli} task complete {team_id} {} --result \"...\"`.",
                             task.task_id, task.title, brief_part, task.task_id, task.task_id
                         ),
-                        format!("Sent task \"{}\" to {pane_id}", task.title),
-                    )
+                        summary: format!("Sent task \"{}\" to {pane_id}", task.title),
+                    }
                 })
                 .collect()
         }
@@ -735,14 +820,15 @@ fn prompts_for_team_action(
                 .filter_map(|m| {
                     let pane_id = m.target.pane.clone()?;
                     let cli = team_cli_prefix(&pane_id, m.target.workspace.as_deref());
-                    Some((
-                        pane_id.clone(),
-                        format!(
+                    Some(PromptDispatch {
+                        host: m.target.host.clone(),
+                        pane_id: pane_id.clone(),
+                        prompt: format!(
                             "[Herdr Team] New bulletin message in team {team_id}: \"{}\". Run `{cli} bulletin list {team_id}` to view, `{cli} bulletin ack {team_id} <MESSAGE_ID>` to acknowledge, and `{cli} bulletin post {team_id} \"...\"` to reply.",
                             body.trim()
                         ),
-                        format!("Posted bulletin to team ({pane_id})"),
-                    ))
+                        summary: format!("Posted bulletin to team ({pane_id})"),
+                    })
                 })
                 .collect()
         }
@@ -822,7 +908,10 @@ pub(crate) fn wake_signal(task: &Task) -> String {
     )
 }
 
-fn resolve_assignee_pane(team: &Team, assignee: Option<&str>) -> Option<String> {
+/// The member an assignee reference resolves to, as the `(host, pane)` a
+/// wake must be routed by: the host picks the daemon, the pane the agent
+/// inside it (#40).
+fn resolve_assignee_target(team: &Team, assignee: Option<&str>) -> Option<(String, String)> {
     let target = assignee?.trim();
     if target.is_empty() {
         return None;
@@ -833,13 +922,21 @@ fn resolve_assignee_pane(team: &Team, assignee: Option<&str>) -> Option<String> 
                 || m.target.pane.as_deref() == Some(target)
                 || m.display_name.eq_ignore_ascii_case(target)
         })
-        .and_then(|m| m.target.pane.clone())
+        .and_then(|m| {
+            let pane = m.target.pane.clone()?;
+            Some((m.target.host.clone(), pane))
+        })
 }
 
-fn supervisor_pane_id(team: &Team) -> Option<String> {
-    team.supervisor.target.pane.clone()
+fn supervisor_target(team: &Team) -> Option<(String, String)> {
+    let pane = team.supervisor.target.pane.clone()?;
+    Some((team.supervisor.target.host.clone(), pane))
 }
 
 #[cfg(test)]
 #[path = "prompts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "wake_land_tests.rs"]
+mod wake_land_tests;

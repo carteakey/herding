@@ -28,27 +28,32 @@ class LinuxAliasTests(unittest.TestCase):
             for relative in sorted(DISTRO.TREE):
                 entry = tarfile.TarInfo("release/" + relative)
                 entry.mode = 0o755 if relative.startswith("bin/") else 0o644
-                kind, link = changes.get(relative, (tarfile.SYMTYPE, "sheprd")
-                                         if relative == "bin/herdr-gpui" else (tarfile.REGTYPE, ""))
+                kind, link = changes.get(relative, (tarfile.SYMTYPE, "herding")
+                                         if relative in ("bin/sheprd", "bin/herdr-gpui")
+                                         else (tarfile.REGTYPE, ""))
                 entry.type, entry.linkname = kind, link
-                data = b"canonical executable" if relative == "bin/sheprd" else b"fixture"
+                data = b"canonical executable" if relative == "bin/herding" else b"fixture"
                 entry.size = len(data) if entry.isfile() else 0
                 output.addfile(entry, io.BytesIO(data) if entry.isfile() else None)
                 if duplicate and relative == "bin/herdr-gpui":
                     output.addfile(entry)
         return archive
 
-    def test_distro_materializes_main_alias_as_a_regular_executable(self):
+    def test_distro_materializes_main_aliases_as_regular_executables(self):
         root = DISTRO.extract(self.archive(), "release", self.work / "tree")
-        canonical, legacy = root / "bin/sheprd", root / "bin/herdr-gpui"
-        self.assertFalse(legacy.is_symlink())
-        self.assertTrue(legacy.is_file())
-        self.assertEqual(legacy.stat().st_mode & 0o777, 0o755)
-        self.assertEqual(legacy.read_bytes(), canonical.read_bytes())
+        canonical = root / "bin/herding"
+        self.assertTrue(canonical.is_file())
+        for alias in ("bin/sheprd", "bin/herdr-gpui"):
+            materialized = root / alias
+            self.assertFalse(materialized.is_symlink(), alias)
+            self.assertTrue(materialized.is_file(), alias)
+            self.assertEqual(materialized.stat().st_mode & 0o777, 0o755, alias)
+            self.assertEqual(materialized.read_bytes(), canonical.read_bytes(), alias)
         config = DISTRO.config("20261103.1", "x86_64-unknown-linux-gnu", root, "2026-11-03T00:00:00Z")
-        entry = next(entry for entry in config["contents"] if entry["dst"] == "/usr/bin/herdr-gpui")
-        self.assertEqual(entry["type"], "file")
-        self.assertEqual((entry["file_info"]["owner"], entry["file_info"]["group"]), ("root", "root"))
+        for dst in ("/usr/bin/sheprd", "/usr/bin/herdr-gpui"):
+            entry = next(entry for entry in config["contents"] if entry["dst"] == dst)
+            self.assertEqual(entry["type"], "file", dst)
+            self.assertEqual((entry["file_info"]["owner"], entry["file_info"]["group"]), ("root", "root"))
 
     def test_only_exact_relative_main_symlink_is_accepted(self):
         cases = [

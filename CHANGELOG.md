@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Setup, identity and failure modes documented in `docs/control-tunnel.md`.
 
 ### Fixed
+- Distro packaging accepts the Herding-VERSION-TARGET manual archive again:
+  the Linux rebrand renamed the archive but left package-linux-distro.py
+  expecting Sheprd-*, so every .deb, .rpm and Arch build failed. The packages
+  keep their published Sheprd-/Herdr- names, materialize both bin/sheprd and
+  bin/herdr-gpui as real copies of bin/herding, and install the launcher as
+  herding.svg.
 - Team wakes to panes that are gone no longer hot-loop the drain (issue
   #35). A wake whose pane is in neither the team roster nor any connected
   snapshot is queued with a 5s backoff instead of an immediate retry, and
@@ -65,6 +71,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending on the board. Held wakes (paused pane, busy agent) also back off
   by the retry interval instead of being re-offered every tick, and a
   reconnecting pane (still in the roster) keeps its wakes.
+- Team wakes route by the member's recorded host (issue #40). The host and
+  pane a wake targets travel together from the roster through the held
+  queue to the dispatch, which resolves the endpoint whose connected
+  snapshot reports that daemon boot id and then the pane inside it; busy
+  and dead-session checks are scoped to the same endpoint. A wake for a
+  host that is not connected is unreachable (the issue #35 backoff path)
+  and is never pasted into the selected endpoint, where the same short
+  pane id can name an unrelated agent on another machine.
+- Team wakes are delivered the way `herdr pane run` delivers (issue #62):
+  the prompt is committed to the daemon's pane input as typed text and
+  Enter in one ordered batch, which every TUI accepts, instead of a
+  bracketed paste that some agents truncate to fragments. The wake queue
+  drains on every window tick, so wakes held while the GUI was away land
+  when the pane is idle even if nobody has opened the Team board since a
+  restart. Every delivery decision logs at info with the team, member,
+  host and pane: sent, held for a paused pane or a mid-turn agent,
+  requeued while busy, deduped against a stored state, skipped for a dead
+  session, unreachable host, agentless pane, a batch the daemon could not
+  take, and wakes marked undeliverable; a window update that fails warns
+  instead of swallowing the decision. Bulletin mention wakes carry a
+  dedupe signal like supervisor and assignment wakes, so a mention wakes
+  its member once per post. A wake the daemon could not take stays queued
+  for a retry instead of being recorded as delivered, which is what the
+  old paste fallback silently claimed.
 
 ### Planned & In Progress
 - **Cross-Host Agent Fleet (Remote Coordination)**:

@@ -254,6 +254,20 @@ and release builds to CI jobs. Run longer checks locally only when explicitly
 requested or needed to investigate a specific failure. Report what ran and
 what was deferred to CI.
 
+CI on this fork is deliberately minimal: work happens only on
+`carteakey/herding`, and the owner is on GitHub Free. Run the commit-message
+check and the Linux format, lint, and test job on `ubuntu-latest`; keep the
+Windows, macOS/iOS, release, docs, and nix jobs off, and never enable
+`close-low-confidence-prs.yml` (an hourly job that closes PRs). Workflow
+edits for the fork are fine; upstream compatibility does not constrain them.
+
+- "Deferred to CI" is only true if a job ran. Check `gh pr checks` for a real
+  result before calling a gate passed: a `skipping` job verified nothing, and
+  until 2026-11-11 every fork job skipped because `ci.yml` was gated to
+  upstream's repositories.
+- Platform gates CI no longer covers here (Windows, macOS) are unverified.
+  Say so in the PR rather than implying CI checked them.
+
 - For linking, startup, or packaging changes, rely on CI build and CLI smoke checks; use `just test-build` locally when requested or needed to investigate a failure.
 - The `windows` CI job checks formatting, lints every target and feature, and
   runs workspace tests with default and all features, including headless UI and

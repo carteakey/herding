@@ -83,7 +83,7 @@ fn usage_error(args: &[&str], message: &str) {
     assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains(message), "{args:?}: {stderr}");
-    assert!(stderr.contains("Usage: sheprd"), "{stderr}");
+    assert!(stderr.contains("Usage: herding"), "{stderr}");
 }
 
 #[test]

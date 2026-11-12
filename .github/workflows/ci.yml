@@ -31,12 +31,9 @@ jobs:
   # jobs to catch workflow mistakes early; GitHub's fork isolation and protected
   # release environments remain the credential boundary, not the scanner.
   zizmor:
-    if: >-
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      (github.event_name == 'pull_request' ||
-       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
-        github.ref == 'refs/heads/main'))
+    # Off on the fork: the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Workflow Security
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -55,13 +52,12 @@ jobs:
   # release defect. Local commits are caught earlier by `just hooks`.
   commits:
     if: >-
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
+      github.repository == 'carteakey/herding' &&
       (github.event_name == 'pull_request' ||
        ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
+        github.actor == 'carteakey' && github.triggering_actor == 'carteakey' &&
         github.ref == 'refs/heads/main'))
     name: Commit messages
-    needs: zizmor
     outputs:
       code: ${{ steps.changes.outputs.code }}
       windows_package: ${{ steps.changes.outputs.windows_package }}
@@ -103,25 +99,20 @@ jobs:
   checks:
     if: >-
       needs.commits.outputs.code == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
+      github.repository == 'carteakey/herding' &&
       (github.event_name == 'pull_request' ||
        ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
+        github.actor == 'carteakey' && github.triggering_actor == 'carteakey' &&
         github.ref == 'refs/heads/main'))
     name: Format, lint, and test (${{ matrix.runner }}, ${{ matrix.features }})
-    needs: [zizmor, commits]
+    needs: [commits]
     strategy:
       fail-fast: false
       matrix:
-        # macOS 14, the oldest supported release, is off: every macOS job
-        # shares one account-wide runner limit with the release. Add it back
-        # if a macOS 14 regression shows up:
-        # runner: [macos-14, macos-15, ubuntu-24.04, ubuntu-24.04-arm]
-        runner: [macos-15, ubuntu-24.04, ubuntu-24.04-arm]
-        # The two test passes each take most of the job, so they run side by
-        # side, each with one of the lints; the script checks ride with the
-        # default-features pass.
-        features: [default, all]
+        # Fork: one free hosted runner; the macOS and ARM runners and the
+        # all-features pass (a second full compile-and-test) stay upstream.
+        runner: [ubuntu-24.04]
+        features: [default]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -206,15 +197,11 @@ jobs:
   # Native GUI tests run in windows-native; the Windows release builds run in
   # the release workflow.
   windows:
-    if: >-
-      needs.commits.outputs.code == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      (github.event_name == 'pull_request' ||
-       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
-        github.ref == 'refs/heads/main'))
+    # Off on the fork: the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Windows check (${{ matrix.runner }}, ${{ matrix.features }})
-    needs: [zizmor, commits]
+    needs: [commits]
     strategy:
       fail-fast: false
       matrix:
@@ -257,15 +244,11 @@ jobs:
   # (`just test-perf`). Hosted runners have no GPU, so Direct3D runs on WARP:
   # the budget is a regression tripwire, not a target for real hardware.
   windows-native:
-    if: >-
-      needs.commits.outputs.code == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      (github.event_name == 'pull_request' ||
-       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
-        github.ref == 'refs/heads/main'))
+    # Off on the fork: the pinned herdr.exe desktop rig is upstream-only; the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Windows native GUI (${{ matrix.runner }})
-    needs: [zizmor, commits]
+    needs: [commits]
     strategy:
       fail-fast: false
       matrix:
@@ -321,15 +304,11 @@ jobs:
   # pull request rather than a release. A release build is too slow for every
   # change, so this runs only when what those artifacts are made from changes.
   windows-package:
-    if: >-
-      needs.commits.outputs.windows_package == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      (github.event_name == 'pull_request' ||
-       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
-        github.ref == 'refs/heads/main'))
+    # Off on the fork: the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Windows package and installer
-    needs: [zizmor, commits]
+    needs: [commits]
     runs-on: windows-2025
     timeout-minutes: 60
     # The steps read "$TARGET" and friends, as the release workflow's do.
@@ -383,15 +362,11 @@ jobs:
   # so a website-only change runs this and skips every native job; a broken
   # link or page fails here before the deploy does.
   website:
-    if: >-
-      needs.commits.outputs.website == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      (github.event_name == 'pull_request' ||
-       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
-        github.ref == 'refs/heads/main'))
+    # Off on the fork: the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Website and docs
-    needs: [zizmor, commits]
+    needs: [commits]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -415,13 +390,9 @@ jobs:
   checks-passed:
     name: Format, lint, and test
     needs: [checks, windows, windows-native, windows-package, build-macos, commits, website]
-    if: >-
-      always() &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      (github.event_name == 'pull_request' ||
-       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.actor == 'penso' && github.triggering_actor == 'penso' &&
-        github.ref == 'refs/heads/main'))
+    # Off on the fork: no branch protection consumes the aggregate context, and its platform requirements cannot pass without the disabled jobs.
+    if: false
+
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -466,14 +437,11 @@ jobs:
   # Linux release builds on main, which the release gate requires. The release
   # workflow builds the same targets but only smoke-tests what it ships.
   build:
-    if: >-
-      needs.commits.outputs.code == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      github.actor == 'penso' && github.triggering_actor == 'penso'
+    # Off on the fork: release builds belong to the release workflow; the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Release (${{ matrix.target }})
-    needs: [zizmor, commits]
+    needs: [commits]
     strategy:
       fail-fast: false
       matrix:
@@ -519,12 +487,11 @@ jobs:
   # runners the release workflow's own macOS builds wait for. With no main
   # run to save a cache, there is nothing to restore, so they build cold.
   build-macos:
-    if: >-
-      needs.commits.outputs.code == 'true' &&
-      (github.repository == 'sheprd-labs/sheprd' || github.repository == 'penso/herdr-gpui') &&
-      github.event_name == 'pull_request'
+    # Off on the fork: macOS runners are costly; the fork runs only the commit-message and Linux checks jobs.
+    if: false
+
     name: Release (${{ matrix.target }})
-    needs: [zizmor, commits]
+    needs: [commits]
     strategy:
       fail-fast: false
       matrix:

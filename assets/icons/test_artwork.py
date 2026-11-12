@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Verify the shipped cross-platform assets derive from the approved paw."""
+"""Verify the shipped cross-platform assets derive from the approved sources:
+the in-app marks from the paw generator, the launcher pair from the Herding
+mascot tile."""
 from pathlib import Path
+import base64
+import re
 import runpy
 import struct
 import unittest
@@ -16,8 +20,6 @@ class ArtworkTests(unittest.TestCase):
     def test_platform_sources_derive_from_the_canonical_paw(self):
         source = (ASSETS / "sheprd-avatar.svg").read_text()
         variants = {
-            "sheprd-linux.svg": ("circle", False, False),
-            "sheprd-linux-worktree.svg": ("circle", True, False),
             "sheprd-icon.svg": ("tile", False, False),
             "sheprd-icon-square.svg": ("square", False, False),
             "sheprd-icon-badge.svg": ("tile", False, True),
@@ -27,10 +29,17 @@ class ArtworkTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual((ASSETS / name).read_text(), GENERATOR["artwork"](source, *options))
 
-    def test_development_colors_preserve_the_cream_foreground(self):
-        source = ET.parse(ASSETS / "sheprd-linux-worktree.svg").getroot()
-        self.assertEqual(source.find(f"{SVG}g").get("fill"), "#fff8f0")
-        self.assertEqual([stop.get("stop-color") for stop in source.iter(f"{SVG}stop")], ["#df4b62", "#991f43"])
+    def test_linux_launchers_embed_the_herding_mascot_tile(self):
+        # The Linux launcher pair wraps the circle tile the About box shows,
+        # clipped to a full-bleed circle; scripts/release/tests
+        # test_linux_icons.py and test_linux_icon_geometry.py pin the shell.
+        tile = (ASSETS / "Herding-linux.png").read_bytes()
+        for name in ("sheprd-linux.svg", "sheprd-linux-worktree.svg"):
+            with self.subTest(name=name):
+                svg = (ASSETS / name).read_text()
+                embedded = base64.b64decode(
+                    re.search(r"base64,([A-Za-z0-9+/=]+)", svg).group(1))
+                self.assertEqual(embedded, tile)
 
     def test_windows_containers_have_all_native_png_sizes(self):
         for name in ("Sheprd.ico", "Sheprd-worktree.ico"):

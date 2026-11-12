@@ -35,6 +35,10 @@ const POST_LIMIT: usize = 200;
 /// still unreachable after this long is marked undeliverable instead of
 /// being re-offered forever.
 pub(crate) const WAKE_RETRY: Duration = Duration::from_secs(5);
+/// How often the shown team's GitHub issue watch set syncs. A quiet pass is
+/// one small GraphQL request per repository, so the cadence can be slower
+/// than a human notices: the board follows the issue, not the reverse.
+const ISSUE_SYNC_INTERVAL: Duration = Duration::from_secs(600);
 /// How often the periodic supervisor catch-up may attempt a wake. It only
 /// fires on stored results no wake has covered, so a quiet team is silent.
 pub(crate) const SUPERVISOR_FALLBACK: Duration = Duration::from_secs(600);
@@ -111,6 +115,10 @@ pub(crate) struct Bridge {
     /// catch-up, which is bounded and rarely wrong to want.
     supervisor_wakes: HashMap<String, VecDeque<String>>,
     last_fallback: Option<Instant>,
+    /// One attempt per team and interval: the issue sync's cadence, so a
+    /// quiet repository costs one small request per pass and an errored one
+    /// cannot hot-loop the worker.
+    issue_sync_attempts: HashMap<String, Instant>,
     last_activity: Option<SharedString>,
     dirty: bool,
 }
@@ -477,6 +485,24 @@ impl Bridge {
             }
             (pending @ (Pending::EarlierTasks { .. } | Pending::EarlierFindings { .. }), reply) => {
                 self.merge_page_reply(pending, reply)
+            }
+            (
+                Pending::Write { team_id },
+                Reply::IssueSync {
+                    created,
+                    updated,
+                    unchanged,
+                    failed,
+                },
+            ) => {
+                let mut summary = format!(
+                    "Issue sync: {created} created, {updated} updated, {unchanged} unchanged"
+                );
+                if !failed.is_empty() {
+                    summary.push_str(&format!("; failed: {}", failed.join(", ")));
+                }
+                self.last_activity = Some(summary.into());
+                self.refresh(&team_id);
             }
             (Pending::Write { team_id }, _) => {
                 self.refresh(&team_id);

@@ -6,11 +6,14 @@
 
 mod findings;
 mod mentions;
+mod schema;
 mod tasks;
+mod watch;
 
 pub use findings::{Confidence, Finding};
 pub use mentions::{extract_at_tokens, resolve_member_ref, resolve_recipients};
-pub use tasks::{Task, TaskCounts, TaskStatus};
+pub use tasks::{ISSUE_DETAILS_LIMIT, IssueSnapshot, IssueSyncKind, Task, TaskCounts, TaskStatus};
+pub use watch::{IssueWatch, MAX_WATCHES, REPO_WATCH};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{CachedStatement, Connection, OptionalExtension, params};
@@ -263,75 +266,7 @@ impl TeamStore {
         crate::private_file::prepare(path)?;
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
-        db.execute_batch(
-            "PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS teams (
-                team_id TEXT PRIMARY KEY, name TEXT NOT NULL,
-                supervisor_id TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS team_goals (
-                team_id TEXT PRIMARY KEY REFERENCES teams(team_id) ON DELETE CASCADE,
-                goal TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS members (
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                member_id TEXT NOT NULL, display_name TEXT NOT NULL,
-                host TEXT NOT NULL, session TEXT NOT NULL,
-                workspace TEXT, pane TEXT,
-                PRIMARY KEY (team_id, member_id)
-            );
-            CREATE TABLE IF NOT EXISTS posts (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                post_id TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                author_kind TEXT NOT NULL CHECK(author_kind IN ('human','member')),
-                author_id TEXT NOT NULL, reply_to TEXT REFERENCES posts(post_id),
-                body TEXT NOT NULL, created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS posts_team_idx ON posts(team_id, sequence);
-            CREATE TABLE IF NOT EXISTS mentions (
-                post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
-                recipient_id TEXT NOT NULL, PRIMARY KEY(post_id, recipient_id)
-            );
-            CREATE INDEX IF NOT EXISTS mentions_recipient_idx ON mentions(recipient_id);
-            CREATE TABLE IF NOT EXISTS acknowledgements (
-                post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
-                recipient_id TEXT NOT NULL, acknowledged_at TEXT NOT NULL,
-                PRIMARY KEY(post_id, recipient_id)
-            );
-            CREATE TABLE IF NOT EXISTS tasks (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                creator_kind TEXT NOT NULL CHECK(creator_kind IN ('human','member')),
-                creator_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                brief TEXT NOT NULL,
-                assignee_id TEXT,
-                status TEXT NOT NULL CHECK(status IN ('open','in_progress','blocked','done','cancelled')),
-                blocker_reason TEXT,
-                result TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS tasks_team_idx ON tasks(team_id, sequence);
-            CREATE TABLE IF NOT EXISTS findings (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                finding_id TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                author_kind TEXT NOT NULL CHECK(author_kind IN ('human','member')),
-                author_id TEXT NOT NULL,
-                task_id TEXT REFERENCES tasks(task_id),
-                description TEXT NOT NULL,
-                evidence TEXT NOT NULL,
-                confidence TEXT NOT NULL CHECK(confidence IN ('low','medium','high')),
-                supersedes TEXT REFERENCES findings(finding_id),
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS findings_team_idx ON findings(team_id, sequence);",
-        )?;
+        schema::run(&db)?;
         Ok(Self {
             db,
             #[cfg(any(test, feature = "test-support"))]
@@ -987,3 +922,7 @@ mod tests;
 #[cfg(test)]
 #[path = "team_store/workflow_tests.rs"]
 mod workflow_tests;
+
+#[cfg(test)]
+#[path = "team_store/issue_sync_tests.rs"]
+mod issue_sync_tests;

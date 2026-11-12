@@ -318,3 +318,62 @@ fn rejects_invalid_bounds_and_missing_text() {
     );
     assert!(team(&mut args).is_err());
 }
+
+#[test]
+fn parses_watch_unwatch_and_watches() {
+    assert_eq!(
+        parse(&["watch", "--repo", "carteakey/herding", "team-1"]),
+        TeamCommand::IssueWatch {
+            team_id: "team-1".into(),
+            repo: "carteakey/herding".into(),
+            numbers: Vec::new(),
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "watch",
+            "--repo",
+            "carteakey/herding",
+            "--issue",
+            "1",
+            "--issue",
+            "2,9",
+            "team-1"
+        ]),
+        TeamCommand::IssueWatch {
+            team_id: "team-1".into(),
+            repo: "carteakey/herding".into(),
+            numbers: vec![1, 2, 9],
+        }
+    );
+    assert_eq!(
+        parse(&["unwatch", "--repo", "carteakey/herding", "team-1"]),
+        TeamCommand::IssueUnwatch {
+            team_id: "team-1".into(),
+            repo: "carteakey/herding".into(),
+            numbers: Vec::new(),
+        }
+    );
+    assert_eq!(
+        parse(&["watches", "team-1"]),
+        TeamCommand::IssueWatches {
+            team_id: "team-1".into()
+        }
+    );
+    // `watches` takes no --issue list; the numbers belong to watch/unwatch.
+    let mut args = Args::new(
+        ["watches", "--issue", "1", "team-1"]
+            .iter()
+            .map(OsString::from),
+        "team",
+    );
+    assert!(team(&mut args).is_err());
+    // Numbers must be positive.
+    let mut args = Args::new(
+        ["watch", "--repo", "r/x", "--issue", "0", "team-1"]
+            .iter()
+            .map(OsString::from),
+        "team",
+    );
+    assert!(team(&mut args).is_err());
+}

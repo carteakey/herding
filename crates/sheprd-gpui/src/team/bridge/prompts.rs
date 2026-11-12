@@ -1,5 +1,11 @@
-use super::{PaneCandidate, REFRESH, TeamAction, WAKE_RETRY, roster, status_label};
-use crate::{SheprdWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
+use super::{
+    ISSUE_SYNC_INTERVAL, PaneCandidate, Pending, REFRESH, TeamAction, WAKE_RETRY, roster,
+    status_label,
+};
+use crate::{
+    SheprdWindow, control::server::team_worker::Operation, i18n::fl, navigation::NavigationTarget,
+    team::model::PaneIdentity,
+};
 use gpui::Context;
 use sheprd_orchestrator::team_store::{Task, Team};
 use std::collections::HashSet;
@@ -211,6 +217,31 @@ impl SheprdWindow {
                 summary,
                 Vec::new(),
                 cx,
+            );
+        }
+        // The GitHub issue sync's cadence: one pass per interval for the
+        // shown team, driven from the window with its GitHub accounts, so a
+        // watched issue reaches the board without anyone polling by hand. A
+        // pass without a signed-in account waits for the next tick.
+        let tokens = self.main_tokens();
+        if let Some(team_id) = self.team_bridge.current_team_id().map(ToOwned::to_owned)
+            && self
+                .team_bridge
+                .issue_sync_attempts
+                .get(&team_id)
+                .is_none_or(|at| at.elapsed() >= ISSUE_SYNC_INTERVAL)
+            && let Some(tokens) = tokens
+        {
+            let bridge = &mut self.team_bridge;
+            bridge
+                .issue_sync_attempts
+                .insert(team_id.clone(), Instant::now());
+            bridge.submit(
+                Operation::SyncGithubIssues {
+                    team_id: team_id.clone(),
+                    tokens,
+                },
+                Pending::Write { team_id },
             );
         }
         let identities: Vec<_> = candidates.iter().map(|c| c.identity.clone()).collect();

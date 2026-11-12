@@ -354,6 +354,38 @@ pub(super) fn serve(
                 }
                 (team_id, ScopedAction::Heartbeat { member_id })
             }
+            team::TeamOp::IssueWatch {
+                team_id,
+                repo,
+                numbers,
+            } => {
+                if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES)
+                    || !valid_id(&repo, team::MAX_REPO_BYTES)
+                    || numbers.iter().any(|number| *number < 1)
+                {
+                    return invalid("Invalid team ID, repository, or issue numbers");
+                }
+                (team_id, ScopedAction::IssueWatch { repo, numbers })
+            }
+            team::TeamOp::IssueUnwatch {
+                team_id,
+                repo,
+                numbers,
+            } => {
+                if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES)
+                    || !valid_id(&repo, team::MAX_REPO_BYTES)
+                    || numbers.iter().any(|number| *number < 1)
+                {
+                    return invalid("Invalid team ID, repository, or issue numbers");
+                }
+                (team_id, ScopedAction::IssueUnwatch { repo, numbers })
+            }
+            team::TeamOp::IssueWatches { team_id } => {
+                if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES) {
+                    return invalid("Invalid team ID limit");
+                }
+                (team_id, ScopedAction::IssueWatches)
+            }
         };
         let is_mutation = matches!(
             &action,
@@ -368,6 +400,8 @@ pub(super) fn serve(
                 | ScopedAction::TaskComplete { .. }
                 | ScopedAction::TaskCancel { .. }
                 | ScopedAction::FindingAdd { .. }
+                | ScopedAction::IssueWatch { .. }
+                | ScopedAction::IssueUnwatch { .. }
         );
         // Registration is the one call that may re-bind a stale name
         // holder, so it carries the boots the window currently sees: a

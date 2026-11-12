@@ -55,7 +55,10 @@ fn scoped_action_keeps_the_team(action: &ScopedAction) -> bool {
         | ScopedAction::TaskBlock { .. }
         | ScopedAction::TaskComplete { .. }
         | ScopedAction::TaskCancel { .. }
-        | ScopedAction::FindingAdd { .. } => true,
+        | ScopedAction::FindingAdd { .. }
+        | ScopedAction::IssueWatch { .. }
+        | ScopedAction::IssueUnwatch { .. }
+        | ScopedAction::IssueWatches => true,
     }
 }
 

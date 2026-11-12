@@ -215,6 +215,25 @@ fn to_op(command: TeamCommand) -> TeamOp {
             member_id,
             ping,
         },
+        TeamCommand::IssueWatch {
+            team_id,
+            repo,
+            numbers,
+        } => TeamOp::IssueWatch {
+            team_id,
+            repo,
+            numbers,
+        },
+        TeamCommand::IssueUnwatch {
+            team_id,
+            repo,
+            numbers,
+        } => TeamOp::IssueUnwatch {
+            team_id,
+            repo,
+            numbers,
+        },
+        TeamCommand::IssueWatches { team_id } => TeamOp::IssueWatches { team_id },
     }
 }
 
@@ -385,6 +404,40 @@ pub(super) fn team(command: TeamCommand, context: &Context) -> crate::Result<Out
             } else {
                 lines.join("\n")
             };
+            Output::data(text, &json)
+        }
+        Response::Team {
+            reply: Reply::IssueWatches { watches },
+        } => {
+            let json = serde_json::json!({ "watches": watches });
+            let text = if watches.is_empty() {
+                "No repositories watched; the issue sync follows nothing".to_owned()
+            } else {
+                watches
+                    .iter()
+                    .map(|watch| {
+                        if watch.number == 0 {
+                            format!("{} (whole repository)", watch.repo)
+                        } else {
+                            format!("{}#{}", watch.repo, watch.number)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Output::data(text, &json)
+        }
+        Response::Team {
+            reply: Reply::IssueSync { summary },
+        } => {
+            let json = serde_json::json!({ "summary": summary });
+            let mut text = format!(
+                "Synced: {} created, {} updated, {} unchanged",
+                summary.created, summary.updated, summary.unchanged
+            );
+            if !summary.failed.is_empty() {
+                let _ = write!(text, "; failed: {}", summary.failed.join(", "));
+            }
             Output::data(text, &json)
         }
         response => Err(unexpected(response)),

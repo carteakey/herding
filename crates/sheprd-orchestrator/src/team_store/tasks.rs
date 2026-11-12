@@ -475,3 +475,223 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {
         })
     }))
 }
+
+/// How many characters of one issue's body a task's details keep, the same
+/// truncation the one-shot import applies.
+pub const ISSUE_DETAILS_LIMIT: usize = 8000;
+
+/// One watched GitHub issue, fetched fresh from the API: everything the
+/// task that carries its ref needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IssueSnapshot {
+    /// `owner/repo` the issue lives in.
+    pub repo: String,
+    /// The issue number, unique within its repository.
+    pub number: i64,
+    /// The issue's canonical URL, which a completed task records as the
+    /// close link.
+    pub url: String,
+    /// The issue title as GitHub shows it.
+    pub title: String,
+    /// The issue body, ready to store.
+    pub body: String,
+    /// GitHub's state, `OPEN` or `CLOSED`, exactly as the API reports it.
+    pub state: String,
+}
+
+/// What one synced issue did to the task that carries its ref.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IssueSyncKind {
+    /// The issue had no task; one was created for it.
+    Created,
+    /// The issue closed and its open task followed, recording the issue URL
+    /// as the close link when no human result was already stored.
+    Closed,
+    /// The issue reopened and its completed task is open again.
+    Reopened,
+    /// The issue's title or body changed; the task's heading and details
+    /// were refreshed.
+    Refreshed,
+    /// Nothing differs from what the task already records.
+    Unchanged,
+}
+
+impl TeamStore {
+    /// The task carrying this issue's ref, if the team has one.
+    pub fn task_for_issue(&self, team_id: &str, repo: &str, number: i64) -> Result<Option<Task>> {
+        let mut statement = self.prep(
+            "SELECT task_id, team_id, creator_kind, creator_id, title, brief,
+                    assignee_id, status, blocker_reason, result, created_at, updated_at
+             FROM tasks WHERE team_id = ?1 AND issue_repo = ?2 AND issue_number = ?3",
+        )?;
+        statement
+            .query_row(params![team_id, repo, number], read_task_row)
+            .optional()?
+            .transpose()
+    }
+
+    /// Creates or updates the task that tracks `issue`, applying the
+    /// lifecycle the issue's state maps to: an issue closing completes an
+    /// open task with the issue URL as the close link, an issue reopening
+    /// sends a completed task back to open, and title or body edits refresh
+    /// the heading and details. A human's stored result is never
+    /// overwritten, and a cancelled task stays cancelled: cancellation is
+    /// human intent an issue cannot undo. Idempotent: nothing writes when
+    /// the issue matches what the task already records, so a quiet
+    /// repository never churns the board.
+    pub fn upsert_issue_task(
+        &mut self,
+        team_id: &str,
+        creator: &Author,
+        task_id: &str,
+        issue: &IssueSnapshot,
+        title: &str,
+        brief: &str,
+    ) -> Result<(Task, IssueSyncKind)> {
+        validate("task_id", task_id, MAX_ID_BYTES)?;
+        validate("issue title", title, MAX_NAME_BYTES)?;
+        if brief.len() > ISSUE_DETAILS_LIMIT.max(MAX_TEXT_BYTES) {
+            return Err(Error::Invalid {
+                field: "issue details",
+                max: ISSUE_DETAILS_LIMIT,
+            });
+        }
+        validate("issue state", &issue.state, MAX_ID_BYTES)?;
+        if issue.state != "OPEN" && issue.state != "CLOSED" {
+            return Err(Error::Invalid {
+                field: "issue state",
+                max: MAX_ID_BYTES,
+            });
+        }
+        let (_, stamp) = now_stamp()?;
+        let tx = self.db.transaction()?;
+        let existing: Option<(String, String, String, Option<String>, Option<String>)> = tx
+            .query_row(
+                "SELECT title, brief, status, result, issue_state FROM tasks
+                 WHERE team_id = ?1 AND issue_repo = ?2 AND issue_number = ?3",
+                params![team_id, issue.repo, issue.number],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let kind;
+        if let Some((old_title, old_brief, status_raw, result, previous_state)) = existing {
+            let status = TaskStatus::parse(&status_raw).ok_or(Error::Invalid {
+                field: "task status",
+                max: MAX_ID_BYTES,
+            })?;
+            let details_changed = old_title != title || old_brief != brief;
+            let state_changed = previous_state.as_deref() != Some(issue.state.as_str());
+            if !details_changed && !state_changed {
+                let task = Self::read_issue_task(&tx, team_id, &issue.repo, issue.number)?;
+                return Ok((task, IssueSyncKind::Unchanged));
+            }
+            let mut next_status = status;
+            let mut next_result = result.clone();
+            // A state transition is always recorded, whatever the task made
+            // of it, so the next sync compares against the state it saw.
+            kind = match (previous_state.as_deref(), issue.state.as_str()) {
+                (Some("OPEN"), "CLOSED") => {
+                    // A human completion result survives the close; an open
+                    // task records the issue URL as its close link.
+                    if matches!(
+                        status,
+                        TaskStatus::Open | TaskStatus::InProgress | TaskStatus::Blocked
+                    ) {
+                        next_status = TaskStatus::Done;
+                        if next_result.is_none() {
+                            next_result = Some(issue.url.clone());
+                        }
+                    }
+                    IssueSyncKind::Closed
+                }
+                (Some("CLOSED"), "OPEN") => {
+                    // Reopening is the issue's word over the board's, but a
+                    // cancelled task stays cancelled: that was human intent.
+                    if status == TaskStatus::Done {
+                        next_status = TaskStatus::Open;
+                        next_result = None;
+                    }
+                    IssueSyncKind::Reopened
+                }
+                _ => IssueSyncKind::Refreshed,
+            };
+            if kind != IssueSyncKind::Unchanged {
+                tx.execute(
+                    "UPDATE tasks SET title = ?1, brief = ?2, status = ?3, result = ?4,
+                            issue_url = ?5, issue_state = ?6, updated_at = ?7
+                     WHERE team_id = ?8 AND issue_repo = ?9 AND issue_number = ?10",
+                    params![
+                        title,
+                        brief,
+                        next_status.as_str(),
+                        next_result,
+                        issue.url,
+                        issue.state,
+                        stamp,
+                        team_id,
+                        issue.repo,
+                        issue.number
+                    ],
+                )?;
+            }
+        } else {
+            let (creator_kind, creator_id) = ensure_author_in_team(&tx, team_id, creator)?;
+            let (status, result) = if issue.state == "CLOSED" {
+                (TaskStatus::Done, Some(issue.url.clone()))
+            } else {
+                (TaskStatus::Open, None)
+            };
+            tx.execute(
+                "INSERT INTO tasks(
+                    task_id, team_id, creator_kind, creator_id, title, brief,
+                    assignee_id, status, blocker_reason, result, created_at, updated_at,
+                    issue_repo, issue_number, issue_url, issue_state
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL, ?8, ?9, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    task_id,
+                    team_id,
+                    creator_kind,
+                    creator_id,
+                    title,
+                    brief,
+                    status.as_str(),
+                    result,
+                    stamp,
+                    issue.repo,
+                    issue.number,
+                    issue.url,
+                    issue.state
+                ],
+            )?;
+            kind = IssueSyncKind::Created;
+        }
+        tx.commit()?;
+        let task = Self::read_issue_task(&self.db, team_id, &issue.repo, issue.number)?;
+        Ok((task, kind))
+    }
+
+    /// Reads the task that carries an issue's ref, with the same row shape
+    /// the board pages use.
+    fn read_issue_task(
+        db: &rusqlite::Connection,
+        team_id: &str,
+        repo: &str,
+        number: i64,
+    ) -> Result<Task> {
+        db.query_row(
+            "SELECT task_id, team_id, creator_kind, creator_id, title, brief,
+                    assignee_id, status, blocker_reason, result, created_at, updated_at
+             FROM tasks WHERE team_id = ?1 AND issue_repo = ?2 AND issue_number = ?3",
+            params![team_id, repo, number],
+            |row| read_task_row(row),
+        )?
+    }
+}

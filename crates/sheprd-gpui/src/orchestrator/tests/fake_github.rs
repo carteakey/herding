@@ -16,6 +16,8 @@ pub(crate) struct FakeGithub {
 }
 
 pub(crate) const ISSUE_TITLE: &str = "Icons are blurry on Windows";
+/// The one issue number the fake serves for any listing.
+pub(crate) const ISSUE_NUMBER: i64 = 7;
 pub(crate) const PULL_TITLE: &str = "Read repositories without git";
 
 impl FakeGithub {
@@ -82,6 +84,20 @@ fn answer(request: &Value, asked: &Mutex<Vec<String>>) -> Value {
             "nodes": nodes,
         }}}})
     };
+    // A single watched issue: the fake serves number 7 for any repository
+    // and reports every other number missing, the way GitHub does.
+    if let Some(start) = query.find("issue(number: ") {
+        asked.lock().unwrap().push(repository.clone());
+        let digits: String = query[start + "issue(number: ".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits == "7" {
+            return json!({"data": {"repository": {"issue": issue(&repository, 7, ISSUE_TITLE)}}});
+        }
+        return json!({"errors": [{"message": "Could not resolve to an Issue with the number of 9.",
+                                   "path": ["repository", "issue"]}]});
+    }
     if query.contains("issues(") && query.contains("pullRequests(") {
         // An incremental sync's combined first pages: nothing changed.
         let empty = json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []});

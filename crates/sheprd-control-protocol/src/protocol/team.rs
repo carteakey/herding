@@ -11,6 +11,8 @@ pub const MAX_AGENT_BYTES: usize = 64;
 pub const MAX_MESSAGE_ID_BYTES: usize = 128;
 pub const MAX_TASK_ID_BYTES: usize = 128;
 pub const MAX_TASK_TITLE_BYTES: usize = 256;
+/// A `owner/repo` repository slug, at most [`MAX_REPO_BYTES`] bytes.
+pub const MAX_REPO_BYTES: usize = 128;
 pub const MAX_FINDING_ID_BYTES: usize = 128;
 pub const MAX_BULLETIN_TEXT_BYTES: usize = 16 * 1024;
 /// Maximum number of explicitly mentioned member IDs on one entry.
@@ -186,6 +188,58 @@ pub enum TeamOp {
         #[serde(default)]
         ping: bool,
     },
+    /// Watch a repository (no issues) or explicit issues for the GitHub
+    /// issue sync. The team's sync follows every watched reference.
+    IssueWatch {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// The `owner/repo` repository the issues live in.
+        repo: String,
+        /// Issue numbers to watch; empty watches the whole repository.
+        #[serde(default)]
+        numbers: Vec<i64>,
+    },
+    /// Stop watching a repository with everything watched inside it (no
+    /// issues), or exactly the given issues.
+    IssueUnwatch {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+        /// The `owner/repo` repository to stop watching.
+        repo: String,
+        /// Issue numbers to stop watching; empty forgets the repository.
+        #[serde(default)]
+        numbers: Vec<i64>,
+    },
+    /// The team's watch set.
+    IssueWatches {
+        /// Opaque team identifier, at most [`MAX_TEAM_ID_BYTES`] bytes.
+        team_id: String,
+    },
+}
+
+/// One watched reference: a whole repository (number 0) or one issue.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueWatchInfo {
+    /// The `owner/repo` repository.
+    pub repo: String,
+    /// The watched issue number, or 0 when the whole repository is watched.
+    pub number: i64,
+}
+
+/// What one sync pass did to the board.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueSyncInfo {
+    /// Issues that had no task and gained one.
+    pub created: usize,
+    /// Issues whose task changed: a lifecycle transition or a refresh.
+    pub updated: usize,
+    /// Issues whose task already matched.
+    pub unchanged: usize,
+    /// Watched references the pass could not fetch, as `repo#number` (or
+    /// the bare repository when it could not be read at all).
+    pub failed: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -364,6 +418,14 @@ pub enum Reply {
     Heartbeat {
         team_id: String,
         members: Vec<HeartbeatInfo>,
+    },
+    /// The team's watch set, repositories first then ascending issues.
+    IssueWatches {
+        watches: Vec<IssueWatchInfo>,
+    },
+    /// One sync pass over the watch set.
+    IssueSync {
+        summary: IssueSyncInfo,
     },
 }
 

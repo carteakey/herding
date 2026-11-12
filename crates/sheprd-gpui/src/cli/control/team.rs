@@ -2,8 +2,8 @@
 use super::{Args, CliError, unknown};
 use sheprd_control_protocol::protocol::team::{
     ConfidenceLevel, MAX_BULLETIN_TEXT_BYTES, MAX_FINDING_ID_BYTES, MAX_MEMBER_ID_BYTES,
-    MAX_MEMBER_NAME_BYTES, MAX_MENTIONS, MAX_MESSAGE_ID_BYTES, MAX_PAGE_SIZE, MAX_TASK_ID_BYTES,
-    MAX_TASK_TITLE_BYTES, MAX_TEAM_ID_BYTES,
+    MAX_MEMBER_NAME_BYTES, MAX_MENTIONS, MAX_MESSAGE_ID_BYTES, MAX_PAGE_SIZE, MAX_REPO_BYTES,
+    MAX_TASK_ID_BYTES, MAX_TASK_TITLE_BYTES, MAX_TEAM_ID_BYTES,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +88,19 @@ pub enum TeamCommand {
         member_id: Option<String>,
         ping: bool,
     },
+    IssueWatch {
+        team_id: String,
+        repo: String,
+        numbers: Vec<i64>,
+    },
+    IssueUnwatch {
+        team_id: String,
+        repo: String,
+        numbers: Vec<i64>,
+    },
+    IssueWatches {
+        team_id: String,
+    },
 }
 
 fn bounded(value: String, field: &'static str, limit: usize) -> Result<String, CliError> {
@@ -129,7 +142,7 @@ fn confidence(value: String) -> Result<ConfidenceLevel, CliError> {
 pub(super) fn team(args: &mut Args) -> Result<TeamCommand, CliError> {
     let verb = args.verb().ok_or(CliError::MissingArgument {
         command: "team",
-        what: "status|register|roster|goal|bulletin|task|finding",
+        what: "status|register|roster|goal|bulletin|task|finding|watch",
     })?;
     match verb.to_str() {
         Some("status") => {
@@ -167,6 +180,9 @@ pub(super) fn team(args: &mut Args) -> Result<TeamCommand, CliError> {
         Some("bulletin") => parse_bulletin(args),
         Some("task") => parse_task(args),
         Some("finding") => parse_finding(args),
+        Some("watch") | Some("unwatch") | Some("watches") => {
+            parse_issue_watch(args, verb.to_str().unwrap_or_default())
+        }
         Some("heartbeat") => {
             let ping = args.flag("--ping");
             let member_id = args.text_option("--member")?.map(member_id).transpose()?;
@@ -398,3 +414,48 @@ fn parse_finding(args: &mut Args) -> Result<TeamCommand, CliError> {
 
 #[cfg(test)]
 mod tests;
+
+/// `team watch`, `team unwatch`, and `team watches`: the watch set the
+/// GitHub issue sync follows. Watching a repository needs only `--repo`;
+/// `--issue` may repeat, and an empty `--issue` list on `watch` watches the
+/// whole repository.
+fn parse_issue_watch(args: &mut Args, verb: &str) -> Result<TeamCommand, CliError> {
+    let repo = bounded(
+        args.text_option("--repo")?
+            .ok_or(CliError::MissingValue("--repo"))?,
+        "--repo",
+        MAX_REPO_BYTES,
+    )?;
+    let mut numbers = Vec::new();
+    for value in args.options("--issue")? {
+        for number in crate::cli::args::utf8(value)?.split(',') {
+            let number = number
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| CliError::InvalidValue("--issue"))?;
+            if number < 1 {
+                return Err(CliError::InvalidValue("--issue"));
+            }
+            numbers.push(number);
+        }
+    }
+    let team_id = team_id(args)?;
+    match verb {
+        "watch" => Ok(TeamCommand::IssueWatch {
+            team_id,
+            repo,
+            numbers,
+        }),
+        "unwatch" => Ok(TeamCommand::IssueUnwatch {
+            team_id,
+            repo,
+            numbers,
+        }),
+        _ => {
+            if !numbers.is_empty() {
+                return Err(CliError::InvalidValue("--issue"));
+            }
+            Ok(TeamCommand::IssueWatches { team_id })
+        }
+    }
+}

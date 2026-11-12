@@ -319,6 +319,29 @@ pub(super) fn reply_response(reply: Reply, pane_agents: &HashMap<String, String>
             team,
             target_member_id,
         } => super::heartbeat::heartbeat_response(&team, target_member_id.as_deref(), pane_agents),
+        Reply::IssueWatches { watches } => Response::Team {
+            reply: WireReply::IssueWatches {
+                watches: watches
+                    .into_iter()
+                    .map(|(repo, number)| team::IssueWatchInfo { repo, number })
+                    .collect(),
+            },
+        },
+        Reply::IssueSync {
+            created,
+            updated,
+            unchanged,
+            failed,
+        } => Response::Team {
+            reply: WireReply::IssueSync {
+                summary: team::IssueSyncInfo {
+                    created,
+                    updated,
+                    unchanged,
+                    failed,
+                },
+            },
+        },
         _ => Response::error(ErrorCode::Failed, "Unexpected team worker reply"),
     }
 }

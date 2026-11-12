@@ -11,7 +11,7 @@ fn images_are_tagged_by_project_and_key() {
     let key = "a".repeat(64);
     for (label, expected) in [
         ("Herdr GPUI", "herdr-herdr-gpui-01234567:aaaaaaaaaaaa"),
-        ("Herding", "herdr-sheprd-01234567:aaaaaaaaaaaa"),
+        ("Herding", "herdr-herding-01234567:aaaaaaaaaaaa"),
     ] {
         let project = Project {
             id: "0123456789abcdef".into(),

@@ -8,6 +8,15 @@ use super::{
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
 
+/// The host context a caller is proved against: the boot their endpoint
+/// currently reports, the stable ids and boots of the connected endpoints,
+/// and the stable ids of every known endpoint whether connected or not.
+pub struct HostContext {
+    pub caller_boot: String,
+    pub live_hosts: Vec<String>,
+    pub endpoint_ids: Vec<String>,
+}
+
 impl TeamStore {
     pub fn set_team_goal(&mut self, team_id: &str, goal: &str) -> Result<()> {
         validate("team_id", team_id, MAX_ID_BYTES)?;
@@ -127,16 +136,25 @@ impl TeamStore {
     }
 
     /// Registers a live session target in `team_id` or updates its display name if already present.
-    /// `live_hosts` names the boot ids the caller's endpoints currently report; a name holder whose
-    /// recorded boot is absent from the set was left behind by a daemon restart and re-binds.
+    /// `caller_boot` is the boot the caller's endpoint currently reports, `live_hosts` names the
+    /// connected endpoints' stable ids plus their boot ids, and `endpoint_ids` names every known
+    /// endpoint's stable id whether connected or not: a name holder whose recorded host is the
+    /// caller's own boot (a pre-stable-key row), or is neither a known endpoint's stable id nor
+    /// live (a boot a restart retired), re-binds. A holder on a known endpoint's stable id keeps
+    /// the name against a claim from another machine, connected or not.
     pub fn register_member(
         &mut self,
         team_id: &str,
         member_id: &str,
         display_name: &str,
         target: &SessionTarget,
-        live_hosts: &[String],
+        hosts: &HostContext,
     ) -> Result<Member> {
+        let HostContext {
+            caller_boot,
+            live_hosts,
+            endpoint_ids,
+        } = &hosts;
         validate("team_id", team_id, MAX_ID_BYTES)?;
         let candidate = Member {
             member_id: member_id.to_owned(),
@@ -203,7 +221,10 @@ impl TeamStore {
             m.display_name.eq_ignore_ascii_case(&candidate.display_name)
                 && m.target.workspace == candidate.target.workspace
                 && m.target.pane == candidate.target.pane
-                && (m.target.host == candidate.target.host || !live_hosts.contains(&m.target.host))
+                && (m.target.host == candidate.target.host
+                    || &m.target.host == caller_boot
+                    || (!endpoint_ids.contains(&m.target.host)
+                        && !live_hosts.contains(&m.target.host)))
         });
         if let Some(existing) = resumed {
             let updated = Member {
@@ -230,37 +251,113 @@ impl TeamStore {
     }
 
     /// Finds the team and member record matching a verified `SessionTarget`.
+    ///
+    /// The recorded host is the member's endpoint's stable id, but rows from
+    /// before that change name the boot id they registered under, and a
+    /// daemon restart rotates boots. A caller whose session, workspace, and
+    /// pane all match a row whose recorded host is their endpoint's current
+    /// boot (`caller_boot`) is that member's session on a pre-stable-key
+    /// row, and so is a row whose recorded host is not the stable id of ANY
+    /// known endpoint (`endpoint_ids`, connected or not) and not live - a
+    /// boot a restart retired. Such a row's host migrates to the caller's
+    /// stable id and the member keeps their id, assignments, and mentions.
+    /// A row naming a known endpoint's stable id only ever matches that
+    /// endpoint exactly: a stable id survives restarts, so a merely
+    /// disconnected machine's row must not be adopted by the same pane id
+    /// from another machine (#40). Exact matches win over migration, the
+    /// candidates are deterministic, and at most one row is written - only
+    /// the one this call returns.
     pub fn find_member_team(
-        &self,
+        &mut self,
         team_id: Option<&str>,
         target: &SessionTarget,
+        hosts: &HostContext,
     ) -> Result<Option<(Team, Member)>> {
-        let team_id = match team_id {
-            Some(id) => Some(id.to_owned()),
-            None => self
-                .db
-                .query_row(
-                    "SELECT team_id FROM members
-                     WHERE host = ?1 AND session = ?2
-                       AND (?3 IS NULL OR workspace = ?3)
-                       AND (?4 IS NULL OR pane = ?4)
-                     ORDER BY team_id LIMIT 1",
-                    params![target.host, target.session, target.workspace, target.pane],
-                    |row| row.get(0),
-                )
-                .optional()?,
+        let HostContext {
+            caller_boot,
+            live_hosts,
+            endpoint_ids,
+        } = &hosts;
+        let adoptable = |host: &String| -> bool {
+            host == caller_boot || (!endpoint_ids.contains(host) && !live_hosts.contains(host))
         };
-        let Some(team_id) = team_id else {
+        let candidates: Vec<String> = match team_id {
+            Some(id) => vec![id.to_owned()],
+            None => {
+                // The host is matched in Rust below, where the live-key rule
+                // can see the caller's boot; session, workspace, and pane
+                // stay the selective anchors. Deterministic order so a
+                // multi-team member always resolves the same way (#48).
+                let mut stmt = self.db.prepare(
+                    "SELECT DISTINCT team_id FROM members
+                     WHERE session = ?1
+                       AND (?2 IS NULL OR workspace = ?2)
+                       AND (?3 IS NULL OR pane = ?3)
+                     ORDER BY team_id",
+                )?;
+                let rows = stmt
+                    .query_map(
+                        params![target.session, target.workspace, target.pane],
+                        |row| row.get(0),
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                drop(stmt);
+                rows
+            }
+        };
+        let mut teams = Vec::with_capacity(candidates.len());
+        for candidate in &candidates {
+            let Some(team) = self.team(candidate)? else {
+                continue;
+            };
+            // Exact matches decide first, across every candidate, so no
+            // migration is written for a row this call will not return.
+            let exact = std::iter::once(&team.supervisor)
+                .chain(team.members.iter())
+                .find(|m| m.target == *target)
+                .cloned();
+            if let Some(member) = exact {
+                return Ok(Some((team, member)));
+            }
+            let stale = std::iter::once(&team.supervisor)
+                .chain(team.members.iter())
+                .filter(|m| {
+                    m.target.session == target.session
+                        && m.target.workspace == target.workspace
+                        && m.target.pane == target.pane
+                })
+                .find(|m| m.target.host != target.host && adoptable(&m.target.host))
+                .map(|record| (team.team_id.clone(), record.clone()));
+            if let Some(found) = stale {
+                teams.push(found);
+            }
+        }
+        let Some((team_id, record)) = teams.first() else {
             return Ok(None);
         };
-        let Some(team) = self.team(&team_id)? else {
-            return Ok(None);
-        };
-        let member = std::iter::once(&team.supervisor)
-            .chain(team.members.iter())
-            .find(|m| m.target == *target)
-            .cloned();
-        Ok(member.map(|m| (team, m)))
+        let team = self
+            .team(team_id)?
+            .ok_or(Error::TeamNotFound(team_id.to_owned()))?;
+        self.migrate_member_host(team_id, &record.member_id, &target.host)?;
+        Ok(Some((
+            team,
+            Member {
+                target: target.clone(),
+                ..record.clone()
+            },
+        )))
+    }
+
+    /// One host column's migration to the stable endpoint id; everything
+    /// else about the member is untouched.
+    fn migrate_member_host(&mut self, team_id: &str, member_id: &str, host: &str) -> Result<()> {
+        let tx = self.db.transaction()?;
+        tx.execute(
+            "UPDATE members SET host = ?1 WHERE team_id = ?2 AND member_id = ?3",
+            params![host, team_id, member_id],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 }
 

@@ -225,7 +225,17 @@ fn team_goal_registration_discovery_and_mention_validation() {
         pane: Some("pane-w-3".into()),
     };
     let registered = store
-        .register_member("team-1", "w-3", "ZCode-1", &new_target, &[])
+        .register_member(
+            "team-1",
+            "w-3",
+            "ZCode-1",
+            &new_target,
+            &HostContext {
+                caller_boot: "local".into(),
+                live_hosts: Vec::new(),
+                endpoint_ids: vec!["local".to_owned()],
+            },
+        )
         .unwrap();
     assert_eq!(registered.display_name, "ZCode-1");
 
@@ -237,7 +247,17 @@ fn team_goal_registration_discovery_and_mention_validation() {
         ..new_target.clone()
     };
     let resumed = store
-        .register_member("team-1", "w-4", "zcode-1", &resumed_target, &[])
+        .register_member(
+            "team-1",
+            "w-4",
+            "zcode-1",
+            &resumed_target,
+            &HostContext {
+                caller_boot: "local".into(),
+                live_hosts: Vec::new(),
+                endpoint_ids: vec!["local".to_owned()],
+            },
+        )
         .unwrap();
     assert_eq!(resumed.member_id, "w-3");
     assert_eq!(resumed.display_name, "zcode-1");
@@ -258,13 +278,31 @@ fn team_goal_registration_discovery_and_mention_validation() {
         ..new_target.clone()
     };
     assert!(matches!(
-        store.register_member("team-1", "w-5", "zcode-1", &stolen_target, &[]),
+        store.register_member(
+            "team-1",
+            "w-5",
+            "zcode-1",
+            &stolen_target,
+            &HostContext {
+                caller_boot: "local".into(),
+                live_hosts: Vec::new(),
+                endpoint_ids: vec!["local".to_owned()],
+            },
+        ),
         Err(Error::DuplicateDisplayName(_))
     ));
 
     // Session discovery finds the team without knowing team_id.
     let (found_team, found_member) = store
-        .find_member_team(None, &resumed_target)
+        .find_member_team(
+            None,
+            &resumed_target,
+            &HostContext {
+                caller_boot: "local".into(),
+                live_hosts: Vec::new(),
+                endpoint_ids: vec!["local".to_owned()],
+            },
+        )
         .unwrap()
         .unwrap();
     assert_eq!(found_team.team_id, "team-1");
@@ -306,7 +344,17 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
         pane: Some("pane-w-3".into()),
     };
     store
-        .register_member("team-1", "w-3", "ZCode-1", &target, &[])
+        .register_member(
+            "team-1",
+            "w-3",
+            "ZCode-1",
+            &target,
+            &HostContext {
+                caller_boot: "boot-old".into(),
+                live_hosts: Vec::new(),
+                endpoint_ids: vec!["local".to_owned()],
+            },
+        )
         .unwrap();
 
     // The daemon rebooted: the caller proves the same workspace and pane
@@ -319,7 +367,17 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
     };
     let live = vec!["boot-new".to_owned()];
     let rebound = store
-        .register_member("team-1", "w-9", "zcode-1", &restarted, &live)
+        .register_member(
+            "team-1",
+            "w-9",
+            "zcode-1",
+            &restarted,
+            &HostContext {
+                caller_boot: "boot-new".into(),
+                live_hosts: live.clone(),
+                endpoint_ids: vec!["local".to_owned()].clone(),
+            },
+        )
         .unwrap();
     assert_eq!(rebound.member_id, "w-3");
     assert_eq!(rebound.display_name, "zcode-1");
@@ -343,7 +401,17 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
     };
     let live = vec!["boot-new".to_owned(), "boot-other".to_owned()];
     assert!(matches!(
-        store.register_member("team-1", "w-10", "zcode-1", &stolen, &live),
+        store.register_member(
+            "team-1",
+            "w-10",
+            "zcode-1",
+            &stolen,
+            &HostContext {
+                caller_boot: "boot-other".into(),
+                live_hosts: live.clone(),
+                endpoint_ids: vec!["local".to_owned()].clone(),
+            },
+        ),
         Err(Error::DuplicateDisplayName(_))
     ));
 
@@ -357,7 +425,17 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
     };
     let live = vec!["boot-new".to_owned()];
     assert!(matches!(
-        store.register_member("team-1", "w-11", "zcode-1", &other_pane, &live),
+        store.register_member(
+            "team-1",
+            "w-11",
+            "zcode-1",
+            &other_pane,
+            &HostContext {
+                caller_boot: "boot-new".into(),
+                live_hosts: live.clone(),
+                endpoint_ids: vec!["local".to_owned()],
+            },
+        ),
         Err(Error::DuplicateDisplayName(_))
     ));
 }

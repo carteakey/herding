@@ -237,7 +237,7 @@ impl Bridge {
     pub(super) fn expire_unreachable_prompts(
         &mut self,
         live_panes: &HashSet<String>,
-    ) -> Vec<String> {
+    ) -> Vec<(String, String)> {
         let Some(team) = self.team.as_ref() else {
             return Vec::new();
         };
@@ -245,7 +245,7 @@ impl Bridge {
         let roster_panes: HashSet<String> =
             roster(team).filter_map(|m| m.target.pane.clone()).collect();
         let now = Instant::now();
-        let mut dropped: Vec<String> = Vec::new();
+        let mut dropped: Vec<(String, String)> = Vec::new();
         let mut dropped_count = 0usize;
         let mut kept = Vec::new();
         for item in self.queued_prompts.drain(..) {
@@ -256,8 +256,8 @@ impl Bridge {
             if unreachable {
                 self.undeliverable += 1;
                 dropped_count += 1;
-                if !dropped.iter().any(|pane| pane == &item.pane_id) {
-                    dropped.push(item.pane_id.clone());
+                if !dropped.iter().any(|(_, pane)| pane == &item.pane_id) {
+                    dropped.push((item.host.clone(), item.pane_id.clone()));
                 }
             } else {
                 kept.push(item);
@@ -267,7 +267,7 @@ impl Bridge {
         if dropped_count > 0 {
             tracing::warn!(
                 count = dropped_count,
-                panes = %dropped.join(", "),
+                panes = %dropped.iter().map(|(_, pane)| pane).cloned().collect::<Vec<_>>().join(", "),
                 "Queued team wakes marked undeliverable: their panes are in neither the roster nor any connected snapshot"
             );
         }

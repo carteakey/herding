@@ -114,6 +114,12 @@ pub(crate) struct Bridge {
     /// team id. Window-local: after a restart the fallback may repeat one
     /// catch-up, which is bounded and rarely wrong to want.
     supervisor_wakes: HashMap<String, VecDeque<String>>,
+    /// Members whose host endpoint is connected but whose recorded pane is
+    /// gone - a daemon restart or a closed pane - keyed by member id with
+    /// the boot that lost them. Window-local: the supervisor wake re-fires
+    /// once per episode, and the roster shows the mark until the member is
+    /// proved again or re-registers.
+    needs_reregister: HashMap<String, String>,
     last_fallback: Option<Instant>,
     last_activity: Option<SharedString>,
     dirty: bool,
@@ -484,6 +490,7 @@ impl Bridge {
                     candidates,
                     self.is_team_paused(),
                     &self.paused_members,
+                    &self.needs_reregister,
                 ),
                 view_posts(team, &self.posts),
                 view_tasks(team, &self.tasks),

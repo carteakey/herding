@@ -118,7 +118,9 @@ fn proves_a_caller_on_a_host_the_window_is_not_showing(cx: &mut gpui::TestAppCon
             .expect("the caller's own daemon proves the session");
 
         assert_eq!(endpoint, 0);
-        assert_eq!(target.host, "boot-local");
+        // The stable host identity is the endpoint's id, not the boot the
+        // daemon happened to report at proof time.
+        assert_eq!(target.host, crate::endpoint::LOCAL);
         assert_eq!(target.session, "agent:opencode:w1X:w1X:p9");
         assert_eq!(target.workspace.as_deref(), Some("w1X"));
         assert_eq!(target.pane.as_deref(), Some("w1X:p9"));
@@ -126,7 +128,7 @@ fn proves_a_caller_on_a_host_the_window_is_not_showing(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
-fn live_boot_ids_collect_the_boots_connected_endpoints_report(cx: &mut gpui::TestAppContext) {
+fn live_host_keys_collect_the_host_keys_connected_endpoints_report(cx: &mut gpui::TestAppContext) {
     with_window(cx, |view| {
         view.endpoints[0].live.status = ConnectionStatus::Connected;
         view.endpoints[0].live.snapshot = Some(Arc::new(snapshot(
@@ -145,19 +147,26 @@ fn live_boot_ids_collect_the_boots_connected_endpoints_report(cx: &mut gpui::Tes
             Some("zcode"),
         )));
 
-        let boots = live_boot_ids(view);
+        let keys = live_host_keys(view);
         assert_eq!(
-            boots,
-            vec!["boot-local".to_owned(), "boot-remote".to_owned()]
+            keys,
+            vec![
+                crate::endpoint::LOCAL.to_owned(),
+                "boot-local".to_owned(),
+                "m2".to_owned(),
+                "boot-remote".to_owned()
+            ]
         );
 
         // A disconnected endpoint's snapshot may show the boot that just
         // died, so it does not count as live; neither does an empty boot.
+        // A connected endpoint still names its stable id regardless.
         view.endpoints[0].live.status = ConnectionStatus::Disconnected;
         view.live.snapshot = Some(Arc::new(snapshot("", "w2", "w2:p1", Some("zcode"))));
-        assert!(
-            live_boot_ids(view).is_empty(),
-            "a disconnected host and an empty boot id name no live boot"
+        assert_eq!(
+            live_host_keys(view),
+            vec!["m2".to_owned()],
+            "a connected endpoint still names its stable id; a disconnected one does not count"
         );
     });
 }
@@ -178,7 +187,7 @@ fn proves_a_caller_on_the_selected_host(cx: &mut gpui::TestAppContext) {
             .expect("the selected daemon proves the session");
 
         assert_eq!(endpoint, 0);
-        assert_eq!(target.host, "boot-selected");
+        assert_eq!(target.host, crate::endpoint::LOCAL);
         assert_eq!(target.session, "agent:codex:w0:w0:p1");
         assert_eq!(target.pane.as_deref(), Some("w0:p1"));
     });

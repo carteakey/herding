@@ -8,6 +8,12 @@ use sheprd_orchestrator::team_store::{Task, Team};
 use std::collections::HashSet;
 use std::time::Instant;
 
+pub(crate) mod reregister;
+
+#[cfg(test)]
+#[path = "host_identity_tests.rs"]
+mod host_identity_tests;
+
 impl SheprdWindow {
     /// The connected endpoint whose snapshot reports `host` as its daemon
     /// boot id. `None` when no connected daemon currently runs that boot:
@@ -17,6 +23,10 @@ impl SheprdWindow {
         if host.is_empty() {
             return None;
         }
+        // A member recorded since the stable-host change names their
+        // endpoint's id, which survives daemon restarts; rows from before
+        // it name the boot they registered under, so the boot the endpoint
+        // currently reports matches those until the daemon restarts.
         self.endpoints
             .iter()
             .enumerate()
@@ -27,10 +37,11 @@ impl SheprdWindow {
                     &endpoint.live
                 };
                 live.status.is_connected()
-                    && live
-                        .snapshot
-                        .as_deref()
-                        .is_some_and(|snapshot| snapshot.boot_id == host)
+                    && (endpoint.id == host
+                        || live
+                            .snapshot
+                            .as_deref()
+                            .is_some_and(|snapshot| snapshot.boot_id == host))
             })
             .map(|(index, _)| index)
     }
@@ -330,16 +341,19 @@ impl SheprdWindow {
             .collect();
         let expired = self.team_bridge.expire_unreachable_prompts(&live_panes);
         if !expired.is_empty() {
+            let dropped: Vec<String> = expired.iter().map(|(_, pane)| pane.clone()).collect();
             tracing::info!(
-                panes = %expired.join(", "),
+                panes = %dropped.join(", "),
                 outcome = "undeliverable",
                 "team wake drain marked wakes undeliverable: no agent in the panes"
             );
             self.team_bridge.last_activity =
-                Some(format!("Marked undeliverable: no agent in {}", expired.join(", ")).into());
+                Some(format!("Marked undeliverable: no agent in {}", dropped.join(", ")).into());
             self.team_bridge.dirty = true;
         }
+        self.reconcile_needs_reregister(&expired, &live_panes);
         let drained = self.team_bridge.drain_unpaused_prompts();
+        let mut unreachable: Vec<(String, String)> = Vec::new();
         for item in drained {
             // A wake pasted while the agent is mid-turn is cleared when the
             // turn ends, so keep it queued until the pane is idle. The drain
@@ -383,15 +397,22 @@ impl SheprdWindow {
                             .mark_supervisor_woken(&team_id, item.signals);
                     }
                 }
-                // Held or unreachable prompts re-enqueued themselves inside
-                // the dispatch, backed off by WAKE_RETRY.
-                PromptOutcome::Held | PromptOutcome::Unreachable => {}
+                // Held prompts re-enqueued themselves inside the dispatch,
+                // backed off by WAKE_RETRY. An unreachable one did too, and
+                // is classified below: its host may be connected with the
+                // pane gone, which is a needs-re-register episode, not a
+                // silent retry loop.
+                PromptOutcome::Held => {}
+                PromptOutcome::Unreachable => {
+                    unreachable.push((item.host, item.pane_id));
+                }
                 PromptOutcome::Unavailable | PromptOutcome::Failed => {
                     self.team_bridge
                         .requeue_prompt(item, Instant::now() + WAKE_RETRY);
                 }
             }
         }
+        self.reconcile_needs_reregister(&unreachable, &live_panes);
     }
 
     pub(crate) fn enqueue_or_dispatch_team_prompt(
@@ -498,12 +519,11 @@ impl SheprdWindow {
         // ACP chats are window-local, so only a member recorded on this
         // window's own daemon may be prompted through one: on another host
         // the same pane id can name a different agent entirely (#40).
-        let local_boot = self
-            .live
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.boot_id.clone());
-        if local_boot.as_deref() == Some(host)
+        let local_id = self
+            .endpoints
+            .get(self.selected_endpoint)
+            .map(|endpoint| endpoint.id.clone());
+        if local_id.as_deref() == Some(host)
             && let Some(chat) = self.chats.pane_mut(pane_id)
             && chat.target.existing.is_none()
             && !chat.session.transcript().read_only

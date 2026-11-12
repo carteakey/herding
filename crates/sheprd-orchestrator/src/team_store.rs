@@ -9,7 +9,7 @@ mod mentions;
 mod tasks;
 
 pub use findings::{Confidence, Finding};
-pub use mentions::{extract_at_tokens, resolve_member_ref, resolve_recipients};
+pub use mentions::{HostContext, extract_at_tokens, resolve_member_ref, resolve_recipients};
 pub use tasks::{Task, TaskCounts, TaskStatus};
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -963,6 +963,10 @@ pub(super) fn ensure_author_in_team<'a>(
 #[cfg(test)]
 #[path = "team_store/departure_tests.rs"]
 mod departure_tests;
+
+#[cfg(test)]
+#[path = "team_store/host_identity_tests.rs"]
+mod host_identity_tests;
 
 #[cfg(test)]
 #[path = "team_store/page_tests.rs"]

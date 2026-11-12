@@ -118,6 +118,8 @@ fn a_status_report_counts_tasks_past_one_page() {
         &mut store,
         "t",
         &caller,
+        &caller.host,
+        &[],
         ScopedAction::Status { team_id: None },
         &[],
     )
@@ -144,6 +146,8 @@ fn a_status_report_issues_the_same_queries_whatever_the_task_count() {
             store,
             "t",
             &caller,
+            &caller.host,
+            &[],
             ScopedAction::Status { team_id: None },
             &[],
         )
@@ -214,6 +218,8 @@ fn scoped_task_and_finding_lists_page_behind_a_cursor() {
         &mut store,
         "t",
         &caller,
+        &caller.host,
+        &[],
         ScopedAction::TaskList {
             before: None,
             limit: page,
@@ -233,6 +239,8 @@ fn scoped_task_and_finding_lists_page_behind_a_cursor() {
         &mut store,
         "t",
         &caller,
+        &caller.host,
+        &[],
         ScopedAction::TaskList {
             before: Some(before),
             limit: page,
@@ -256,6 +264,8 @@ fn scoped_task_and_finding_lists_page_behind_a_cursor() {
         &mut store,
         "t",
         &caller,
+        &caller.host,
+        &[],
         ScopedAction::FindingList {
             before: None,
             limit: page,

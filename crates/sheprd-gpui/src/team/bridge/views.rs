@@ -78,6 +78,7 @@ pub(crate) fn members(
     candidates: &[PaneCandidate],
     team_paused: bool,
     paused_members: &HashSet<String>,
+    needs_reregister: &HashMap<String, String>,
 ) -> Vec<TeamMember> {
     roster(team)
         .map(|member| {
@@ -108,9 +109,15 @@ pub(crate) fn members(
                     .map(|c| c.identity.clone())
                     .or_else(|| pane.filter(|_| live)),
                 target_pane,
-                status: matched
-                    .map(|c| c.status.clone())
-                    .unwrap_or_else(|| fl!("team-status-unavailable").into()),
+                status: if needs_reregister.contains_key(&member.member_id) {
+                    // Their host is connected but their recorded pane is
+                    // gone: a wake pasted there could only fail.
+                    fl!("team-status-reregister").into()
+                } else {
+                    matched
+                        .map(|c| c.status.clone())
+                        .unwrap_or_else(|| fl!("team-status-unavailable").into())
+                },
                 supervisor,
                 paused: team_paused || paused_members.contains(&member.member_id),
             }

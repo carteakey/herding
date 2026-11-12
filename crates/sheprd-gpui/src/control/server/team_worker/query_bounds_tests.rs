@@ -102,6 +102,8 @@ fn a_status_report_issues_the_same_queries_whatever_the_post_count() {
             store,
             "t",
             &caller,
+            &caller.host,
+            &[],
             ScopedAction::Status { team_id: None },
             &[],
         )

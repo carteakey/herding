@@ -326,3 +326,80 @@ fn an_unrendered_pane_on_a_remote_endpoint_is_observed_and_stalls(cx: &mut TestA
         })
         .expect("the window stays open");
 }
+
+/// The false-stall bug the review caught: an endpoint's remembered pane
+/// revisions used to outlive its connection, so frozen counters kept feeding
+/// the clock and a member on a host that was merely disconnected was
+/// claimed stalled. Retention drops the endpoint's panes with its
+/// connection, and the member becomes unobservable instead.
+#[gpui::test]
+fn a_member_on_a_disconnected_endpoint_is_never_claimed_stalled(cx: &mut TestAppContext) {
+    cx.add_window(fixture_window)
+        .update(cx, |view, _, _| {
+            show_local(view, "ws:p2", 1);
+            let mut remote_live = LiveState::default();
+            remote_live.status = ConnectionStatus::Connected;
+            remote_live.snapshot = Some(Arc::new(remote_snapshot("m1:p2")));
+            let mut remote = Endpoint::new(
+                "m1".into(),
+                "m1".into(),
+                ConnectTarget::Ssh {
+                    target: "m1".into(),
+                    session: "default".into(),
+                },
+                true,
+            );
+            remote.never_connect();
+            remote.live = remote_live;
+            view.endpoints.push(remote);
+
+            let mut team = team();
+            team.members = vec![member_on("boot-m1", "w2", "m1:p2")];
+            let mut task = held_task();
+            task.assignee = Some("w2".into());
+            view.team_bridge.set_team_for_test(team);
+            view.team_bridge.tasks = vec![task];
+
+            let start = Instant::now();
+            view.track_team_stalls(start);
+            view.track_team_stalls(start + TIMEOUT);
+            assert!(
+                view.team_stall_for_pane("m1:p2").is_none(),
+                "without the poll's answer the unrendered pane is unobservable"
+            );
+
+            // The poll answers while the endpoint is connected, and the
+            // member's frozen revision stalls over the next full window.
+            view.stall_pane_lists
+                .observe_pane_list_for_test("m1", &[("m1:p2", 5)]);
+            view.track_team_stalls(start + TIMEOUT + Duration::from_secs(1));
+            view.track_team_stalls(start + TIMEOUT * 2 + Duration::from_secs(1));
+            assert!(
+                view.team_stall_for_pane("m1:p2").is_some(),
+                "a frozen revision over the whole window is a stall"
+            );
+            assert_eq!(view.team_bridge.queued_count_for_test(), 1);
+
+            // The endpoint goes down. Its remembered revisions leave with
+            // the connection, so the member is unobservable: the detection
+            // is dropped instead of being fed frozen counters, and no new
+            // wake is claimed about a host that is merely disconnected.
+            let remote = view
+                .endpoints
+                .iter_mut()
+                .find(|endpoint| endpoint.id == "m1")
+                .expect("the remote endpoint was pushed");
+            remote.live.status = ConnectionStatus::Disconnected;
+            view.track_team_stalls(start + TIMEOUT * 2 + Duration::from_secs(2));
+            assert!(
+                view.team_stall_for_pane("m1:p2").is_none(),
+                "an unobservable member is not judged"
+            );
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the stall already reported stands; nothing new is claimed"
+            );
+        })
+        .expect("the window stays open");
+}

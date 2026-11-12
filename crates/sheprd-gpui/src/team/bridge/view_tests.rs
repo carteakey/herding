@@ -1,6 +1,6 @@
 //! The snapshot never shows delivery receipts for members who left.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 use crate::team::model::DeliveryState;
@@ -162,7 +162,7 @@ fn members_carry_the_configured_target_even_when_offline() {
         supervisor: member("lead"),
         members: vec![member("peer")],
     };
-    let members = members(&team, &[], false, &HashSet::new());
+    let members = members(&team, &[], false, &HashSet::new(), &HashMap::new());
 
     assert_eq!(members.len(), 2);
     let peer = match members.iter().find(|m| m.member_id == "peer") {

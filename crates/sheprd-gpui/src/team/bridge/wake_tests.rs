@@ -190,7 +190,7 @@ fn an_unreachable_wake_waits_out_its_retry_then_is_marked_undeliverable() {
     let dropped = bridge.expire_unreachable_prompts(&HashSet::new());
     assert_eq!(
         dropped,
-        vec!["p_sup".to_string()],
+        vec![("local".to_string(), "p_sup".to_string())],
         "the vanished pane is named"
     );
     assert_eq!(bridge.queued_count(), 0, "the wake is not kept forever");

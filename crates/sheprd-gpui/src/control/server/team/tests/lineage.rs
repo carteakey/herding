@@ -209,7 +209,20 @@ fn the_walk_anchors_above_a_kind_carrying_wrapper_shell() {
         )
         .replace('\0', " ")
     };
-    assert!(cmdline(wrapper_pid).contains(marker));
+    // The wrapper's pid is printed before its shell has replaced itself
+    // with the marker-carrying command line, so wait for that exec instead
+    // of racing it.
+    let wrapper_cmdline = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let line = cmdline(wrapper_pid);
+            if line.contains(marker) || std::time::Instant::now() >= deadline {
+                break line;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    assert!(wrapper_cmdline.contains(marker));
     assert!(cmdline(agent.id()).contains(marker));
 
     let anchored =

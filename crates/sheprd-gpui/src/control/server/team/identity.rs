@@ -153,23 +153,31 @@ pub(super) fn live_at(view: &SheprdWindow, index: usize) -> Option<&LiveState> {
     }
 }
 
-/// The boot ids the window currently sees across its connected endpoints.
-/// A member whose recorded boot is absent from this set registered before
-/// the last daemon restart of its machine, so its name may re-bind to a
-/// caller that proves the same pane on a live boot. A disconnected
-/// endpoint's snapshot may still show the boot that just died, so only
-/// connected projections count.
-pub(super) fn live_boot_ids(view: &SheprdWindow) -> Vec<String> {
+/// The host keys the window currently sees across its connected endpoints:
+/// each endpoint's stable id plus the boot id its daemon currently reports.
+/// A member whose recorded host is absent from this set registered on a
+/// boot that no longer exists (a daemon restart, or a pre-stable-key row),
+/// so their name may re-bind to a caller that proves the same pane on a
+/// live host. A disconnected endpoint's snapshot may still show the boot
+/// that just died, so only connected projections count.
+pub(super) fn live_host_keys(view: &SheprdWindow) -> Vec<String> {
     let mut hosts = Vec::new();
     for index in 0..view.endpoints.len() {
-        let Some(snapshot) = live_at(view, index)
-            .filter(|live| live.status.is_connected())
-            .and_then(|live| live.snapshot.as_deref())
-            .filter(|snapshot| !snapshot.boot_id.is_empty())
-        else {
+        let Some(live) = live_at(view, index).filter(|live| live.status.is_connected()) else {
             continue;
         };
-        if !hosts.contains(&snapshot.boot_id) {
+        // The stable id is live while the endpoint is, whatever the snapshot
+        // is doing; the boot only counts when the snapshot names one.
+        let id = &view.endpoints[index].id;
+        if !hosts.contains(id) {
+            hosts.push(id.clone());
+        }
+        if let Some(snapshot) = live
+            .snapshot
+            .as_deref()
+            .filter(|snapshot| !snapshot.boot_id.is_empty())
+            && !hosts.contains(&snapshot.boot_id)
+        {
             hosts.push(snapshot.boot_id.clone());
         }
     }
@@ -221,9 +229,14 @@ pub(super) fn current_identity(
             "No active agent session or attached ACP transcript proves this caller's pane",
         )
     })?;
+    // The stable host identity is the endpoint's own id, the same key the
+    // delivery origin routes by: a daemon restart rotates its boot id, and
+    // a member recorded under the boot would go dark until it registered
+    // again (issue #40's follow-up). Boot ids remain meaningful only as the
+    // change detector in `find_member_team` and `endpoint_for_host`.
     Ok((
         SessionTarget {
-            host: herdr.snapshot.boot_id.clone(),
+            host: view.endpoints[found.index].id.clone(),
             session,
             workspace: Some(found.workspace.id.clone()),
             pane: Some(pane.to_owned()),

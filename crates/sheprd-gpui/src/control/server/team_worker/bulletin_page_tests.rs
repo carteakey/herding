@@ -54,6 +54,8 @@ fn list(store: &mut TeamStore, after: Option<i64>) -> (Vec<i64>, Option<i64>) {
             workspace: Some("w".into()),
             pane: Some("p2".into()),
         },
+        "boot",
+        &[],
         ScopedAction::BulletinList { after, limit: 100 },
         &[],
     )

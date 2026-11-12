@@ -145,6 +145,8 @@ fn a_board_full_of_command_line_work_leaves_the_team_and_its_members() {
             Operation::Scoped {
                 team_id: "t".into(),
                 caller: worker.clone(),
+                caller_boot: worker.host.clone(),
+                endpoint_ids: Vec::new(),
                 action,
                 live_hosts: Vec::new(),
             },
@@ -196,6 +198,8 @@ fn only_the_confirmed_panel_action_deletes_a_team() {
             Operation::Scoped {
                 team_id: "t".into(),
                 caller: target(2),
+                caller_boot: target(2).host,
+                endpoint_ids: Vec::new(),
                 action,
                 live_hosts: Vec::new(),
             },

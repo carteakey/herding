@@ -6,8 +6,8 @@
 //! after an accepted mutation does not cancel that mutation; the caller's
 //! outcome is unknown until it reads the reply.
 use sheprd_orchestrator::team_store::{
-    self, Acknowledgement, Author, Confidence, Finding, Member, Post, RecipientStatus, Recipients,
-    SessionTarget, Task, Team, TeamStore,
+    self, Acknowledgement, Author, Confidence, Finding, HostContext, Member, Post, RecipientStatus,
+    Recipients, SessionTarget, Task, Team, TeamStore,
 };
 use std::{
     path::PathBuf,
@@ -109,11 +109,18 @@ pub(crate) enum Operation {
         before: i64,
         limit: usize,
     },
-    /// An agent call. The caller's freshly proven target must equal a stored
+    /// An agent call. The caller's freshly proven target must match a stored
     /// member's target; the worker never trusts a member ID from the wire.
+    /// `caller_boot` is the boot the caller's endpoint currently reports, so
+    /// a member recorded under that boot (a pre-stable-key row) still
+    /// matches and migrates to the stable id. `endpoint_ids` names every
+    /// known endpoint's stable id, connected or not, so migration never
+    /// adopts a row that names a merely disconnected machine.
     Scoped {
         team_id: String,
         caller: SessionTarget,
+        caller_boot: String,
+        endpoint_ids: Vec<String>,
         action: ScopedAction,
         live_hosts: Vec<String>,
     },
@@ -591,9 +598,19 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
         Operation::Scoped {
             team_id,
             caller,
+            caller_boot,
+            endpoint_ids,
             action,
             live_hosts,
-        } => scoped(store, &team_id, &caller, action, &live_hosts)?,
+        } => scoped(
+            store,
+            &team_id,
+            &caller,
+            &caller_boot,
+            &endpoint_ids,
+            action,
+            &live_hosts,
+        )?,
     };
     Ok(reply)
 }
@@ -676,16 +693,24 @@ fn page_cursor(page: &[(i64, impl Sized)], limit: usize) -> Option<i64> {
     page.first().map(|(sequence, _)| *sequence)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scoped(
     store: &mut TeamStore,
     team_id: &str,
     caller: &SessionTarget,
+    caller_boot: &str,
+    endpoint_ids: &[String],
     action: ScopedAction,
     live_hosts: &[String],
 ) -> Result<Reply, Error> {
     if let ScopedAction::Register { name } = action {
         let member_id = uuid::Uuid::new_v4().to_string();
-        let member = store.register_member(team_id, &member_id, &name, caller, live_hosts)?;
+        let hosts = HostContext {
+            caller_boot: caller_boot.to_owned(),
+            live_hosts: live_hosts.to_vec(),
+            endpoint_ids: endpoint_ids.to_vec(),
+        };
+        let member = store.register_member(team_id, &member_id, &name, caller, &hosts)?;
         let team = store.team(team_id)?.ok_or(Error::NotMember)?;
         return Ok(Reply::ScopedRegistered { team, member });
     }
@@ -694,8 +719,13 @@ fn scoped(
             .as_deref()
             .filter(|id| !id.trim().is_empty())
             .or_else(|| (!team_id.trim().is_empty()).then_some(team_id));
+        let hosts = HostContext {
+            caller_boot: caller_boot.to_owned(),
+            live_hosts: live_hosts.to_vec(),
+            endpoint_ids: endpoint_ids.to_vec(),
+        };
         let (team, member) = store
-            .find_member_team(filter, caller)?
+            .find_member_team(filter, caller, &hosts)?
             .ok_or(Error::NotMember)?;
         let goal = store.team_goal(&team.team_id)?;
         // One COUNT over the mention table instead of scanning every post
@@ -713,12 +743,15 @@ fn scoped(
             assigned_tasks: counts.assigned,
         });
     }
-    let team = store.team(team_id)?.ok_or(Error::NotMember)?;
-    let member_id = std::iter::once(&team.supervisor)
-        .chain(team.members.iter())
-        .find(|member| member.target == *caller)
-        .map(|member| member.member_id.clone())
+    let hosts = HostContext {
+        caller_boot: caller_boot.to_owned(),
+        live_hosts: live_hosts.to_vec(),
+        endpoint_ids: endpoint_ids.to_vec(),
+    };
+    let (team, member) = store
+        .find_member_team(Some(team_id), caller, &hosts)?
         .ok_or(Error::NotMember)?;
+    let member_id = member.member_id;
     let actor = Author::Member {
         member_id: member_id.clone(),
     };

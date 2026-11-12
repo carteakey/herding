@@ -25,8 +25,8 @@ mod projection;
 
 use dispatch::notify_team_mutation;
 use identity::{
-    PeerBindings, agent_lineage, check_peer, current_identity, live_boot_ids, pane_agents,
-    process_info,
+    PeerBindings, agent_lineage, check_peer, current_identity, live_at, live_host_keys,
+    pane_agents, process_info,
 };
 pub(crate) use identity::{ProcessIdentity, prove_pane_session_at};
 use projection::{invalid, page_limit, reply_response, valid_id, validate_post, worker_error};
@@ -369,17 +369,29 @@ pub(super) fn serve(
                 | ScopedAction::TaskCancel { .. }
                 | ScopedAction::FindingAdd { .. }
         );
-        // Registration is the one call that may re-bind a stale name
-        // holder, so it carries the boots the window currently sees: a
-        // holder whose boot is gone was left behind by a daemon restart.
-        let live_hosts = if registering {
-            live_boot_ids(view)
-        } else {
-            Vec::new()
+        // Every call carries the host keys the window currently sees, every
+        // known endpoint's stable id, and the caller's own boot: identity
+        // matches migrate a member recorded under a retired boot to their
+        // endpoint's stable id, and a stale name holder re-binds only while
+        // its host is not a known endpoint - a machine that is merely
+        // disconnected must not be adopted cross-host.
+        let live_hosts = live_host_keys(view);
+        let endpoint_ids: Vec<String> = view
+            .endpoints
+            .iter()
+            .map(|endpoint| endpoint.id.clone())
+            .collect();
+        let caller_boot = {
+            let live = live_at(view, endpoint).filter(|live| live.status.is_connected());
+            live.and_then(|live| live.snapshot.as_deref())
+                .map(|snapshot| snapshot.boot_id.clone())
+                .unwrap_or_default()
         };
         let op = Operation::Scoped {
             team_id,
             caller: target,
+            caller_boot,
+            endpoint_ids,
             action,
             live_hosts,
         };

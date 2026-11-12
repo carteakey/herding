@@ -3,6 +3,22 @@
 Status: proposal, 2026-11-12. Nothing here is decided until the spikes below
 report. It extends the companion-daemon plan in `docs/herding-team-review.md`.
 
+## Target shape
+
+```
+ UI layer (pick one or more)       Herding window · Herdr app mod · herding team CLI
+            │
+ Teams service (ours)               store, board, bulletin, wake queue, roles
+            │  hc send / hc machine
+ herdr-core (Herdr's, unmodified)   terminals, agents, machines, status
+```
+
+The Teams service runs beside herdr-core as its client, never inside it. The UI
+layer is a choice: Herding's Teams window, a mod in Herdr's official app, or
+both. Agents reach Teams through the `herding team` CLI whichever app is in
+front. Open: one service on the supervisor's host as the single authority, or
+one per host that syncs.
+
 ## What is ours
 
 Three things sit in this stack, and only one is this fork's own work:

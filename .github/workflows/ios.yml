@@ -37,6 +37,9 @@ concurrency:
 jobs:
   check:
     name: Swift tests and simulator build
+    # Off on the fork: macOS minutes are costly on GitHub Free, and the fork
+    # runs only the commit-message and Linux checks jobs (AGENTS.md).
+    if: false
     runs-on: macos-26
     timeout-minutes: 30
     permissions:

@@ -326,6 +326,7 @@ impl SheprdWindow {
             sound: Default::default(),
             split_cursor: None,
             split_drag: None,
+            stall_pane_lists: Default::default(),
             status_bar_visible,
             strip_navigation_fits: true,
             surface_signal,

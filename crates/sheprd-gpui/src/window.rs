@@ -399,6 +399,7 @@ pub(crate) struct SheprdWindow {
     /// The resize cursor of the pane border under the pointer, if any.
     pub(crate) split_cursor: Option<CursorStyle>,
     pub(crate) split_drag: Option<mouse::SplitDrag>,
+    pub(crate) stall_pane_lists: crate::team::bridge::prompts::stall::pane_list::PaneListPolls,
     /// Starts as `config.status_bar.show`; Toggle Status Bar flips it for the
     /// session, and a reload that changes the setting applies it again.
     pub(crate) status_bar_visible: bool,

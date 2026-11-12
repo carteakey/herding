@@ -689,6 +689,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<SheprdWindow>
         team_actions: Default::default(),
         team_bridge: Default::default(),
         team_stalls: crate::team::bridge::prompts::StallTracker::new(),
+        stall_pane_lists: Default::default(),
         team_view,
         notes_width: crate::panel_resize::NOTES,
         notice_overflow: Default::default(),

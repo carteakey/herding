@@ -13,11 +13,15 @@ use sheprd_orchestrator::team_store::{Author, Member, SessionTarget, Task, TaskS
 use std::sync::Arc;
 
 fn member(id: &str, pane: &str) -> Member {
+    member_on("boot-local", id, pane)
+}
+
+fn member_on(host: &str, id: &str, pane: &str) -> Member {
     Member {
         member_id: id.to_owned(),
         display_name: id.to_owned(),
         target: SessionTarget {
-            host: "boot-local".into(),
+            host: host.into(),
             session: format!("agent:zcode:ws:{id}"),
             workspace: Some("ws".into()),
             pane: Some(pane.into()),
@@ -150,6 +154,42 @@ fn show_local(view: &mut SheprdWindow, pane: &str, seq: u64) {
     view.live.surface = Some(Arc::new(frame(pane, seq)));
 }
 
+/// The remote endpoint's snapshot: an idle agent the window never renders.
+fn remote_snapshot(pane: &str) -> ClientShellSnapshot {
+    let agents = vec![serde_json::json!({
+        "pane_id": pane, "workspace_id": "ws", "tab_id": "t0",
+        "display_agent": "zcode", "agent": "zcode", "agent_status": "idle",
+        "state_change_seq": 1, "state_labels": [], "tokens": [], "focused": false
+    })];
+    serde_json::from_value(serde_json::json!({
+        "boot_id": "boot-m1", "revision": 1,
+        "update_install_command": "",
+        "latest_release_notes_available": false,
+        "integration_updates_available": false,
+        "worktree_directory": "",
+        "tab_bar_right": [],
+        "tab_bar_right_separator": "",
+        "agent_order": [],
+        "workspaces": [{
+            "workspace_id": "ws", "active_tab_id": "t0", "new_workspace_cwd": "",
+            "number": 1, "label": "ws", "custom_label": false,
+            "tokens": [], "focused": false, "agent_status": "idle"
+        }],
+        "tabs": [{
+            "tab_id": "t0", "workspace_id": "ws", "number": 1, "label": "tab",
+            "custom_label": false, "zoomed": false, "focused": false,
+            "agent_status": "idle"
+        }],
+        "panes": [{
+            "pane_id": pane, "workspace_id": "ws", "tab_id": "t0",
+            "focused": false, "right_click_passthrough": false
+        }],
+        "agents": agents,
+        "commands": []
+    }))
+    .expect("test snapshot is valid")
+}
+
 /// Fresh output: a new content revision in the surface frame, while the
 /// snapshot's agent state stays whatever it was.
 fn redraw(view: &mut SheprdWindow, pane: &str, content_revision: u64) {
@@ -215,6 +255,74 @@ fn a_recovery_clears_the_stall_and_a_restall_rewakes(cx: &mut TestAppContext) {
             let record = view.team_stall_for_pane("ws:p2").expect("stalled again");
             assert_ne!(record.signal("t"), "stall|t|t-1|w1|1");
             assert_eq!(view.team_bridge.queued_count_for_test(), 2);
+        })
+        .expect("the window stays open");
+}
+
+/// A remote member whose pane the window never renders: the surface frame
+/// says nothing about them, and the pane-list poll is their only observer.
+/// Finding 736a1b22: without the poll they were never claimed stalled, which
+/// covered most of a multi-machine fleet's workers.
+#[gpui::test]
+fn an_unrendered_pane_on_a_remote_endpoint_is_observed_and_stalls(cx: &mut TestAppContext) {
+    cx.add_window(fixture_window)
+        .update(cx, |view, _, _| {
+            show_local(view, "ws:p2", 1);
+            // A connected SSH endpoint whose daemon shows the member's pane;
+            // the endpoint carries no surface frame for it, because the
+            // window does not render remote panes.
+            let mut remote_live = LiveState::default();
+            remote_live.status = ConnectionStatus::Connected;
+            remote_live.snapshot = Some(Arc::new(remote_snapshot("m1:p2")));
+            let mut remote = Endpoint::new(
+                "m1".into(),
+                "m1".into(),
+                ConnectTarget::Ssh {
+                    target: "m1".into(),
+                    session: "default".into(),
+                },
+                true,
+            );
+            remote.never_connect();
+            remote.live = remote_live;
+            view.endpoints.push(remote);
+
+            let mut team = team();
+            team.members = vec![member_on("boot-m1", "w2", "m1:p2")];
+            let mut task = held_task();
+            task.assignee = Some("w2".into());
+            view.team_bridge.set_team_for_test(team);
+            view.team_bridge.tasks = vec![task];
+
+            let start = Instant::now();
+            view.track_team_stalls(start);
+            view.track_team_stalls(start + TIMEOUT);
+            assert!(
+                view.team_stall_for_pane("m1:p2").is_none(),
+                "without the pane-list poll the unrendered pane is unobservable, so no stall is claimed"
+            );
+
+            // The poll's answer: the remote daemon reports every pane's
+            // content revision, and this one's counter sits frozen.
+            view.stall_pane_lists
+                .observe_pane_list_for_test("m1", &[("m1:p2", 5)]);
+            view.track_team_stalls(start + TIMEOUT + Duration::from_secs(1));
+            assert!(
+                view.team_stall_for_pane("m1:p2").is_none(),
+                "the poll seeds the output clock; silence is measured from its first answer"
+            );
+
+            view.track_team_stalls(start + TIMEOUT * 2 + Duration::from_secs(1));
+            let record = view
+                .team_stall_for_pane("m1:p2")
+                .expect("the remote member is stalled once the poll has watched a full window");
+            assert_eq!(record.task_id, "t-1");
+            assert_eq!(view.team_bridge.queued_count_for_test(), 1);
+
+            // The same stall re-offered keeps one wake: the frozen signal
+            // dedupes at the queue.
+            view.track_team_stalls(start + TIMEOUT * 2 + Duration::from_secs(10));
+            assert_eq!(view.team_bridge.queued_count_for_test(), 1);
         })
         .expect("the window stays open");
 }

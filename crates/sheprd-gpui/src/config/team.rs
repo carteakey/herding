@@ -6,6 +6,10 @@ use serde::Deserialize;
 /// which only produces noise.
 pub(crate) const MIN_STALL_TIMEOUT_SECONDS: u64 = 30;
 
+/// The lower bound of the pane-list poll cadence: below this the daemons are
+/// asked for every pane's revision more often than the answer can matter.
+pub(crate) const MIN_PANE_LIST_POLL_SECONDS: u64 = 5;
+
 /// The `[teams]` table.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 pub(crate) struct TeamConfig {
@@ -14,12 +18,19 @@ pub(crate) struct TeamConfig {
     /// Defaults to three minutes; issue #56's stall detection.
     #[serde(default, deserialize_with = "crate::lenient::or_default")]
     pub(crate) stall_timeout_seconds: u64,
+    /// How often each connected endpoint's daemon is asked for every pane's
+    /// content revision, so stall detection observes panes the window does
+    /// not render. Defaults to ten seconds.
+    #[serde(default, deserialize_with = "crate::lenient::or_default")]
+    pub(crate) stall_pane_list_seconds: u64,
 }
 
 impl Default for TeamConfig {
     fn default() -> Self {
         Self {
             stall_timeout_seconds: crate::team::bridge::prompts::stall::DEFAULT_STALL_TIMEOUT
+                .as_secs(),
+            stall_pane_list_seconds: crate::team::bridge::prompts::stall::DEFAULT_PANE_LIST_POLL
                 .as_secs(),
         }
     }
@@ -29,6 +40,11 @@ impl TeamConfig {
     /// The effective timeout, never below the noise floor.
     pub(crate) fn stall_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.stall_timeout_seconds.max(MIN_STALL_TIMEOUT_SECONDS))
+    }
+
+    /// The effective pane-list poll cadence, never below its floor.
+    pub(crate) fn pane_list_poll(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.stall_pane_list_seconds.max(MIN_PANE_LIST_POLL_SECONDS))
     }
 }
 

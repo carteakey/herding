@@ -24,13 +24,41 @@ use super::{PromptDispatch, PromptOutcome, team_cli_prefix};
 use crate::SheprdWindow;
 use crate::i18n::fl;
 use crate::team::bridge::views::roster;
+use sheprd_client::ConnectTarget;
 use sheprd_client::protocol::AgentStatus;
 use sheprd_orchestrator::team_store::{Member, Task, TaskStatus};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use pane_list::PaneListTarget;
+
 /// The default stall timeout: three minutes of silence on both signals.
 pub(crate) const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(3 * 60);
+
+/// How often each connected endpoint's daemon is asked for every pane's
+/// content revision: the surface frame covers only the panes the window
+/// renders, and this poll covers the rest, background tabs included
+/// (finding 736a1b22).
+pub(crate) const DEFAULT_PANE_LIST_POLL: Duration = Duration::from_secs(10);
+
+/// How a connected endpoint's daemon is asked for its pane revisions, when
+/// the CLI can address it at all: a custom client socket, WSL, and cloud
+/// hosts have no CLI route here, so their panes stay surface-frame-only.
+fn pane_list_target(target: &ConnectTarget) -> Option<PaneListTarget> {
+    match target {
+        ConnectTarget::Local => Some(PaneListTarget::Local { session: None }),
+        ConnectTarget::Session { name, .. } => Some(PaneListTarget::Local {
+            session: Some(name.clone()),
+        }),
+        ConnectTarget::Ssh { target, session } => Some(PaneListTarget::Ssh {
+            target: target.clone(),
+            session: Some(session.clone()),
+        }),
+        ConnectTarget::Socket(_) | ConnectTarget::Wsl { .. } => None,
+        #[cfg(feature = "cloud")]
+        ConnectTarget::Cloud { .. } => None,
+    }
+}
 
 /// How much longer a pane the daemon reports `Working` may sit silent before
 /// it is stalled: a compile or a long tool run redraws nothing, so the plain
@@ -245,7 +273,8 @@ impl SheprdWindow {
     /// through the ordinary dispatch, so busy holds queue and retry them,
     /// and the signal keeps the drain's ledger from repeating one.
     pub(crate) fn track_team_stalls(&mut self, now: Instant) {
-        self.observe_team_pane_output(now);
+        let pane_list_poll = self.config.teams.pane_list_poll();
+        self.observe_team_pane_output(now, pane_list_poll);
         let Some(team) = self.team_bridge.team.clone() else {
             self.team_stalls.stalled.clear();
             return;
@@ -314,8 +343,46 @@ impl SheprdWindow {
         }
     }
 
-    fn observe_team_pane_output(&mut self, now: Instant) {
-        let panes: Vec<_> = self
+    fn observe_team_pane_output(&mut self, now: Instant, pane_list_poll: Duration) {
+        // The polls fire ahead of the union, so an answer that just landed
+        // counts this tick; each endpoint is asked at most once per
+        // PANE_LIST_POLL, on the worker thread, never on this tick.
+        let requests = self
+            .endpoints
+            .iter()
+            .filter(|endpoint| endpoint.live.status.is_connected())
+            .map(|endpoint| {
+                (
+                    endpoint.id.clone(),
+                    pane_list_target(&endpoint.connection.target),
+                )
+            });
+        let updates = self.stall_pane_lists.poll(requests, now, pane_list_poll);
+        for update in updates {
+            match &update.panes {
+                Err(error) => tracing::warn!(
+                    endpoint = %update.endpoint,
+                    %error,
+                    "team stall pane-list poll failed; the next window retries and the endpoint's panes stay unobservable"
+                ),
+                Ok(panes) if panes.is_empty() => tracing::info!(
+                    endpoint = %update.endpoint,
+                    outcome = "empty",
+                    "team stall pane-list poll answered with no panes"
+                ),
+                Ok(panes) => tracing::info!(
+                    endpoint = %update.endpoint,
+                    panes = panes.len(),
+                    "team stall pane-list poll observed every pane's revision"
+                ),
+            }
+        }
+        // Surface frames cover the panes this window renders; the pane-list
+        // poll covers every pane of the daemons the CLI can address. Their
+        // union is one observation, so a pane either source reports keeps
+        // its output clock, and a pane neither reports is unobservable - no
+        // stall is claimed on it.
+        let rendered: Vec<(String, u64)> = self
             .endpoints
             .iter()
             .enumerate()
@@ -328,9 +395,14 @@ impl SheprdWindow {
                 live.surface.as_ref().map(|frame| &frame.panes)
             })
             .flatten()
-            .map(|pane| (pane.pane_id.as_str(), pane.content_revision))
+            .map(|pane| (pane.pane_id.clone(), pane.content_revision))
             .collect();
-        self.team_stalls.observe_panes(panes, now);
+        let polled: Vec<(&str, u64)> = self.stall_pane_lists.panes().collect();
+        let merged = rendered
+            .iter()
+            .map(|(pane, revision)| (pane.as_str(), *revision))
+            .chain(polled);
+        self.team_stalls.observe_panes(merged, now);
     }
 }
 
@@ -338,6 +410,8 @@ impl SheprdWindow {
 pub(crate) fn stalled_label() -> String {
     fl!("team-status-stalled")
 }
+
+pub(crate) mod pane_list;
 
 #[cfg(test)]
 mod tests;

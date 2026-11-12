@@ -87,6 +87,33 @@ Root cause: `deliver_team_prompt` returns `Kept` for a pane it cannot prove,
 and the #17 path maps that to `Held` and re-enqueues with no backoff; the
 direct dispatch path also logs nothing on failure. Tracked in issue #35.
 
+## Supervisor playbook (cost-aware supervision)
+
+A team often pairs one expensive supervisor model with cheaper workers. Routing
+only saves tokens when the supervisor stays thin: workers write the code, the
+supervisor sets the spec and the gate.
+
+1. **Tiered review.** Review the full diff only for risky surfaces: the team
+   store, wake delivery, protocol, and security. For tests, docs, CLI text, and
+   refactors, accept green CI plus the worker's structured report.
+2. **Structured completion report.** Review the report, not the work (see the
+   Worker rule below). Send a worker back when a field is missing.
+3. **Delegate diagnosis.** "Investigate X, report root cause and evidence" is a
+   task for a worker. Do not read source, logs, or pane output yourself to find
+   a cause.
+4. **Do not poll panes.** Read a pane only when the watcher or `team heartbeat`
+   flags a stall. Use the board and bulletin otherwise.
+5. **CI is the gate.** Check `gh pr checks` for a real result; a `skipping` job
+   verified nothing and is not a pass (AGENTS.md, Verification).
+
+## Worker rule: always post the structured report
+
+When you complete a task, include in `--result` (and on the bulletin for a
+branch handoff): the branch and tip commit, the diff stat, the exact commands
+run with their results or counts, what was not run, and the remaining risks.
+A reviewer relies on this report instead of redoing your work, so never claim
+a check that did not run.
+
 ## Commit and push
 
 Work on a branch and keep `main` untouched. Do not commit, push, or open a PR

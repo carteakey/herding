@@ -44,3 +44,19 @@ fn team_skill_install_refresh_and_removal_preserve_user_files() {
         "personal team skill"
     );
 }
+
+#[test]
+fn team_skill_has_the_supervisor_playbook_and_worker_report_rule() {
+    assert!(TEAM.contains("## Supervisor playbook"));
+    for rule in [
+        "**Tiered review.**",
+        "**Structured completion report.**",
+        "**Delegate diagnosis.**",
+        "**Do not poll panes.**",
+        "**CI is the gate.**",
+        "a `skipping` job",
+    ] {
+        assert!(TEAM.contains(rule), "missing supervisor rule: {rule}");
+    }
+    assert!(TEAM.contains("## Worker rule: always post the structured report"));
+}

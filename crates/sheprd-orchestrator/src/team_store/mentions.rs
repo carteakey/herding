@@ -2,8 +2,8 @@
 
 use super::{
     Author, Error, MAX_ID_BYTES, MAX_MEMBERS, MAX_MENTIONS, MAX_TEXT_BYTES, Member, Recipients,
-    Result, SessionTarget, Team, TeamStore, insert_member, now_stamp, read_member, validate,
-    validate_member,
+    Result, SessionTarget, Team, TeamStore, identity, insert_member, now_stamp, read_member,
+    validate, validate_member,
 };
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
@@ -85,6 +85,7 @@ impl TeamStore {
              WHERE team_id = ?1 AND assignee_id = ?2",
             params![team_id, member_id, stamp],
         )?;
+        let departing = identity::member_before_removal(&tx, team_id, member_id)?;
         let changed = tx.execute(
             "DELETE FROM members WHERE team_id = ?1 AND member_id = ?2",
             params![team_id, member_id],
@@ -94,6 +95,9 @@ impl TeamStore {
                 team_id: team_id.to_owned(),
                 member_id: member_id.to_owned(),
             });
+        }
+        if let Some(member) = departing {
+            identity::record(&tx, "removed", team_id, &member)?;
         }
         // Delivery receipts belong to the member, not the post history, and
         // the row must go even though posts remain. Scope by team because
@@ -174,6 +178,7 @@ impl TeamStore {
                 display_name: candidate.display_name,
                 target: target.clone(),
             };
+            identity::record(&tx, "registered", team_id, &updated)?;
             insert_member(&tx, team_id, &updated)?;
             tx.commit()?;
             return Ok(updated);
@@ -211,6 +216,7 @@ impl TeamStore {
                 display_name: candidate.display_name,
                 target: target.clone(),
             };
+            identity::record(&tx, "rebound", team_id, &updated)?;
             insert_member(&tx, team_id, &updated)?;
             tx.commit()?;
             return Ok(updated);
@@ -224,6 +230,7 @@ impl TeamStore {
         if members.len() >= MAX_MEMBERS {
             return Err(Error::TooManyMembers { max: MAX_MEMBERS });
         }
+        identity::record(&tx, "registered", team_id, &candidate)?;
         insert_member(&tx, team_id, &candidate)?;
         tx.commit()?;
         Ok(candidate)

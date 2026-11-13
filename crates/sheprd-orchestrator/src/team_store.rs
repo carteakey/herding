@@ -5,10 +5,12 @@
 //! on behalf of a recipient.
 
 mod findings;
+mod identity;
 mod mentions;
 mod tasks;
 
 pub use findings::{Confidence, Finding};
+pub use identity::IdentityEvent;
 pub use mentions::{extract_at_tokens, resolve_member_ref, resolve_recipients};
 pub use tasks::{Task, TaskCounts, TaskStatus};
 
@@ -267,6 +269,7 @@ impl TeamStore {
         crate::private_file::prepare(path)?;
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
+        db.execute_batch(identity::IDENTITY_SCHEMA)?;
         db.execute_batch(
             "PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
@@ -411,6 +414,8 @@ impl TeamStore {
         tx.execute("INSERT INTO teams(team_id,name,supervisor_id) VALUES (?1,?2,?3)
             ON CONFLICT(team_id) DO UPDATE SET name=excluded.name, supervisor_id=excluded.supervisor_id",
             params![team.team_id, team.name, team.supervisor.member_id])?;
+        let save_members = std::iter::once(&team.supervisor).chain(team.members.iter());
+        identity::record_new_members(&tx, &team.team_id, save_members)?;
         insert_member(&tx, &team.team_id, &team.supervisor)?;
         for member in &team.members {
             validate_member(member)?;

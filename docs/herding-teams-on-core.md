@@ -437,19 +437,23 @@ inbox rows for both.
 **0. Prerequisite.** #81 merges. After it, today's Teams gets bug fixes only.
 
 **1. Extract.** Create `sheprd-team` from `team_store*` and `scoped()`, with
-one set of types and one validation layer. `sheprd-control-protocol` uses the
-`types` module without the `store` feature; the wire stays byte-identical.
-Add the crate to the table in `AGENTS.md`.
-*Gate:* existing team tests pass with only import changes; wire fixtures
+one set of types and one validation layer. `apply` takes an `Actor` from the
+start. `sheprd-control-protocol` uses the `types` module without the `store`
+feature; the wire stays byte-identical. The app's window `Reply` is split
+from `apply`'s `Reply`. Add the crate to the table in `AGENTS.md`.
+*Gate:* existing team tests pass with only import changes (1.5 is the one
+behavior change, and a test pins the error ordering); wire fixtures
 unchanged; `cargo tree -p sheprd-team` shows no GPUI or `gix`.
 
 **2. Schema and inbox.** `user_version`; `role`, address, `last_seen_at`,
-`paused_at`, `delivery` columns; the `inbox`, `doorbell`, `audit`, and
-`requests` tables; `apply` writes inbox and audit rows. Legacy teams behave
-as before.
+`paused_at`, `delivery`, `model`, and `account` columns; the `inbox`,
+`doorbell`, and `audit` tables; `apply` writes inbox and audit rows. Legacy
+teams behave as before. (`requests` moves to phase 3 with `pending` and
+`approve`.)
 *Gate:* a database from today opens, migrates, and the legacy team works
-unchanged, including with today's binary writing to the migrated file; assign, mention, complete, and block each produce exactly the rows
-above, tested; a newer `user_version` is refused.
+unchanged, including with v1.0.0 writing to the migrated file; assign,
+mention, complete, and block each produce exactly the rows above, tested; a
+newer `user_version` is refused.
 *Closes:* #48, #80.
 
 **3. The new path.** The `sheprd-team` binary: in-process ops, environment
@@ -484,6 +488,193 @@ gone; `just check-file-size` passes without the #39 exceptions.
 
 **6. Headless and UI.** `watch`, spawn limits, and a cost budget (#73). Then the Teams mod spike in Herdr's official app, as a
 client that runs `sheprd-team … --json`. Then the repository decision.
+
+### Phase 1 and 2 tasks
+
+Each task is one day or less at its review tier. AGENTS.md's tiering applies:
+a full diff is read for the store, delivery, protocol, and security, and a
+cheaper worker may do the rest with the full diff reviewed.
+
+Before 1.1, every branch that touches `team_store*` must land or be parked:
+PR 88 (issue sync store) and PR 90 (layer D audit) land first; #82 stall
+detection, #57 zero-touch dispatch, #58 supervisor handoff, layers A and B,
+and the roster profile are parked as `archive/` tags. Never start the
+extraction while one is in flight.
+
+#### 1.1 Scaffold `sheprd-team` and move the record types
+
+- **Scope.** `crates/sheprd-team/Cargo.toml` (workspace deps: `serde`,
+  `serde_json`, `thiserror`, `chrono`, `uuid`, `tracing`; `rusqlite` behind a
+  default `store` feature; `sheprd-core-client` optional from phase 3),
+  `src/lib.rs`, `src/types.rs`. Move the record types out of
+  `sheprd-orchestrator/src/team_store.rs` and
+  `sheprd-control-protocol/src/protocol/team.rs`: `Member`, `Team`,
+  `SessionTarget`, `Author`, `Post`, `Task`, `Finding`, `RecipientStatus`,
+  `Acknowledgement`, `Confidence`, `TaskStatus`, `DeliveryState`,
+  `ConfidenceLevel`, `TaskState`. `sheprd-orchestrator` re-exports them so its
+  callers change by import only.
+- **Acceptance.** `cargo build -p sheprd-team --no-default-features`;
+  `cargo test -p sheprd-orchestrator --lib`; `cargo test -p
+  sheprd-control-protocol`; `cargo tree -p sheprd-team --edges normal | grep
+  -Ei 'gpui|gix'` prints nothing; `cargo fmt --all -- --check`; `bash
+  scripts/check-file-size.sh`.
+- **Depends on.** The pre-phase-1 branches.
+- **Review.** Full (protocol/store types). A cheaper worker can do it with
+  the full diff reviewed. Decision: `sheprd-control-protocol` depends on
+  `sheprd-team` with default features off (types only, no rusqlite); revisit
+  if the tree grows.
+
+#### 1.2 Move the wire `Op` and `Reply`
+
+- **Scope.** `Op` (from `TeamOp`), `Reply`, `MemberInfo`, `TaskInfo`,
+  `FindingInfo`, `BulletinEntry`, `TeamInfo` into `sheprd-team::types`;
+  `protocol/team.rs` keeps `Call`, `Request`, and `Response` and re-exports
+  the moved types; `delete_gate.rs` follows. No field, tag, or `rename_all`
+  change.
+- **Acceptance.** `cargo test -p sheprd-control-protocol` (including
+  `team_requests_have_stable_wire_forms` and the reply round trip); `cargo
+  test -p sheprd-gpui --bin herding team`; `cargo clippy -p sheprd-team -p
+  sheprd-control-protocol --all-targets -- -D warnings`.
+- **Depends on.** 1.1.
+- **Review.** Full (wire). A cheaper worker can do it with the full diff
+  reviewed; any serde attribute change is a stop.
+
+#### 1.3 Move the store into `sheprd-team::store`
+
+- **Scope.** `sheprd-orchestrator/src/team_store.rs` and `team_store/*`
+  (`findings`, `mentions`, `tasks`, `schema`, `watch`, every `*_tests`) into
+  `sheprd-team/src/store*`; `sheprd-orchestrator` re-exports or its callers
+  switch to `sheprd_team::store`; tests stay with the module.
+- **Acceptance.** `cargo test -p sheprd-team`; `cargo test -p
+  sheprd-orchestrator --lib`; `cargo test -p sheprd-gpui --bin herding team`;
+  `cargo tree -p sheprd-team --edges normal | grep -Ei 'gpui|gix'` empty;
+  `bash scripts/check-file-size.sh`.
+- **Depends on.** 1.1.
+- **Review.** Full (store). A cheaper worker can do it; the move is
+  mechanical.
+
+#### 1.4 Move `scoped()` into `apply`, with an `Actor`
+
+- **Scope.** `ScopedAction`, the scoped `Reply` variants, and `scoped()`
+  (`control/server/team_worker.rs`) into `apply(&mut Store, &Actor, Op) ->
+  Reply`. Split the app's window `Reply` (`Snapshot`, `TaskPage`,
+  `FindingPage`) from `apply`'s `Reply`; the window's non-scoped `Operation`s
+  stay app-side. `Actor` is the proven member the app already has at this
+  point.
+- **Acceptance.** `cargo test -p sheprd-gpui --bin herding team`; `cargo test
+  -p sheprd-team`; `cargo clippy -p sheprd-team -p sheprd-gpui
+  --all-targets -- -D warnings`.
+- **Depends on.** 1.3.
+- **Review.** Full (delivery/identity). A cheaper worker can do it with the
+  full diff reviewed; the `Reply` split is decided (app versus `apply`).
+
+#### 1.5 One validation layer, app wiring, docs
+
+- **Scope.** Move the `TeamOp` bounds checks from `control/server/team.rs`
+  into `apply`; keep the app's identity proof where it is; wire
+  `team_worker`; the `Cargo.toml`s; the `AGENTS.md` crate table; `docs/cli.md`.
+  This is phase 1's only behavior change: validation first, as today, pinned
+  by a test.
+- **Acceptance.** `cargo test -p sheprd-gpui --bin herding`; `cargo test -p
+  sheprd-control-protocol`; `cargo clippy -p sheprd-team -p sheprd-gpui -p
+  sheprd-control-protocol --all-targets -- -D warnings`; `cargo fmt --all --
+  --check`; `python3 scripts/check-sorted.py`; `python3
+  scripts/check-i18n.py`; `git diff --check`. Phase gate: `cargo tree -p
+  sheprd-team --edges normal | grep -Ei 'gpui|gix'` empty.
+- **Depends on.** 1.4.
+- **Review.** Full (security: error ordering). Not for a cheaper worker.
+
+#### 2.1 `user_version` and the migration framework
+
+- **Scope.** `store/schema.rs`: `SCHEMA_VERSION`, read, check, and write
+  `PRAGMA user_version` in the open transaction, `Error::SchemaTooNew {
+  found, supported }`, and stepwise additive migrations. Version 1 is the
+  baseline PR 88 created: the four `tasks` issue columns and
+  `team_issue_watch`; a database without a version migrates to it.
+- **Acceptance.** `cargo test -p sheprd-team store::schema`; a test opens a
+  file with `PRAGMA user_version = 99` and expects `SchemaTooNew`; `cargo
+  clippy -p sheprd-team --all-targets -- -D warnings`.
+- **Depends on.** 1.3.
+- **Review.** Full (store). A cheaper worker can do it with review.
+
+#### 2.2 Member and team columns
+
+- **Scope.** Additive DDL:
+  - `members.role TEXT NOT NULL DEFAULT 'worker'`; the migration sets the
+    supervisor's role from `teams.supervisor_id`.
+  - `members.address_kind TEXT NOT NULL DEFAULT 'none'` (`none`, `core`, or
+    `herdr1`; no CHECK, so a new kind never needs a table rebuild),
+    `members.address_machine TEXT` (the core machine name; the endpoint id
+    for a Herdr 1 row), and `members.address_terminal TEXT` (a core terminal
+    id or a Herdr 1 pane id). The migration makes a row with a pane
+    `('herdr1', host, pane)` and a row without `('none', NULL, NULL)`. The
+    legacy `host`, `session`, `workspace`, and `pane` columns stay until
+    phase 5.
+  - `members.last_seen_at TEXT`, `members.paused_at TEXT`.
+  - `members.model TEXT`, `members.account TEXT` (from the parked roster
+    profile branch).
+  - `teams.delivery TEXT NOT NULL DEFAULT 'legacy'`.
+  - Types: `Member.role`, `Address`. `Team` keeps `{ supervisor, members }`
+    through phase 2.
+- **Acceptance.** `cargo test -p sheprd-team` (migration: old database gains
+  the supervisor role, `delivery = 'legacy'`, and the address backfill);
+  `cargo test -p sheprd-control-protocol` (wire unchanged); `cargo test -p
+  sheprd-gpui --bin herding team`.
+- **Depends on.** 2.1.
+- **Review.** Full (store). Not for a cheaper worker.
+
+#### 2.3 Inbox table and `apply` writes
+
+- **Scope.** `inbox(seq, team_id, member_id, kind, ref_id, created_at,
+  delivered_at, read_at)` with indexes; `apply` writes one row per event: the
+  assignee on assign, each mentioned member on a post, the supervisor on a
+  complete or block by someone else, and everyone on a notice; store read and
+  mark-read.
+- **Acceptance.** `cargo test -p sheprd-team inbox`; `cargo test -p
+  sheprd-gpui --bin herding team`; `cargo clippy -p sheprd-team
+  --all-targets -- -D warnings`.
+- **Depends on.** 2.1, 1.4.
+- **Review.** Full (store/delivery). Not for a cheaper worker.
+
+#### 2.4 Audit table, unified with layer D
+
+- **Scope.** Start from PR 90, which already creates `audit(seq, team_id,
+  actor TEXT NOT NULL DEFAULT 'unknown', terminal, op, ref_id, at,
+  display_name, host, session, workspace, pane)` with `(team_id, seq)` and
+  `(team_id, ref_id, seq)` indexes and `ref_id = member_id` for identity ops.
+  Phase 2 fills `actor` and `terminal` from `apply`, logs `delete_team`, and
+  edits this plan's Audit section to add the snapshot columns and the delete
+  row so the plan and the schema do not diverge. `identity_history` reads
+  `audit WHERE ref_id = member AND op IN ('registered', 'rebound',
+  'removed')`.
+- **Acceptance.** `cargo test -p sheprd-team audit`; PR 90's six identity
+  tests adapted and green; `cargo test -p sheprd-gpui --bin herding team`; the
+  plan's Audit section matches the DDL.
+- **Depends on.** 2.1, 1.4, PR 90 landed.
+- **Review.** Full (store/security). Not for a cheaper worker.
+
+#### 2.5 Doorbell table (schema only)
+
+- **Scope.** `doorbell(team_id, member_id, rung_through_seq, rung_at,
+  attempts, outcome)` and its store types; no loop and no command (phase 3).
+  `requests` moves to phase 3 with `pending` and `approve`.
+- **Acceptance.** `cargo test -p sheprd-team` (a fresh database has the
+  table; the migration adds it); `bash scripts/check-file-size.sh`.
+- **Depends on.** 2.1.
+- **Review.** Full (store), small. A cheaper worker can do it.
+
+#### 2.6 Legacy compatibility gate
+
+- **Scope.** Tests plus a scripted check: a v1.0.0 database migrates; the
+  legacy team path works; v1.0.0 writes to the migrated file; assign,
+  mention, complete, and block each leave exactly the inbox and audit rows.
+- **Acceptance.** `cargo test -p sheprd-team legacy`; `git worktree add
+  /tmp/herding-v1 v1.0.0 && cargo build --manifest-path
+  /tmp/herding-v1/Cargo.toml -p sheprd-gpui --bin herding`; run that binary's
+  `team task list` and `team task claim` against a copy of the migrated
+  database (no errors); `cargo test -p sheprd-gpui --bin herding`.
+- **Depends on.** 2.2, 2.3, 2.4, 2.5.
+- **Review.** Full (store). Not for a cheaper worker.
 
 Later, on a delivery layer that holds: structured results and scope (#28,
 #24), `land` (#22), priority and WIP limits (#27), waiting on a task (#54),

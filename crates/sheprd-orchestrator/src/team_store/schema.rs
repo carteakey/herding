@@ -83,7 +83,19 @@ pub(super) fn run(db: &Connection) -> Result<()> {
                 added_by_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (team_id, repo, number)
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS audit (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT 'unknown',
+                terminal TEXT,
+                op TEXT NOT NULL,
+                ref_id TEXT,
+                at TEXT NOT NULL,
+                display_name TEXT, host TEXT, session TEXT, workspace TEXT, pane TEXT
+            );
+            CREATE INDEX IF NOT EXISTS audit_team_idx ON audit(team_id, seq);
+            CREATE INDEX IF NOT EXISTS audit_ref_idx ON audit(team_id, ref_id, seq);",
         )?;
     // The issue-sync columns postdate the first schema: the CREATE TABLE
     // above keeps the original shape, so every database gains the columns

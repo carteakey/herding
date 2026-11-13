@@ -2,8 +2,8 @@
 
 use super::{
     Author, Error, MAX_ID_BYTES, MAX_MEMBERS, MAX_MENTIONS, MAX_TEXT_BYTES, Member, Recipients,
-    Result, SessionTarget, Team, TeamStore, insert_member, now_stamp, read_member, validate,
-    validate_member,
+    Result, SessionTarget, Team, TeamStore, identity, insert_member, now_stamp, read_member,
+    validate, validate_member,
 };
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
@@ -97,6 +97,7 @@ impl TeamStore {
              WHERE team_id = ?1 AND assignee_id = ?2",
             params![team_id, member_id, stamp],
         )?;
+        let departing = identity::member_row(&tx, team_id, member_id)?;
         let changed = tx.execute(
             "DELETE FROM members WHERE team_id = ?1 AND member_id = ?2",
             params![team_id, member_id],
@@ -106,6 +107,9 @@ impl TeamStore {
                 team_id: team_id.to_owned(),
                 member_id: member_id.to_owned(),
             });
+        }
+        if let Some(member) = departing {
+            identity::record(&tx, "removed", team_id, &member)?;
         }
         // Delivery receipts belong to the member, not the post history, and
         // the row must go even though posts remain. Scope by team because
@@ -196,6 +200,7 @@ impl TeamStore {
                 display_name: candidate.display_name,
                 target: target.clone(),
             };
+            identity::record(&tx, "registered", team_id, &updated)?;
             insert_member(&tx, team_id, &updated)?;
             tx.commit()?;
             return Ok(updated);
@@ -245,6 +250,7 @@ impl TeamStore {
                 display_name: candidate.display_name,
                 target: target.clone(),
             };
+            identity::record(&tx, "rebound", team_id, &updated)?;
             insert_member(&tx, team_id, &updated)?;
             tx.commit()?;
             return Ok(updated);
@@ -258,6 +264,7 @@ impl TeamStore {
         if members.len() >= MAX_MEMBERS {
             return Err(Error::TooManyMembers { max: MAX_MEMBERS });
         }
+        identity::record(&tx, "registered", team_id, &candidate)?;
         insert_member(&tx, team_id, &candidate)?;
         tx.commit()?;
         Ok(candidate)
@@ -363,13 +370,27 @@ impl TeamStore {
     }
 
     /// One host column's migration to the stable endpoint id; everything
-    /// else about the member is untouched.
+    /// else about the member is untouched. The migration moves the recorded
+    /// identity, so it lands in the audit log like a re-bind: the log's last
+    /// entry for a member must match the row, or the log stops being the
+    /// witness it exists to be.
     fn migrate_member_host(&mut self, team_id: &str, member_id: &str, host: &str) -> Result<()> {
         let tx = self.db.transaction()?;
+        let Some(record) = identity::member_row(&tx, team_id, member_id)? else {
+            return Ok(());
+        };
         tx.execute(
             "UPDATE members SET host = ?1 WHERE team_id = ?2 AND member_id = ?3",
             params![host, team_id, member_id],
         )?;
+        let migrated = Member {
+            target: SessionTarget {
+                host: host.to_owned(),
+                ..record.target.clone()
+            },
+            ..record
+        };
+        identity::record(&tx, "rebound", team_id, &migrated)?;
         tx.commit()?;
         Ok(())
     }

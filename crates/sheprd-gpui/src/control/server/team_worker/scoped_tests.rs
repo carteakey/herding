@@ -41,6 +41,7 @@ fn post(
         caller,
         &caller.host,
         &[],
+        &[],
         ScopedAction::BulletinPost {
             post_id: uuid::Uuid::new_v4().to_string(),
             reply_to: None,
@@ -68,6 +69,7 @@ fn a_session_that_is_not_a_member_is_refused_for_every_action() {
                 caller,
                 &caller.host,
                 &[],
+                &[],
                 ScopedAction::Roster,
                 &[]
             ),
@@ -84,6 +86,7 @@ fn a_session_that_is_not_a_member_is_refused_for_every_action() {
             "missing",
             &target(1),
             &target(1).host,
+            &[],
             &[],
             ScopedAction::Roster,
             &[]
@@ -106,6 +109,7 @@ fn a_member_post_is_pending_for_the_recipient_until_it_acknowledges() {
             &target(2),
             &target(2).host,
             &[],
+            &[],
             ScopedAction::BulletinList {
                 after: Some(0),
                 limit: 10,
@@ -126,6 +130,7 @@ fn a_member_post_is_pending_for_the_recipient_until_it_acknowledges() {
         "t",
         &target(2),
         &target(2).host,
+        &[],
         &[],
         ScopedAction::BulletinAck {
             message_id: post.post_id.clone(),
@@ -155,6 +160,7 @@ fn only_a_recipient_can_acknowledge_a_directed_post() {
             &target(2),
             &target(2).host,
             &[],
+            &[],
             ScopedAction::BulletinAck {
                 message_id: post.post_id,
             },
@@ -174,6 +180,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         &newcomer,
         &newcomer.host,
         &[],
+        &[],
         ScopedAction::Register {
             name: "investigator".into(),
         },
@@ -190,6 +197,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         &target(1),
         &target(1).host,
         &[],
+        &[],
         ScopedAction::GoalSet {
             goal: "Ship herding".into(),
         },
@@ -202,6 +210,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         "t",
         &target(1),
         &target(1).host,
+        &[],
         &[],
         ScopedAction::TaskCreate {
             task_id: "task-1".into(),
@@ -227,6 +236,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         &newcomer,
         &newcomer.host,
         &[],
+        &[],
         ScopedAction::Status { team_id: None },
         &[],
     )
@@ -244,6 +254,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         &newcomer,
         &newcomer.host,
         &[],
+        &[],
         ScopedAction::TaskClaim {
             task_id: "task-1".into(),
         },
@@ -256,6 +267,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         "t",
         &newcomer,
         &newcomer.host,
+        &[],
         &[],
         ScopedAction::TaskComplete {
             task_id: "task-1".into(),
@@ -270,6 +282,7 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         "t",
         &newcomer,
         &newcomer.host,
+        &[],
         &[],
         ScopedAction::FindingAdd {
             finding_id: "finding-1".into(),

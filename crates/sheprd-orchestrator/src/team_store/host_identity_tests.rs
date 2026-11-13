@@ -7,11 +7,12 @@ use super::*;
 
 /// The host context each scenario passes: the caller's endpoint's current
 /// boot, the connected hosts, and every known endpoint's stable id.
-fn hosts(caller_boot: &str, live: &[&str], known: &[&str]) -> HostContext {
+fn hosts(caller_boot: &str, live: &[&str], known: &[&str], live_panes: &[&str]) -> HostContext {
     HostContext {
         caller_boot: caller_boot.to_owned(),
         live_hosts: live.iter().map(|s| (*s).to_owned()).collect(),
         endpoint_ids: known.iter().map(|s| (*s).to_owned()).collect(),
+        live_panes: live_panes.iter().map(|s| (*s).to_owned()).collect(),
     }
 }
 
@@ -51,7 +52,7 @@ fn a_caller_on_the_recorded_endpoint_matches_exactly() {
         .find_member_team(
             Some("t"),
             &member("w1", "m1", "p1", "w1").target,
-            &hosts("", &["m1"], &["m1"]),
+            &hosts("", &["m1"], &["m1"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -68,7 +69,7 @@ fn a_row_recorded_under_the_callers_current_boot_migrates_to_the_stable_id() {
         .find_member_team(
             Some("t"),
             &caller,
-            &hosts("boot-1", &["m1", "boot-1"], &["m1"]),
+            &hosts("boot-1", &["m1", "boot-1"], &["m1"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -82,7 +83,7 @@ fn a_row_recorded_under_the_callers_current_boot_migrates_to_the_stable_id() {
         .find_member_team(
             Some("t"),
             &caller,
-            &hosts("boot-1", &["m1", "boot-1"], &["m1"]),
+            &hosts("boot-1", &["m1", "boot-1"], &["m1"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -99,7 +100,7 @@ fn a_row_whose_boot_a_restart_retired_migrates_to_the_caller() {
         .find_member_team(
             Some("t"),
             &caller,
-            &hosts("boot-2", &["m1", "boot-2"], &["m1"]),
+            &hosts("boot-2", &["m1", "boot-2"], &["m1"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -118,7 +119,7 @@ fn a_live_host_key_is_never_adopted_from_another_machine() {
             .find_member_team(
                 Some("t"),
                 &impostor,
-                &hosts("boot-2", &["m1", "m2", "boot-2"], &["m1", "m2"]),
+                &hosts("boot-2", &["m1", "m2", "boot-2"], &["m1", "m2"], &[]),
             )
             .unwrap()
             .is_none(),
@@ -138,7 +139,7 @@ fn a_disconnected_machines_stable_id_row_is_not_adopted_cross_host() {
             .find_member_team(
                 Some("t"),
                 &impostor,
-                &hosts("boot-1", &["m1", "boot-1"], &["m1", "m2"]),
+                &hosts("boot-1", &["m1", "boot-1"], &["m1", "m2"], &[]),
             )
             .unwrap()
             .is_none(),
@@ -149,7 +150,7 @@ fn a_disconnected_machines_stable_id_row_is_not_adopted_cross_host() {
         .find_member_team(
             Some("t"),
             &member("w1", "m2", "p1", "w1").target,
-            &hosts("", &["m1", "m2", "boot-1"], &["m1", "m2"]),
+            &hosts("", &["m1", "m2", "boot-1"], &["m1", "m2"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -167,7 +168,7 @@ fn a_legacy_boot_row_from_the_callers_own_previous_boot_is_still_adopted() {
         .find_member_team(
             Some("t"),
             &caller,
-            &hosts("boot-old", &["m1", "boot-old"], &["m1"]),
+            &hosts("boot-old", &["m1", "boot-old"], &["m1"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -184,7 +185,7 @@ fn a_caller_whose_pane_or_session_differs_never_migrates_a_row() {
             .find_member_team(
                 Some("t"),
                 &other_pane,
-                &hosts("boot-2", &["m1", "boot-2"], &["m1"]),
+                &hosts("boot-2", &["m1", "boot-2"], &["m1"], &[]),
             )
             .unwrap()
             .is_none()
@@ -203,7 +204,7 @@ fn a_caller_whose_pane_or_session_differs_never_migrates_a_row() {
             .find_member_team(
                 Some("t"),
                 &other_session.target,
-                &hosts("boot-2", &["m1", "boot-2"], &["m1"]),
+                &hosts("boot-2", &["m1", "boot-2"], &["m1"], &[]),
             )
             .unwrap()
             .is_none()
@@ -238,7 +239,7 @@ fn an_exact_match_in_a_later_team_wins_and_no_stale_row_is_written() {
         .find_member_team(
             None,
             &caller,
-            &hosts("boot-old", &["m1", "boot-old"], &["m1"]),
+            &hosts("boot-old", &["m1", "boot-old"], &["m1"], &[]),
         )
         .unwrap()
         .unwrap();
@@ -267,7 +268,7 @@ fn a_name_holder_on_a_live_endpoint_keeps_the_name_against_another_machine() {
             "new-id",
             "w1",
             &claim,
-            &hosts("boot-2", &["m1", "m2", "boot-2"], &["m1", "m2"]),
+            &hosts("boot-2", &["m1", "m2", "boot-2"], &["m1", "m2"], &[]),
         ),
         Err(Error::DuplicateDisplayName(_))
     ));
@@ -285,7 +286,7 @@ fn a_disconnected_machines_name_holder_is_kept_against_a_new_machine() {
             "new-id",
             "w1",
             &claim,
-            &hosts("boot-1", &["m1", "boot-1"], &["m1", "m2"]),
+            &hosts("boot-1", &["m1", "boot-1"], &["m1", "m2"], &[]),
         ),
         Err(Error::DuplicateDisplayName(_))
     ));
@@ -303,9 +304,182 @@ fn a_name_holder_recorded_under_the_callers_boot_rebinds() {
             "new-id",
             "w1",
             &claim,
-            &hosts("boot-1", &["m1", "boot-1"], &["m1"]),
+            &hosts("boot-1", &["m1", "boot-1"], &["m1"], &[]),
         )
         .unwrap();
     assert_eq!(rebound.member_id, "w1", "the member id is preserved");
     assert_eq!(rebound.target.host, "m1");
+}
+
+#[test]
+fn a_reboot_with_new_pane_ids_rebinds_a_dead_holder_by_name_and_workspace() {
+    // The boot died and the daemon handed out new pane ids: the holder's
+    // pane is gone, so the anchors are the name and the workspace. The
+    // row re-binds to the caller's pane with its member id intact.
+    let (_dir, mut store) = store_with(vec![member("w1", "boot-old", "p4", "w1")]);
+    let caller = member("w1", "m1", "p8", "w1").target;
+    let rebound = store
+        .register_member(
+            "t",
+            "new-id",
+            "w1",
+            &caller,
+            &hosts("boot-new", &["m1", "boot-new"], &["m1"], &[]),
+        )
+        .unwrap();
+    assert_eq!(rebound.member_id, "w1", "the member id is preserved");
+    assert_eq!(rebound.target.host, "m1");
+    assert_eq!(rebound.target.pane.as_deref(), Some("p8"));
+}
+
+#[test]
+fn a_reboot_rebinds_a_stable_id_holder_on_the_same_endpoint_with_a_new_pane() {
+    // Post-stable-key rows survive the restart under the same endpoint id,
+    // so the same endpoint proving the same name and workspace is the
+    // member back, whatever pane the daemon handed out.
+    let (_dir, mut store) = store_with(vec![member("w1", "m1", "p4", "w1")]);
+    let caller = member("w1", "m1", "p8", "w1").target;
+    let rebound = store
+        .register_member(
+            "t",
+            "new-id",
+            "w1",
+            &caller,
+            &hosts("boot-new", &["m1", "boot-new"], &["m1"], &[]),
+        )
+        .unwrap();
+    assert_eq!(rebound.member_id, "w1");
+    assert_eq!(rebound.target.pane.as_deref(), Some("p8"));
+}
+
+#[test]
+fn a_live_holder_on_another_machine_stays_refused_with_a_new_pane() {
+    // The holder's endpoint is connected: a claim from this machine at the
+    // same name and workspace, pane changed or not, is identity theft
+    // across the fleet.
+    let (_dir, mut store) = store_with(vec![member("w1", "m2", "p4", "w1")]);
+    let claim = member("w1", "m1", "p8", "w1").target;
+    assert!(matches!(
+        store.register_member(
+            "t",
+            "new-id",
+            "w1",
+            &claim,
+            &hosts("boot-1", &["m1", "m2", "boot-1"], &["m1", "m2"], &[]),
+        ),
+        Err(Error::DuplicateDisplayName(_))
+    ));
+}
+
+#[test]
+fn a_live_holder_in_another_pane_on_the_same_host_gets_refused() {
+    // Both panes hold live agents on m1: the holder is alive, so a same
+    // name from the caller's pane is a second agent, not the holder back.
+    let (_dir, mut store) = store_with(vec![member("w1", "m1", "p4", "w1")]);
+    let claim = member("w1", "m1", "p8", "w1").target;
+    assert!(matches!(
+        store.register_member(
+            "t",
+            "new-id",
+            "w1",
+            &claim,
+            &hosts("boot-new", &["m1", "boot-new"], &["m1"], &["p4", "p8"]),
+        ),
+        Err(Error::DuplicateDisplayName(_))
+    ));
+}
+
+#[test]
+fn a_holder_whose_pane_vanished_re_binds_with_member_id_kept() {
+    // The holder's pane is gone from the live snapshots (the agent in it
+    // ended or the restart dropped it), so the caller's pane is the member
+    // back: re-bind, member id and assignments kept.
+    let (_dir, mut store) = store_with(vec![member("w1", "m1", "p4", "w1")]);
+    let claim = member("w1", "m1", "p8", "w1").target;
+    let rebound = store
+        .register_member(
+            "t",
+            "new-id",
+            "w1",
+            &claim,
+            &hosts("boot-new", &["m1", "boot-new"], &["m1"], &["p8"]),
+        )
+        .unwrap();
+    assert_eq!(rebound.member_id, "w1");
+    assert_eq!(rebound.target.pane.as_deref(), Some("p8"));
+}
+
+#[test]
+fn the_supervisor_row_cannot_be_taken_from_a_live_supervisor() {
+    // The supervisor is alive in p-sup on m1; an agent in p8 on the same
+    // machine registering as "sup" must not take the supervisor row, role
+    // included.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = TeamStore::open(&dir.path().join("team").join("db.sqlite3")).unwrap();
+    store
+        .save_team(&Team {
+            team_id: "t".into(),
+            name: "T".into(),
+            supervisor: member("sup", "m1", "p-sup", "sup"),
+            members: vec![member("w1", "m1", "p4", "w1")],
+        })
+        .unwrap();
+    let claim = member("new-id", "m1", "p8", "sup").target;
+    assert!(matches!(
+        store.register_member(
+            "t",
+            "new-id",
+            "sup",
+            &claim,
+            &hosts("boot-new", &["m1", "boot-new"], &["m1"], &["p-sup", "p8"]),
+        ),
+        Err(Error::DuplicateDisplayName(_))
+    ));
+}
+
+#[test]
+fn a_legacy_row_on_the_callers_live_boot_with_a_live_holder_in_another_pane_is_refused() {
+    // The row was registered on today's boot (pre-stable-key format) and
+    // its holder is alive in another pane: the caller's pane is a second
+    // agent, not the holder back, however current the boot is.
+    let (_dir, mut store) = store_with(vec![member("w1", "boot-1", "p4", "w1")]);
+    let claim = member("w1", "m1", "p8", "w1").target;
+    assert!(matches!(
+        store.register_member(
+            "t",
+            "new-id",
+            "w1",
+            &claim,
+            &hosts("boot-1", &["m1", "boot-1"], &["m1"], &["p4", "p8"]),
+        ),
+        Err(Error::DuplicateDisplayName(_))
+    ));
+}
+
+#[test]
+fn the_supervisor_row_on_the_live_boot_cannot_be_taken_from_another_pane() {
+    // The supervisor registered on today's boot and is alive in p-sup; an
+    // agent in p8 on the same machine must not take the supervisor row,
+    // role included.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = TeamStore::open(&dir.path().join("team").join("db.sqlite3")).unwrap();
+    store
+        .save_team(&Team {
+            team_id: "t".into(),
+            name: "T".into(),
+            supervisor: member("sup", "boot-1", "p-sup", "sup"),
+            members: vec![member("w1", "boot-1", "p4", "w1")],
+        })
+        .unwrap();
+    let claim = member("new-id", "m1", "p8", "sup").target;
+    assert!(matches!(
+        store.register_member(
+            "t",
+            "new-id",
+            "sup",
+            &claim,
+            &hosts("boot-1", &["m1", "boot-1"], &["m1"], &["p-sup", "p8"]),
+        ),
+        Err(Error::DuplicateDisplayName(_))
+    ));
 }

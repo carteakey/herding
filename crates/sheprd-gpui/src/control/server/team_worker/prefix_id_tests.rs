@@ -45,6 +45,7 @@ fn created_task_id(store: &mut TeamStore, caller: &SessionTarget, title: &str) -
         caller,
         &caller.host,
         &[],
+        &[],
         ScopedAction::TaskCreate {
             task_id: uuid::Uuid::new_v4().to_string(),
             title: title.into(),
@@ -86,6 +87,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         &sup,
         &sup.host,
         &[],
+        &[],
         ScopedAction::TaskCreate {
             task_id: task_b,
             title: "B".into(),
@@ -107,6 +109,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         &worker,
         &worker.host,
         &[],
+        &[],
         ScopedAction::TaskClaim {
             task_id: task_a[..8].to_owned(),
         },
@@ -123,6 +126,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         "t",
         &worker,
         &worker.host,
+        &[],
         &[],
         ScopedAction::TaskClaim {
             task_id: shared_head.to_owned(),
@@ -144,6 +148,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         &worker,
         &worker.host,
         &[],
+        &[],
         ScopedAction::TaskComplete {
             task_id: task_a[..8].to_owned(),
             result: "done".into(),
@@ -156,6 +161,7 @@ fn task_verbs_accept_a_unique_prefix_and_refuse_an_ambiguous_one() {
         "t",
         &sup,
         &sup.host,
+        &[],
         &[],
         ScopedAction::TaskCancel { task_id: task_b },
         &[],
@@ -175,6 +181,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         &sup,
         &sup.host,
         &[],
+        &[],
         ScopedAction::BulletinPost {
             post_id: uuid::Uuid::new_v4().to_string(),
             reply_to: None,
@@ -192,6 +199,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         "t",
         &worker,
         &worker.host,
+        &[],
         &[],
         ScopedAction::BulletinPost {
             post_id: uuid::Uuid::new_v4().to_string(),
@@ -213,6 +221,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         &worker,
         &worker.host,
         &[],
+        &[],
         ScopedAction::BulletinAck {
             message_id: parent.post_id[..8].to_owned(),
         },
@@ -227,6 +236,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         "t",
         &sup,
         &sup.host,
+        &[],
         &[],
         ScopedAction::TaskAssign {
             task_id: task[..8].to_owned(),
@@ -243,6 +253,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         "t",
         &sup,
         &sup.host,
+        &[],
         &[],
         ScopedAction::BulletinPost {
             post_id: uuid::Uuid::new_v4().to_string(),
@@ -263,6 +274,7 @@ fn bulletin_reply_ack_and_member_refs_accept_prefixes() {
         "t",
         &sup,
         &sup.host,
+        &[],
         &[],
         ScopedAction::BulletinPost {
             post_id: uuid::Uuid::new_v4().to_string(),
@@ -292,6 +304,7 @@ fn finding_links_accept_prefixes_and_unknown_prefixes_stay_not_found() {
         &sup,
         &sup.host,
         &[],
+        &[],
         ScopedAction::FindingAdd {
             finding_id: uuid::Uuid::new_v4().to_string(),
             task_id: Some(task[..8].to_owned()),
@@ -313,6 +326,7 @@ fn finding_links_accept_prefixes_and_unknown_prefixes_stay_not_found() {
         "t",
         &sup,
         &sup.host,
+        &[],
         &[],
         ScopedAction::TaskClaim {
             task_id: "cafe9".into(),

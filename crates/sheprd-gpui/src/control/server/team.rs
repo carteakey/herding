@@ -387,11 +387,32 @@ pub(super) fn serve(
                 .map(|snapshot| snapshot.boot_id.clone())
                 .unwrap_or_default()
         };
+        // Panes that currently hold a live agent session, so a same-host
+        // re-bind crosses panes only when the holder's own pane is gone.
+        let live_panes: Vec<String> = view
+            .endpoints
+            .iter()
+            .enumerate()
+            .filter_map(|(index, endpoint)| {
+                let live = if index == view.selected_endpoint {
+                    &view.live
+                } else {
+                    &endpoint.live
+                };
+                live.snapshot
+                    .as_ref()
+                    .filter(|_| live.status.is_connected())
+                    .map(|snapshot| &snapshot.agents)
+            })
+            .flatten()
+            .map(|agent| agent.pane_id.clone())
+            .collect();
         let op = Operation::Scoped {
             team_id,
             caller: target,
             caller_boot,
             endpoint_ids,
+            live_panes,
             action,
             live_hosts,
         };

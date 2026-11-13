@@ -115,12 +115,15 @@ pub(crate) enum Operation {
     /// a member recorded under that boot (a pre-stable-key row) still
     /// matches and migrates to the stable id. `endpoint_ids` names every
     /// known endpoint's stable id, connected or not, so migration never
-    /// adopts a row that names a merely disconnected machine.
+    /// adopts a row that names a merely disconnected machine. `live_panes`
+    /// names the panes that currently hold a live agent session, so a
+    /// same-host re-bind crosses panes only when the holder's pane is gone.
     Scoped {
         team_id: String,
         caller: SessionTarget,
         caller_boot: String,
         endpoint_ids: Vec<String>,
+        live_panes: Vec<String>,
         action: ScopedAction,
         live_hosts: Vec<String>,
     },
@@ -600,6 +603,7 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             caller,
             caller_boot,
             endpoint_ids,
+            live_panes,
             action,
             live_hosts,
         } => scoped(
@@ -608,6 +612,7 @@ fn execute(store: &mut TeamStore, operation: Operation) -> Result<Reply, Error> 
             &caller,
             &caller_boot,
             &endpoint_ids,
+            &live_panes,
             action,
             &live_hosts,
         )?,
@@ -700,6 +705,7 @@ fn scoped(
     caller: &SessionTarget,
     caller_boot: &str,
     endpoint_ids: &[String],
+    live_panes: &[String],
     action: ScopedAction,
     live_hosts: &[String],
 ) -> Result<Reply, Error> {
@@ -709,6 +715,7 @@ fn scoped(
             caller_boot: caller_boot.to_owned(),
             live_hosts: live_hosts.to_vec(),
             endpoint_ids: endpoint_ids.to_vec(),
+            live_panes: live_panes.to_vec(),
         };
         let member = store.register_member(team_id, &member_id, &name, caller, &hosts)?;
         let team = store.team(team_id)?.ok_or(Error::NotMember)?;
@@ -723,6 +730,7 @@ fn scoped(
             caller_boot: caller_boot.to_owned(),
             live_hosts: live_hosts.to_vec(),
             endpoint_ids: endpoint_ids.to_vec(),
+            live_panes: live_panes.to_vec(),
         };
         let (team, member) = store
             .find_member_team(filter, caller, &hosts)?
@@ -747,6 +755,7 @@ fn scoped(
         caller_boot: caller_boot.to_owned(),
         live_hosts: live_hosts.to_vec(),
         endpoint_ids: endpoint_ids.to_vec(),
+        live_panes: live_panes.to_vec(),
     };
     let (team, member) = store
         .find_member_team(Some(team_id), caller, &hosts)?

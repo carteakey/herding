@@ -10,11 +10,14 @@ use std::collections::HashSet;
 
 /// The host context a caller is proved against: the boot their endpoint
 /// currently reports, the stable ids and boots of the connected endpoints,
-/// and the stable ids of every known endpoint whether connected or not.
+/// the stable ids of every known endpoint whether connected or not, and
+/// the pane ids that currently hold a live agent session on the connected
+/// endpoints.
 pub struct HostContext {
     pub caller_boot: String,
     pub live_hosts: Vec<String>,
     pub endpoint_ids: Vec<String>,
+    pub live_panes: Vec<String>,
 }
 
 impl TeamStore {
@@ -154,6 +157,7 @@ impl TeamStore {
             caller_boot,
             live_hosts,
             endpoint_ids,
+            live_panes,
         } = &hosts;
         validate("team_id", team_id, MAX_ID_BYTES)?;
         let candidate = Member {
@@ -203,26 +207,35 @@ impl TeamStore {
                 member_id: candidate.member_id,
             });
         }
-        // A resumed agent session re-proves the same pane under a new
-        // session id, so the exact-target match above misses it and the
-        // member's own name would otherwise be squatted by its dead
-        // predecessor forever. One pane hosts one live agent session, and
-        // the candidate target was proved against that pane's snapshot, so
-        // re-bind the name holder in the same workspace and pane:
-        // member_id preserved, so supervisor status, assignments, and
-        // mention history stay intact. A daemon restart rotates the boot
-        // id as well, so a holder whose recorded boot is not among the
-        // caller's live hosts was left behind by that restart and also
-        // re-binds. A holder whose boot IS still live keeps the name - a
-        // claim from another live boot is identity theft across the fleet,
-        // and a claim from a different pane is a different agent; both
-        // stay refused below.
+        // A resumed agent session re-proves the same workspace under a new
+        // session id, and a reboot hands out NEW pane ids, so the holder's
+        // pane is not an identity anchor: the anchors are the name, the
+        // workspace, and the machine. The holder's host must be the
+        // caller's own endpoint (the same machine across a restart, by
+        // The holder's machine decides what a re-bind may cross. The
+        // caller's own endpoint, or the caller's current boot (a
+        // pre-stable-key row registered on this very boot): the member is
+        // back on the same machine, so the re-bind crosses panes only when
+        // the holder's pane is gone from the live snapshots - no pane, or
+        // no agent session in it. A holder whose pane still runs an agent
+        // keeps the name: any agent on this machine could otherwise take
+        // the supervisor row while the real supervisor is alive in another
+        // pane. A dead holder (a boot no endpoint reports, no known
+        // endpoint's stable id) re-binds pane-free: the whole machine went
+        // away, and every pane died with it. Any other live host stays
+        // refused.
+        let same_machine = &candidate.target.host;
+        let holder_gone = |m: &Member| {
+            m.target
+                .pane
+                .as_deref()
+                .is_none_or(|pane| !live_panes.iter().any(|live| live == pane))
+        };
         let resumed = members.iter().find(|m| {
             m.display_name.eq_ignore_ascii_case(&candidate.display_name)
                 && m.target.workspace == candidate.target.workspace
-                && m.target.pane == candidate.target.pane
-                && (m.target.host == candidate.target.host
-                    || &m.target.host == caller_boot
+                && (((&m.target.host == same_machine || &m.target.host == caller_boot)
+                    && (m.target.pane == candidate.target.pane || holder_gone(m)))
                     || (!endpoint_ids.contains(&m.target.host)
                         && !live_hosts.contains(&m.target.host)))
         });
@@ -277,6 +290,7 @@ impl TeamStore {
             caller_boot,
             live_hosts,
             endpoint_ids,
+            ..
         } = &hosts;
         let adoptable = |host: &String| -> bool {
             host == caller_boot || (!endpoint_ids.contains(host) && !live_hosts.contains(host))

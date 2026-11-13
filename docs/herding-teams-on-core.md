@@ -143,6 +143,37 @@ an in-process plugin.
 4. **UI layer.** The Teams window reads only from the service. Spike 2 (a
    Teams mod in the official app) becomes another client of the same socket.
 
+### Multi-machine
+
+The service removes the window from the path: the store and wake queue
+outlive it, and outbound wakes reach remote panes through `hc machine` or
+`herdr --machine` whether or not the window is connected to that host. That
+covers wakes going out. It does not cover a remote member calling in.
+
+**Inbound calls (with phase 2).** A worker on m1 running `herding team task
+complete` must reach the service on the supervisor's host and prove which
+member it is. Today that goes through `scripts/control-tunnel.sh`
+(`docs/control-tunnel.md`). Options to settle in the phase 2 spike, since
+they share the identity proof:
+
+- an SSH tunnel to the service socket, as today, kept up by the service;
+- the request carried over `hc` to the supervisor's host;
+- a small authenticated network listener on the service.
+
+Also needed:
+
+- Hosts the service can reach. Add machines by LAN name: m1's Tailscale name
+  did not answer during spike 1, and m2 is unreachable.
+- Herdr 1 panes on remote hosts go through `herdr --machine`, a different
+  path from `hc`, untested from a service.
+- With one authority, remote workers cannot write to the board while the
+  supervisor's host is down. Per-host services that sync would remove that,
+  later.
+
+**Gate.** Multi-machine is done when a worker on m1 receives a wake,
+completes a task, and posts to the bulletin, all through the service, with
+the supervisor's window closed.
+
 ### Decisions
 
 - One service on the supervisor's host is the single authority to start
@@ -158,6 +189,7 @@ an in-process plugin.
 - No stable caller identity in Herdr's API (phase 2 spike decides).
 - `hc send` into a modal (status gate required).
 - Two daemons, two delivery paths, until panes move to herdr-core.
+- Remote members cannot call in without a tunnel or listener (Multi-machine).
 
 ## Not yet verified
 

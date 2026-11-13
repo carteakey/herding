@@ -382,9 +382,13 @@ requests(request_id, team_id, kind, payload, requested_by, created_at, decided_a
 
 `sheprd-team pending` lists them and `sheprd-team approve REQUEST_ID` runs
 one. `approve` refuses a caller that resolves to a member. Under the same-user
-trust model that stops an agent approving by mistake, not on purpose; the
-Teams window's dialog and the phone remain the confirmations that an agent
-cannot reach.
+trust model that stops an agent approving by mistake, not on purpose.
+
+Decided 2026-11-13: that is enough for now. Agents in a team are the user's
+own and the risk is mistakes, not malice, so there is no out-of-band
+confirmation (no phone, no window dialog). The audit log records every
+request and approval, which is how a wrong one is found and undone. Revisit
+if teams ever include agents the user does not run.
 
 ### Command line
 

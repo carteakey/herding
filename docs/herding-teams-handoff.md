@@ -144,12 +144,9 @@ Audit schema: zcode2's in-flight layer D (audit log) and the plan's `audit`
 table must be one schema. Whoever takes phase 2 starts from zcode2's work and
 reconciles the plan's table to it.
 
-**Open decision for the user: how approvals are confirmed.** The plan's
-`approve` refuses a caller that resolves to a member, which stops mistakes,
-not intent. A code stored in the database is readable by any same-user agent,
-so the only confirmation an agent cannot reach is outside the terminal: the
-phone through remote control, or the Teams window's dialog. Decide before
-phase 3.
+**Approvals (decided 2026-11-13):** `approve` refusing a caller that resolves
+to a member, plus the audit log, is enough. The risk is mistakes, not malice,
+so there is no phone or window confirmation. See the plan's Approvals section.
 
 ## Rules and gotchas
 

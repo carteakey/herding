@@ -142,6 +142,24 @@ an in-process plugin.
    `hc machine` or `herdr --machine`.
 4. **UI layer.** The Teams window reads only from the service. Spike 2 (a
    Teams mod in the official app) becomes another client of the same socket.
+5. **Running without the UI.** A session can start and grow a team from the
+   command line, and the user approves from the command line too:
+   - `herding team create --name NAME --goal GOAL`: the caller becomes the
+     supervisor. Today a team can only be created in the Teams window.
+   - `herding team spawn TEAM_ID --name NAME --agent zcode|claude --cwd PATH
+     [--machine LABEL] [--brief TEXT]`: opens the pane, starts the agent with
+     its brief, and registers it under NAME in one step, replacing
+     `herdr tab create`, `herdr pane run`, and the worker's own `register`.
+   - Actions that remove or change members (remove, replace, role changes)
+     never run on an agent's word. The service records a pending request and
+     the user approves it with `herding team approve REQUEST_ID` (or
+     `herding team pending` to list them), which only a terminal outside the
+     team's panes may run. This replaces the Teams window's confirmation
+     dialog (AGENTS.md: destructive actions are confirmed by the user).
+   - Limits the service enforces on spawns: a member cap, the machines a team
+     may use, and a cost budget from #73's supervision economics.
+   - `herding team watch TEAM_ID`: a terminal view of the board, bulletin,
+     and member status, so following a team needs no window.
 
 ### Multi-machine
 

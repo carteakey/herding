@@ -73,7 +73,24 @@ impl TeamStore {
         let watched: i64 = tx
             .prepare_cached("SELECT COUNT(*) FROM team_issue_watch WHERE team_id = ?1")?
             .query_row(params![team_id], |row| row.get(0))?;
-        let additions = if numbers.is_empty() { 1 } else { numbers.len() } as i64;
+        // Only rows that do not hold yet count against the bound: re-watching
+        // what the team already watches is idempotent, cap or no cap.
+        let rows: Vec<i64> = if numbers.is_empty() {
+            vec![REPO_WATCH]
+        } else {
+            numbers.to_vec()
+        };
+        let mut present = tx.prepare_cached(
+            "SELECT COUNT(*) FROM team_issue_watch WHERE team_id = ?1 AND repo = ?2 AND number = ?3",
+        )?;
+        let mut additions = 0i64;
+        for number in &rows {
+            let held: i64 = present.query_row(params![team_id, repo, number], |row| row.get(0))?;
+            if held == 0 {
+                additions += 1;
+            }
+        }
+        drop(present);
         if watched + additions > MAX_WATCHES as i64 {
             return Err(Error::Invalid {
                 field: "watch set",
@@ -85,11 +102,6 @@ impl TeamStore {
                 (team_id, repo, number, added_by_kind, added_by_id, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
-        let rows: Vec<i64> = if numbers.is_empty() {
-            vec![REPO_WATCH]
-        } else {
-            numbers.to_vec()
-        };
         for number in rows {
             insert.execute(params![team_id, repo, number, kind, id, stamp])?;
         }

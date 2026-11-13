@@ -523,9 +523,22 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Task>> {
     }))
 }
 
-/// How many characters of one issue's body a task's details keep, the same
-/// truncation the one-shot import applies.
+/// How many bytes of one issue's body a task's details keep, the same
+/// truncation the one-shot import applies. Bytes, like every other store
+/// bound: the sync's caller cuts at a character boundary before storing.
 pub const ISSUE_DETAILS_LIMIT: usize = 8000;
+
+/// Cuts `text` to at most `max` bytes without splitting a character.
+fn truncate_at_char_boundary(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
 
 /// One watched GitHub issue, fetched fresh from the API: everything the
 /// task that carries its ref needs.
@@ -596,11 +609,13 @@ impl TeamStore {
         brief: &str,
     ) -> Result<(Task, IssueSyncKind)> {
         validate("task_id", task_id, MAX_ID_BYTES)?;
-        validate("issue title", title, MAX_NAME_BYTES)?;
+        // GitHub titles arrive unbounded; the board's heading bound applies,
+        // cut where a character survives rather than refusing the sync.
+        let title = truncate_at_char_boundary(title, MAX_NAME_BYTES);
         if brief.len() > ISSUE_DETAILS_LIMIT.max(MAX_TEXT_BYTES) {
             return Err(Error::Invalid {
                 field: "issue details",
-                max: ISSUE_DETAILS_LIMIT,
+                max: ISSUE_DETAILS_LIMIT.max(MAX_TEXT_BYTES),
             });
         }
         validate("issue state", &issue.state, MAX_ID_BYTES)?;
@@ -676,6 +691,8 @@ impl TeamStore {
             if kind != IssueSyncKind::Unchanged {
                 tx.execute(
                     "UPDATE tasks SET title = ?1, brief = ?2, status = ?3, result = ?4,
+                            blocker_reason = CASE WHEN ?3 IN ('done', 'open')
+                                THEN NULL ELSE blocker_reason END,
                             issue_url = ?5, issue_state = ?6, updated_at = ?7
                      WHERE team_id = ?8 AND issue_repo = ?9 AND issue_number = ?10",
                     params![

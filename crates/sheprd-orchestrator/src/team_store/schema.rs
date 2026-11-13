@@ -5,7 +5,7 @@ use rusqlite::params;
 
 /// Creates every table on a fresh database and brings an existing one up
 /// to the current shape: the issue-sync columns postdate the first
-/// stores, so a database opened by an older build gains them here.
+/// schema, so every database gains them in the migration below.
 pub(super) fn run(db: &Connection) -> Result<()> {
     db.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -85,8 +85,9 @@ pub(super) fn run(db: &Connection) -> Result<()> {
                 PRIMARY KEY (team_id, repo, number)
             );",
         )?;
-    // The issue-sync columns postdate the first stores: a fresh database
-    // creates them above, an existing one gains them here.
+    // The issue-sync columns postdate the first schema: the CREATE TABLE
+    // above keeps the original shape, so every database gains the columns
+    // here, new or old.
     for (column, declaration) in [
         ("issue_repo", "TEXT"),
         ("issue_number", "INTEGER"),

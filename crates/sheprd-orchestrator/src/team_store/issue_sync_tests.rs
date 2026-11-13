@@ -254,6 +254,96 @@ fn a_first_sync_of_a_closed_issue_lands_done_with_the_close_link() {
 }
 
 #[test]
+fn closing_a_blocked_task_clears_its_blocker() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let (task, _) = upsert(&mut store, &issue(6, "OPEN", "Blocked tracker"));
+    store
+        .block_task("t", &task.task_id, &lead(), "waiting on a host")
+        .unwrap();
+    let (task, kind) = upsert(&mut store, &issue(6, "CLOSED", "Blocked tracker"));
+    assert_eq!(kind, IssueSyncKind::Closed);
+    assert_eq!(task.status, TaskStatus::Done);
+    assert_eq!(task.blocker_reason, None, "a done task blocks nothing");
+    assert_eq!(
+        task.result.as_deref(),
+        Some("https://github.com/carteakey/herding/issues/6")
+    );
+}
+
+#[test]
+fn an_over_long_issue_title_is_cut_at_a_character_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    // 255 ASCII bytes then a two-byte character: the byte cap lands inside
+    // the character, so the cut steps back one byte rather than splitting.
+    let long_title = format!("{}é", "a".repeat(255));
+    let (task, kind) = store
+        .upsert_issue_task(
+            "t",
+            &lead(),
+            "task-7",
+            &issue(7, "OPEN", "any title"),
+            &long_title,
+            "details",
+        )
+        .unwrap();
+    assert_eq!(kind, IssueSyncKind::Created);
+    assert_eq!(task.title.len(), 255);
+    assert!(task.title.ends_with('a'));
+    // The same heading again matches the stored, cut title: unchanged.
+    let (task, kind) = store
+        .upsert_issue_task(
+            "t",
+            &lead(),
+            "task-7",
+            &issue(7, "OPEN", "any title"),
+            &long_title,
+            "details",
+        )
+        .unwrap();
+    assert_eq!(kind, IssueSyncKind::Unchanged);
+    assert_eq!(task.title.len(), 255);
+}
+
+#[test]
+fn re_watching_a_capped_set_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    store
+        .watch_issues("t", &lead(), "carteakey/herding", &[])
+        .unwrap();
+    store
+        .watch_issues("t", &lead(), "carteakey/other", &[7, 9])
+        .unwrap();
+    for repo in 0..5 {
+        store
+            .watch_issues("t", &lead(), &format!("carteakey/r{repo}"), &[])
+            .unwrap();
+    }
+    assert_eq!(store.issue_watches("t").unwrap().len(), 8, "at the cap");
+
+    // Re-watching what holds already succeeds and adds nothing.
+    let watched = store
+        .watch_issues("t", &lead(), "carteakey/other", &[7, 9])
+        .unwrap();
+    assert_eq!(watched.len(), 8);
+    let watched = store
+        .watch_issues("t", &lead(), "carteakey/herding", &[])
+        .unwrap();
+    assert_eq!(watched.len(), 8);
+
+    // One genuinely new row at the cap is still refused.
+    assert!(matches!(
+        store.watch_issues("t", &lead(), "carteakey/other", &[]),
+        Err(Error::Invalid {
+            field: "watch set",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn a_store_from_before_the_issue_columns_gains_them_and_keeps_its_tasks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("team").join("db.sqlite3");

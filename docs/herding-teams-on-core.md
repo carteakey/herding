@@ -1,6 +1,6 @@
 # Teams on herdr-core: direction and spikes
 
-Status: proposal, 2026-11-12. Nothing here is decided until the spikes below
+Status: proposal, 2026-11-12; spike 1 passed and a porting plan added 2026-11-13. Nothing here is decided until the spikes below
 report. It extends the companion-daemon plan in `docs/herding-team-review.md`.
 
 ## Target shape
@@ -93,11 +93,77 @@ panes to herdr-core. Herding already speaks both
 Until then, #71 and #72 still land: they make today's Herdr 1 path work while
 the spikes answer what comes next.
 
+## Spike 1 outcome
+
+`hc send` passed (zcode3, board task `bfe3cff1`, 2026-11-13): prompts over
+2,700 bytes arrived intact in idle ZCode and Claude agents, locally and on m1
+through `hc machine add`. Two catches: a send into an open dialog types into
+the dialog, so delivery must check agent status first (ZCode reports it only
+with the plugin's environment set), and machines must be added by LAN name.
+
+## Porting plan: Teams as a service, UI as a client
+
+The Teams code today, in non-test lines:
+
+| Layer | Lines | In the service |
+| --- | --- | --- |
+| Store, board, bulletin, roles (`sheprd-orchestrator/src/team_store*`) | ~2,200 | moves as is; no GPUI |
+| CLI handlers (`sheprd-gpui/src/control/server/team*`) | ~2,600 | moves to the service's socket, mostly mechanical |
+| Bridge: wakes, identity proof, stall (`sheprd-gpui/src/team/bridge*`) | ~2,600 | rewritten against Herdr's API and `hc send` |
+| Teams window (`sheprd-gpui/src/team/view*`) | ~3,200 | stays, reading from the service |
+
+Why: most Teams failures so far come from Teams living in the window. Another
+app took the control socket after a reboot (#85). Wakes went through a
+synthesized paste (#62). Identity is proved from the window's daemon
+connection, so restarts and pane moves lose it (#42, #43). The store and wake
+queue die with the supervisor's window, and remote members work only while
+the window is connected to their host (#8, #40, #41). A service owns all of
+that whether or not an app is open.
+
+Precedent: `sheprd-remote-control` is already a daemon with no GPUI that
+drives Herdr panes through Herdr's API socket. The Teams service follows it.
+Herdr is not modified: the service is a client of herdr-core and Herdr 1, not
+an in-process plugin.
+
+### Phases
+
+1. **Service and socket.** A companion binary owns the team store and serves
+   the `herding team` requests on its own socket. The Teams window and the CLI
+   become its clients. Identity proof and wakes still go through the app for
+   now, behind a narrow interface, so this phase changes ownership only.
+2. **Identity without the window.** Spike first: is Herdr's `terminal_id`
+   (`term_…`, in `herdr pane list`) stable for a session across a GUI restart,
+   a pane move, and a daemon restart, and can the caller prove it? Herdr's JSON
+   API reports no boot id, which today's proof and #81 rely on. Then move the
+   proof into the service.
+3. **Delivery.** The wake queue drains in the service: `hc send` for
+   herdr-core panes, `herdr pane run` for Herdr 1 panes, both gated on agent
+   status so a wake never types into a dialog. Remote members through
+   `hc machine` or `herdr --machine`.
+4. **UI layer.** The Teams window reads only from the service. Spike 2 (a
+   Teams mod in the official app) becomes another client of the same socket.
+
+### Decisions
+
+- One service on the supervisor's host is the single authority to start
+  with; per-host services that sync can follow if latency or partitions need
+  them.
+- No new fixes to wake delivery inside the window after #81. Bugs there are
+  filed against phase 3 instead.
+- Herdr 1 and herdr-core both stay supported. Moving the team's panes to
+  herdr-core is the user's choice, never automatic.
+
+### Risks
+
+- No stable caller identity in Herdr's API (phase 2 spike decides).
+- `hc send` into a modal (status gate required).
+- Two daemons, two delivery paths, until panes move to herdr-core.
+
 ## Not yet verified
 
 - Only herdr.dev's pages were read, on 2026-11-12, not the
   `herdrdev/herdr-core` or `herdrdev/herdr-app` source.
-- `hc send`'s delivery semantics, idle-agent submission, and cross-machine
-  behavior are unknown until spike 1.
+- `hc send` into an open dialog or a busy agent, and its behavior beyond
+  the local host and m1.
 - The official app's UI stack is unknown. Its mods are JavaScript, while Teams
   is Rust (`sheprd-orchestrator`).

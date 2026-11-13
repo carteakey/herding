@@ -489,6 +489,15 @@ gone; `just check-file-size` passes without the #39 exceptions.
 **6. Headless and UI.** `watch`, spawn limits, and a cost budget (#73). Then the Teams mod spike in Herdr's official app, as a
 client that runs `sheprd-team … --json`. Then the repository decision.
 
+**Team templates.** `team create --template NAME` starts a preset roster:
+each member with a name, role, agent kind, model and account, worktree
+policy, and a standing brief. Two shapes to start: `small` (a supervisor and
+3 workers) and `review crew` (a supervisor, a reviewer, a planner, and 3
+workers - today's team). It depends on phase 3's `spawn`, phase 2.2's `role`
+column (decide whether reviewer and planner are roles or
+supervisor/worker plus a brief), and the model/account columns folded into
+2.2 from the parked roster profile.
+
 ### Phase 1 and 2 tasks
 
 Each task is one day or less at its review tier. AGENTS.md's tiering applies:
@@ -505,14 +514,14 @@ extraction while one is in flight.
 
 - **Scope.** `crates/sheprd-team/Cargo.toml` (workspace deps: `serde`,
   `serde_json`, `thiserror`, `chrono`, `uuid`, `tracing`; `rusqlite` behind a
-  default `store` feature; `sheprd-core-client` optional from phase 3),
-  `src/lib.rs`, `src/types.rs`. Move the record types out of
-  `sheprd-orchestrator/src/team_store.rs` and
+  default `store` feature), `src/lib.rs`, `src/types.rs`. Move the record
+  types out of `sheprd-orchestrator/src/team_store.rs` and
   `sheprd-control-protocol/src/protocol/team.rs`: `Member`, `Team`,
   `SessionTarget`, `Author`, `Post`, `Task`, `Finding`, `RecipientStatus`,
   `Acknowledgement`, `Confidence`, `TaskStatus`, `DeliveryState`,
   `ConfidenceLevel`, `TaskState`. `sheprd-orchestrator` re-exports them so its
-  callers change by import only.
+  callers change by import only. `sheprd-core-client` is not a dependency
+  until phase 3 needs it.
 - **Acceptance.** `cargo build -p sheprd-team --no-default-features`;
   `cargo test -p sheprd-orchestrator --lib`; `cargo test -p
   sheprd-control-protocol`; `cargo tree -p sheprd-team --edges normal | grep
@@ -616,6 +625,15 @@ extraction while one is in flight.
   - `teams.delivery TEXT NOT NULL DEFAULT 'legacy'`.
   - Types: `Member.role`, `Address`. `Team` keeps `{ supervisor, members }`
     through phase 2.
+  - **Legacy teams keep reading the legacy columns.** The address columns are
+    backfilled once at migration, but v1.0.0 keeps writing
+    `host`/`session`/`workspace`/`pane` afterwards (`insert_member` is an
+    upsert that leaves the new columns alone), so a v1.0.0 re-register, rebind,
+    or new member would leave `address_*` stale or `none`. While
+    `teams.delivery = 'legacy'`, the legacy columns stay authoritative and the
+    new binary resolves the member from them; `address_*` is read only when
+    `delivery != 'legacy'` (or the address is derived at read time). Phase 5's
+    `adopt` is where a team flips to the address columns.
 - **Acceptance.** `cargo test -p sheprd-team` (migration: old database gains
   the supervisor role, `delivery = 'legacy'`, and the address backfill);
   `cargo test -p sheprd-control-protocol` (wire unchanged); `cargo test -p
@@ -666,13 +684,20 @@ extraction while one is in flight.
 #### 2.6 Legacy compatibility gate
 
 - **Scope.** Tests plus a scripted check: a v1.0.0 database migrates; the
-  legacy team path works; v1.0.0 writes to the migrated file; assign,
+  legacy team path works; v1.0.0 writes to the migrated file; a v1.0.0
+  re-register on the migrated file leaves the legacy columns authoritative
+  and the new binary still resolves the right pane (2.2's rule); assign,
   mention, complete, and block each leave exactly the inbox and audit rows.
-- **Acceptance.** `cargo test -p sheprd-team legacy`; `git worktree add
-  /tmp/herding-v1 v1.0.0 && cargo build --manifest-path
-  /tmp/herding-v1/Cargo.toml -p sheprd-gpui --bin herding`; run that binary's
-  `team task list` and `team task claim` against a copy of the migrated
-  database (no errors); `cargo test -p sheprd-gpui --bin herding`.
+- **Acceptance.** `cargo test -p sheprd-team legacy`; check `df -h /home` for
+  the 15G floor, then build v1.0.0 once in its own worktree with its own
+  `CARGO_TARGET_DIR` on disk (never `/tmp`, which is tmpfs): `git worktree add
+  ~/repos/forks/herding-v1 v1.0.0 && CARGO_TARGET_DIR=~/.cache/herding-v1-target
+  cargo build --manifest-path ~/repos/forks/herding-v1/Cargo.toml -p
+  sheprd-gpui --bin herding`; run that binary's `team register`, `team task
+  list`, and `team task claim` against a copy of the migrated database, then
+  the new binary's `team status` against the same copy and confirm it resolves
+  the registered pane; delete the target directory and the worktree when done;
+  `cargo test -p sheprd-gpui --bin herding`.
 - **Depends on.** 2.2, 2.3, 2.4, 2.5.
 - **Review.** Full (store). Not for a cheaper worker.
 

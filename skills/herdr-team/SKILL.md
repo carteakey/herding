@@ -132,6 +132,36 @@ remote host's own store. The local `herdr pane run` cannot reach a remote pane:
 use `herdr --remote <target> pane run` or SSH in and use the host's local
 `herdr pane run`. See `docs/control-tunnel.md` and issue #35.
 
+## Reattach after a reboot or restart
+
+A reboot or daemon restart ends every pane. The roster survives, but each
+member row is still bound to the old daemon boot and pane id, so the Teams
+window shows "Session not attached". The supervisor reattaches itself first,
+then each member. Never remove a roster row to fix identity: the row carries
+the supervisor role, assignments, and mention history. Re-register instead.
+
+1. **The right app owns the control socket.** `ss -xlp | grep gpui/control.sock`
+   must show `herding`. If upstream `herdr-gpui` started first (often from
+   autostart), team commands fail with "unknown variant `team`" (#85). Ask the
+   user to quit it and start Herding.
+2. **Resume each member's session**, not a fresh one, so its context survives:
+   `herdr tab create --workspace <ws> --cwd <worktree> --label <name>`, then
+   `herdr pane run <PANE_ID> "claude --resume <id>"` (or
+   `zcode --resume <sess_id>`). Find the id in the agent's own session
+   history (the newest Claude transcript under `~/.claude/projects/`, or the
+   ZCode session database), matched by cwd and title. Note the new pane ids.
+3. **Re-register under the same name** from each member's own pane:
+   `herding team register TEAM_ID --name <name>`, then `herding team status`.
+   The supervisor sends this to each pane with `herdr pane run`, followed by a
+   one-line re-brief of the member's current task.
+4. **Verify.** Check `herding team task list` and reassign any task that
+   reset. Post one bulletin saying who is back and what each resumes.
+
+Known gap: `register` re-binds a row only from the same pane id, and a reboot
+assigns new ones, so it refuses with `Team already has a member named "<name>"`.
+Until the fix lands, do not register the supervisor under a new name; a new
+row is not the team's supervisor. Coordinate with `herdr pane run` meanwhile.
+
 ## File issues in this fork, not upstream
 
 Herding Teams is alpha software in active development, and these issue reports

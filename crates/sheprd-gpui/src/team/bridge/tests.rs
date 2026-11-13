@@ -50,6 +50,8 @@ fn add_worker_rejects_duplicate_pane_or_session() {
             supervisor: Member {
                 member_id: "sup".into(),
                 display_name: "supervisor".into(),
+                model: None,
+                account: None,
                 target: SessionTarget {
                     host: "local".into(),
                     session: "sess-1".into(),
@@ -159,6 +161,8 @@ fn select_team_does_not_flush_paused_prompts() {
             supervisor: Member {
                 member_id: "sup".into(),
                 display_name: "supervisor".into(),
+                model: None,
+                account: None,
                 target: SessionTarget {
                     host: "local".into(),
                     session: "sess-1".into(),
@@ -203,6 +207,8 @@ fn toggle_pause_team_resolves_team_when_selected_is_none() {
             supervisor: Member {
                 member_id: "sup".into(),
                 display_name: "supervisor".into(),
+                model: None,
+                account: None,
                 target: SessionTarget {
                     host: "local".into(),
                     session: "sess-1".into(),
@@ -242,6 +248,8 @@ fn is_pane_paused_for_team_retains_paused_status_when_switching_teams() {
             supervisor: Member {
                 member_id: "sup".into(),
                 display_name: "supervisor".into(),
+                model: None,
+                account: None,
                 target: SessionTarget {
                     host: "local".into(),
                     session: "sess-1".into(),
@@ -288,6 +296,8 @@ fn fallback_team() -> Team {
         supervisor: Member {
             member_id: "sup".into(),
             display_name: "supervisor".into(),
+            model: None,
+            account: None,
             target: SessionTarget {
                 host: "local".into(),
                 session: "sess-1".into(),

@@ -7,6 +7,10 @@ pub const MAX_TEAM_ID_BYTES: usize = 128;
 pub const MAX_TEAM_NAME_BYTES: usize = 128;
 pub const MAX_MEMBER_ID_BYTES: usize = 128;
 pub const MAX_MEMBER_NAME_BYTES: usize = 128;
+/// Maximum model label a member reports at registration.
+pub const MAX_MODEL_BYTES: usize = 128;
+/// Maximum account or plan label a member reports at registration.
+pub const MAX_ACCOUNT_BYTES: usize = 128;
 pub const MAX_AGENT_BYTES: usize = 64;
 pub const MAX_MESSAGE_ID_BYTES: usize = 128;
 pub const MAX_TASK_ID_BYTES: usize = 128;
@@ -33,6 +37,14 @@ pub enum TeamOp {
         team_id: String,
         /// Member display name, at most [`MAX_MEMBER_NAME_BYTES`] bytes.
         name: String,
+        /// Model the member runs, at most [`MAX_MODEL_BYTES`] bytes. Absent
+        /// keeps whatever the row already records.
+        #[serde(default)]
+        model: Option<String>,
+        /// Account or plan that pays for the member, at most
+        /// [`MAX_ACCOUNT_BYTES`] bytes. Absent keeps the recorded value.
+        #[serde(default)]
+        account: Option<String>,
     },
     /// List explicitly registered members, bounded by [`MAX_PAGE_SIZE`].
     Roster {
@@ -208,6 +220,14 @@ pub struct MemberInfo {
     pub supervisor: bool,
     /// Agent kind label, at most [`MAX_AGENT_BYTES`] bytes.
     pub agent: String,
+    /// Model the member reported at registration, at most
+    /// [`MAX_MODEL_BYTES`] bytes; absent when it named none.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Account or plan the member reported at registration, at most
+    /// [`MAX_ACCOUNT_BYTES`] bytes; absent when it named none.
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

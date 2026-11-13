@@ -22,6 +22,8 @@ fn member(id: &str, n: u8) -> Member {
     Member {
         member_id: id.into(),
         display_name: id.into(),
+        model: None,
+        account: None,
         target: target(n),
     }
 }

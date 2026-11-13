@@ -167,6 +167,8 @@ fn wake_team() -> Team {
         supervisor: Member {
             member_id: "m_sup".into(),
             display_name: "supervisor".into(),
+            model: None,
+            account: None,
             target: SessionTarget {
                 host: "boot-local".into(),
                 session: "default".into(),
@@ -177,6 +179,8 @@ fn wake_team() -> Team {
         members: vec![Member {
             member_id: "m_w1".into(),
             display_name: "worker1".into(),
+            model: None,
+            account: None,
             target: SessionTarget {
                 host: "boot-local".into(),
                 session: "default".into(),

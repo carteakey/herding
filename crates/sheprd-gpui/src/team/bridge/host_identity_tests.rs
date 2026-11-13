@@ -52,6 +52,8 @@ fn member(id: &str, host: &str, pane: &str, name: &str) -> Member {
     Member {
         member_id: id.into(),
         display_name: name.into(),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: host.into(),
             session: format!("agent:zcode:w0:{pane}"),

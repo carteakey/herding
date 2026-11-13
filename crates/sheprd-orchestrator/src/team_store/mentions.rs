@@ -1,9 +1,9 @@
 //! Team goals, member self-registration, session-to-team discovery, and `@mention` resolution.
 
 use super::{
-    Author, Error, MAX_ID_BYTES, MAX_MEMBERS, MAX_MENTIONS, MAX_TEXT_BYTES, Member, Recipients,
-    Result, SessionTarget, Team, TeamStore, insert_member, now_stamp, read_member, validate,
-    validate_member,
+    Author, Error, MAX_ID_BYTES, MAX_MEMBERS, MAX_MENTIONS, MAX_TEXT_BYTES, Member, MemberProfile,
+    Recipients, Result, SessionTarget, Team, TeamStore, insert_member, now_stamp, read_member,
+    validate, validate_member,
 };
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
@@ -139,6 +139,8 @@ impl TeamStore {
     }
 
     /// Registers a live session target in `team_id` or updates its display name if already present.
+    /// `profile` carries the optional model and account the caller reports; a
+    /// re-registration that names neither keeps what the row already records.
     /// `caller_boot` is the boot the caller's endpoint currently reports, `live_hosts` names the
     /// connected endpoints' stable ids plus their boot ids, and `endpoint_ids` names every known
     /// endpoint's stable id whether connected or not: a name holder whose recorded host is the
@@ -150,6 +152,7 @@ impl TeamStore {
         team_id: &str,
         member_id: &str,
         display_name: &str,
+        profile: &MemberProfile,
         target: &SessionTarget,
         hosts: &HostContext,
     ) -> Result<Member> {
@@ -163,6 +166,8 @@ impl TeamStore {
         let candidate = Member {
             member_id: member_id.to_owned(),
             display_name: display_name.trim().to_owned(),
+            model: profile.model.clone(),
+            account: profile.account.clone(),
             target: target.clone(),
         };
         validate_member(&candidate)?;
@@ -176,7 +181,7 @@ impl TeamStore {
             return Err(Error::TeamNotFound(team_id.to_owned()));
         }
         let mut stmt = tx.prepare(
-            "SELECT member_id, display_name, host, session, workspace, pane
+            "SELECT member_id, display_name, host, session, workspace, pane, model, account
              FROM members WHERE team_id = ?1 ORDER BY member_id",
         )?;
         let members = stmt
@@ -194,6 +199,8 @@ impl TeamStore {
             let updated = Member {
                 member_id: existing.member_id.clone(),
                 display_name: candidate.display_name,
+                model: candidate.model.or_else(|| existing.model.clone()),
+                account: candidate.account.or_else(|| existing.account.clone()),
                 target: target.clone(),
             };
             insert_member(&tx, team_id, &updated)?;
@@ -243,6 +250,8 @@ impl TeamStore {
             let updated = Member {
                 member_id: existing.member_id.clone(),
                 display_name: candidate.display_name,
+                model: candidate.model.or_else(|| existing.model.clone()),
+                account: candidate.account.or_else(|| existing.account.clone()),
                 target: target.clone(),
             };
             insert_member(&tx, team_id, &updated)?;

@@ -419,4 +419,5 @@ fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
 
 mod dispatch_tests;
 mod lineage;
+mod profile_tests;
 mod wake_delivery_tests;

@@ -6,8 +6,8 @@
 //! after an accepted mutation does not cancel that mutation; the caller's
 //! outcome is unknown until it reads the reply.
 use sheprd_orchestrator::team_store::{
-    self, Acknowledgement, Author, Confidence, Finding, HostContext, Member, Post, RecipientStatus,
-    Recipients, SessionTarget, Task, Team, TeamStore,
+    self, Acknowledgement, Author, Confidence, Finding, HostContext, Member, MemberProfile, Post,
+    RecipientStatus, Recipients, SessionTarget, Task, Team, TeamStore,
 };
 use std::{
     path::PathBuf,
@@ -135,6 +135,8 @@ pub(crate) enum ScopedAction {
     },
     Register {
         name: String,
+        model: Option<String>,
+        account: Option<String>,
     },
     Roster,
     GoalSet {
@@ -709,7 +711,12 @@ fn scoped(
     action: ScopedAction,
     live_hosts: &[String],
 ) -> Result<Reply, Error> {
-    if let ScopedAction::Register { name } = action {
+    if let ScopedAction::Register {
+        name,
+        model,
+        account,
+    } = action
+    {
         let member_id = uuid::Uuid::new_v4().to_string();
         let hosts = HostContext {
             caller_boot: caller_boot.to_owned(),
@@ -717,7 +724,8 @@ fn scoped(
             endpoint_ids: endpoint_ids.to_vec(),
             live_panes: live_panes.to_vec(),
         };
-        let member = store.register_member(team_id, &member_id, &name, caller, &hosts)?;
+        let profile = MemberProfile { model, account };
+        let member = store.register_member(team_id, &member_id, &name, &profile, caller, &hosts)?;
         let team = store.team(team_id)?.ok_or(Error::NotMember)?;
         return Ok(Reply::ScopedRegistered { team, member });
     }

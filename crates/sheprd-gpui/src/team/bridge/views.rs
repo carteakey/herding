@@ -51,6 +51,8 @@ pub(crate) fn member(name: &str, target: SessionTarget) -> Member {
     Member {
         member_id: uuid::Uuid::new_v4().to_string(),
         display_name: name.to_owned(),
+        model: None,
+        account: None,
         target,
     }
 }

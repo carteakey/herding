@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - v0.2.0
 
 ### Added
+- `herding team register --model MODEL --account ACCOUNT` records what each
+  member runs and which account pays for it, and `herding team roster` shows
+  both in its text and `--json` output, so a supervisor can see shared quotas
+  and cost tiers. Both flags are optional; a re-registration that names
+  neither keeps what the row already records, and an older team database
+  gains the two nullable columns on open.
 - `herdr-gpui --version` (or `-V`): prints one line, e.g.
   `herdr-gpui v20261104.2 (05b1a580)`. The build embeds the calendar version
   from the newest reachable release tag plus the short rev, with `-dirty`

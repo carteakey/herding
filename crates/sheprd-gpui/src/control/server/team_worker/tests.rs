@@ -7,6 +7,8 @@ fn team() -> Team {
     let member = Member {
         member_id: "member-1".into(),
         display_name: "lead".into(),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: "local".into(),
             session: "session-1".into(),
@@ -17,6 +19,8 @@ fn team() -> Team {
     let second = Member {
         member_id: "member-2".into(),
         display_name: "reviewer".into(),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: "local".into(),
             session: "session-2".into(),

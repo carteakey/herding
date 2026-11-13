@@ -50,6 +50,8 @@ fn no_team_operation_deletes_a_team() {
         TeamOp::Register {
             team_id: "team-1".into(),
             name: "builder".into(),
+            model: None,
+            account: None,
         },
         TeamOp::Roster {
             team_id: "team-1".into(),

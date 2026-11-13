@@ -15,6 +15,8 @@ fn member(id: &str, name: &str, pane: &str) -> Member {
     Member {
         member_id: id.into(),
         display_name: name.into(),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: "local".into(),
             session: format!("sess-{id}"),

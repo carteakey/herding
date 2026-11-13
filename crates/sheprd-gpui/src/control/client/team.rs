@@ -10,17 +10,18 @@ use crate::{
 use std::fmt::Write as _;
 
 fn member_line(member: &crate::control::protocol::team::MemberInfo) -> String {
-    format!(
-        "{}  {}  {}{}",
-        member.id,
-        member.name,
-        member.agent,
-        if member.supervisor {
-            "  supervisor"
-        } else {
-            ""
-        }
-    )
+    let mut line = format!("{}  {}  {}", member.id, member.name, member.agent);
+    for label in [member.model.as_deref(), member.account.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        line.push_str("  ");
+        line.push_str(label);
+    }
+    if member.supervisor {
+        line.push_str("  supervisor");
+    }
+    line
 }
 
 fn delivery_state_label(state: DeliveryState) -> &'static str {
@@ -111,7 +112,17 @@ fn finding_line(finding: &FindingInfo) -> String {
 fn to_op(command: TeamCommand) -> TeamOp {
     match command {
         TeamCommand::Status { team_id } => TeamOp::Status { team_id },
-        TeamCommand::Register { team_id, name } => TeamOp::Register { team_id, name },
+        TeamCommand::Register {
+            team_id,
+            name,
+            model,
+            account,
+        } => TeamOp::Register {
+            team_id,
+            name,
+            model,
+            account,
+        },
         TeamCommand::Roster { team_id } => TeamOp::Roster { team_id },
         TeamCommand::GoalSet { team_id, goal } => TeamOp::GoalSet { team_id, goal },
         TeamCommand::BulletinList { team_id, after } => TeamOp::BulletinList { team_id, after },

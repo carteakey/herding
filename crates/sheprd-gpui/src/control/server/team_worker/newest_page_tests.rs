@@ -22,6 +22,8 @@ fn seeded(dir: &std::path::Path, posts: usize) -> TeamStore {
     let member = |id: &str, n| Member {
         member_id: id.into(),
         display_name: id.into(),
+        model: None,
+        account: None,
         target: target(n),
     };
     store

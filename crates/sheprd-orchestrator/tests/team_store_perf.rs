@@ -185,6 +185,8 @@ fn member(index: usize) -> sheprd_orchestrator::team_store::Member {
     sheprd_orchestrator::team_store::Member {
         member_id: member_id(index),
         display_name: format!("agent{index}"),
+        model: None,
+        account: None,
         target: sheprd_orchestrator::team_store::SessionTarget {
             host: "local".into(),
             session: format!("sess-{index}"),

@@ -6,6 +6,8 @@ fn member(id: &str, name: &str, session: &str) -> Member {
     Member {
         member_id: id.into(),
         display_name: name.into(),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: "local".into(),
             session: session.into(),
@@ -229,6 +231,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
             "team-1",
             "w-3",
             "ZCode-1",
+            &MemberProfile::default(),
             &new_target,
             &HostContext {
                 caller_boot: "local".into(),
@@ -252,6 +255,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
             "team-1",
             "w-4",
             "zcode-1",
+            &MemberProfile::default(),
             &resumed_target,
             &HostContext {
                 caller_boot: "local".into(),
@@ -286,6 +290,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
             "team-1",
             "w-5",
             "zcode-1",
+            &MemberProfile::default(),
             &stolen_target,
             &HostContext {
                 caller_boot: "local".into(),
@@ -355,6 +360,7 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
             "team-1",
             "w-3",
             "ZCode-1",
+            &MemberProfile::default(),
             &target,
             &HostContext {
                 caller_boot: "boot-old".into(),
@@ -379,6 +385,7 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
             "team-1",
             "w-9",
             "zcode-1",
+            &MemberProfile::default(),
             &restarted,
             &HostContext {
                 caller_boot: "boot-new".into(),
@@ -415,6 +422,7 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
             "team-1",
             "w-10",
             "zcode-1",
+            &MemberProfile::default(),
             &stolen,
             &HostContext {
                 caller_boot: "boot-other".into(),

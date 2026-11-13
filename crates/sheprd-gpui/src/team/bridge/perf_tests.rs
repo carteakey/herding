@@ -25,6 +25,8 @@ fn member(id: &str) -> Member {
     Member {
         member_id: id.to_owned(),
         display_name: format!("agent-{id}"),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: "local".into(),
             session: format!("sess-{id}"),

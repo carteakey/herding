@@ -1,9 +1,9 @@
 //! Agent-facing team registration, status, goal, bulletin, task board, and finding commands.
 use super::{Args, CliError, unknown};
 use sheprd_control_protocol::protocol::team::{
-    ConfidenceLevel, MAX_BULLETIN_TEXT_BYTES, MAX_FINDING_ID_BYTES, MAX_MEMBER_ID_BYTES,
-    MAX_MEMBER_NAME_BYTES, MAX_MENTIONS, MAX_MESSAGE_ID_BYTES, MAX_PAGE_SIZE, MAX_TASK_ID_BYTES,
-    MAX_TASK_TITLE_BYTES, MAX_TEAM_ID_BYTES,
+    ConfidenceLevel, MAX_ACCOUNT_BYTES, MAX_BULLETIN_TEXT_BYTES, MAX_FINDING_ID_BYTES,
+    MAX_MEMBER_ID_BYTES, MAX_MEMBER_NAME_BYTES, MAX_MENTIONS, MAX_MESSAGE_ID_BYTES,
+    MAX_MODEL_BYTES, MAX_PAGE_SIZE, MAX_TASK_ID_BYTES, MAX_TASK_TITLE_BYTES, MAX_TEAM_ID_BYTES,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,6 +14,8 @@ pub enum TeamCommand {
     Register {
         team_id: String,
         name: String,
+        model: Option<String>,
+        account: Option<String>,
     },
     Roster {
         team_id: String,
@@ -146,8 +148,21 @@ pub(super) fn team(args: &mut Args) -> Result<TeamCommand, CliError> {
                 "--name",
                 MAX_MEMBER_NAME_BYTES,
             )?;
+            let model = args
+                .text_option("--model")?
+                .map(|value| bounded(value, "--model", MAX_MODEL_BYTES))
+                .transpose()?;
+            let account = args
+                .text_option("--account")?
+                .map(|value| bounded(value, "--account", MAX_ACCOUNT_BYTES))
+                .transpose()?;
             let team_id = team_id(args)?;
-            Ok(TeamCommand::Register { team_id, name })
+            Ok(TeamCommand::Register {
+                team_id,
+                name,
+                model,
+                account,
+            })
         }
         Some("roster") => Ok(TeamCommand::Roster {
             team_id: team_id(args)?,

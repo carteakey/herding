@@ -6,6 +6,8 @@ fn member(id: &str, session: &str) -> Member {
     Member {
         member_id: id.into(),
         display_name: format!("bee-{session}"),
+        model: None,
+        account: None,
         target: SessionTarget {
             host: "local".into(),
             session: session.into(),

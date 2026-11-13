@@ -122,15 +122,33 @@ pub(super) fn serve(
                     ScopedAction::Status { team_id },
                 )
             }
-            team::TeamOp::Register { team_id, name } => {
+            team::TeamOp::Register {
+                team_id,
+                name,
+                model,
+                account,
+            } => {
                 if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES)
                     || !valid_id(&name, team::MAX_MEMBER_NAME_BYTES)
+                    || model
+                        .as_deref()
+                        .is_some_and(|model| !valid_id(model, team::MAX_MODEL_BYTES))
+                    || account
+                        .as_deref()
+                        .is_some_and(|account| !valid_id(account, team::MAX_ACCOUNT_BYTES))
                 {
                     return invalid(
-                        "team ID and member name must be nonempty and within size limits",
+                        "team ID, member name, model, and account must be nonempty and within size limits",
                     );
                 }
-                (team_id, ScopedAction::Register { name })
+                (
+                    team_id,
+                    ScopedAction::Register {
+                        name,
+                        model,
+                        account,
+                    },
+                )
             }
             team::TeamOp::Roster { team_id } => {
                 if !valid_id(&team_id, team::MAX_TEAM_ID_BYTES) {

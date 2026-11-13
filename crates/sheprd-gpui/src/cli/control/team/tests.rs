@@ -76,6 +76,26 @@ fn parses_roster_list_post_and_ack() {
         TeamCommand::Register {
             team_id: "team-1".into(),
             name: "builder".into(),
+            model: None,
+            account: None,
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "register",
+            "team-1",
+            "--name",
+            "builder",
+            "--model",
+            "claude-sonnet-4-5",
+            "--account",
+            "team-plan",
+        ]),
+        TeamCommand::Register {
+            team_id: "team-1".into(),
+            name: "builder".into(),
+            model: Some("claude-sonnet-4-5".into()),
+            account: Some("team-plan".into()),
         }
     );
 }

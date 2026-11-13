@@ -12,6 +12,8 @@ fn sample_team() -> Team {
         supervisor: Member {
             member_id: "supervisor".into(),
             display_name: "Supervisor".into(),
+            model: None,
+            account: None,
             target: SessionTarget {
                 host: "local".into(),
                 session: "session-a".into(),

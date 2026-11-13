@@ -17,6 +17,8 @@ fn store() -> (tempfile::TempDir, TeamStore) {
     let member = |id: &str, n| Member {
         member_id: id.into(),
         display_name: id.into(),
+        model: None,
+        account: None,
         target: target(n),
     };
     store
@@ -183,6 +185,8 @@ fn register_status_goal_tasks_and_findings_round_trip() {
         &[],
         ScopedAction::Register {
             name: "investigator".into(),
+            model: None,
+            account: None,
         },
         &[],
     )

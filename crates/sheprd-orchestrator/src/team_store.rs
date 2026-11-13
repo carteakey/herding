@@ -6,6 +6,7 @@
 
 mod findings;
 mod mentions;
+mod schema;
 mod tasks;
 
 pub use findings::{Confidence, Finding};
@@ -205,7 +206,20 @@ pub struct SessionTarget {
 pub struct Member {
     pub member_id: String,
     pub display_name: String,
+    /// The model the member reported at registration, when it named one.
+    pub model: Option<String>,
+    /// The account or plan the member reported, when it named one.
+    pub account: Option<String>,
     pub target: SessionTarget,
+}
+
+/// The optional, self-reported parts of a registration: what the member runs
+/// and which account pays for it. A re-registration that names neither keeps
+/// what the row already records.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MemberProfile {
+    pub model: Option<String>,
+    pub account: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -267,75 +281,7 @@ impl TeamStore {
         crate::private_file::prepare(path)?;
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
-        db.execute_batch(
-            "PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS teams (
-                team_id TEXT PRIMARY KEY, name TEXT NOT NULL,
-                supervisor_id TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS team_goals (
-                team_id TEXT PRIMARY KEY REFERENCES teams(team_id) ON DELETE CASCADE,
-                goal TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS members (
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                member_id TEXT NOT NULL, display_name TEXT NOT NULL,
-                host TEXT NOT NULL, session TEXT NOT NULL,
-                workspace TEXT, pane TEXT,
-                PRIMARY KEY (team_id, member_id)
-            );
-            CREATE TABLE IF NOT EXISTS posts (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                post_id TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                author_kind TEXT NOT NULL CHECK(author_kind IN ('human','member')),
-                author_id TEXT NOT NULL, reply_to TEXT REFERENCES posts(post_id),
-                body TEXT NOT NULL, created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS posts_team_idx ON posts(team_id, sequence);
-            CREATE TABLE IF NOT EXISTS mentions (
-                post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
-                recipient_id TEXT NOT NULL, PRIMARY KEY(post_id, recipient_id)
-            );
-            CREATE INDEX IF NOT EXISTS mentions_recipient_idx ON mentions(recipient_id);
-            CREATE TABLE IF NOT EXISTS acknowledgements (
-                post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
-                recipient_id TEXT NOT NULL, acknowledged_at TEXT NOT NULL,
-                PRIMARY KEY(post_id, recipient_id)
-            );
-            CREATE TABLE IF NOT EXISTS tasks (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                creator_kind TEXT NOT NULL CHECK(creator_kind IN ('human','member')),
-                creator_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                brief TEXT NOT NULL,
-                assignee_id TEXT,
-                status TEXT NOT NULL CHECK(status IN ('open','in_progress','blocked','done','cancelled')),
-                blocker_reason TEXT,
-                result TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS tasks_team_idx ON tasks(team_id, sequence);
-            CREATE TABLE IF NOT EXISTS findings (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                finding_id TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-                author_kind TEXT NOT NULL CHECK(author_kind IN ('human','member')),
-                author_id TEXT NOT NULL,
-                task_id TEXT REFERENCES tasks(task_id),
-                description TEXT NOT NULL,
-                evidence TEXT NOT NULL,
-                confidence TEXT NOT NULL CHECK(confidence IN ('low','medium','high')),
-                supersedes TEXT REFERENCES findings(finding_id),
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS findings_team_idx ON findings(team_id, sequence);",
-        )?;
+        schema::prepare(&db)?;
         Ok(Self {
             db,
             #[cfg(any(test, feature = "test-support"))]
@@ -432,7 +378,7 @@ impl TeamStore {
         let Some((name, supervisor_id)) = row else {
             return Ok(None);
         };
-        let mut stmt = self.prep("SELECT member_id,display_name,host,session,workspace,pane FROM members WHERE team_id=?1 ORDER BY member_id")?;
+        let mut stmt = self.prep("SELECT member_id,display_name,host,session,workspace,pane,model,account FROM members WHERE team_id=?1 ORDER BY member_id")?;
         let members = stmt
             .query_map([team_id], read_member)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -881,6 +827,8 @@ pub(super) fn validate_member(m: &Member) -> Result<()> {
     for (field, v) in [
         ("workspace", m.target.workspace.as_deref()),
         ("pane", m.target.pane.as_deref()),
+        ("model", m.model.as_deref()),
+        ("account", m.account.as_deref()),
     ] {
         if let Some(v) = v {
             validate(field, v, MAX_ID_BYTES)?;
@@ -893,13 +841,15 @@ pub(super) fn insert_member(
     team_id: &str,
     m: &Member,
 ) -> Result<()> {
-    tx.execute("INSERT INTO members(team_id,member_id,display_name,host,session,workspace,pane) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(team_id,member_id) DO UPDATE SET display_name=excluded.display_name,host=excluded.host,session=excluded.session,workspace=excluded.workspace,pane=excluded.pane",params![team_id,m.member_id,m.display_name,m.target.host,m.target.session,m.target.workspace,m.target.pane])?;
+    tx.execute("INSERT INTO members(team_id,member_id,display_name,host,session,workspace,pane,model,account) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(team_id,member_id) DO UPDATE SET display_name=excluded.display_name,host=excluded.host,session=excluded.session,workspace=excluded.workspace,pane=excluded.pane,model=excluded.model,account=excluded.account",params![team_id,m.member_id,m.display_name,m.target.host,m.target.session,m.target.workspace,m.target.pane,m.model,m.account])?;
     Ok(())
 }
 pub(super) fn read_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<Member> {
     Ok(Member {
         member_id: r.get(0)?,
         display_name: r.get(1)?,
+        model: r.get(6)?,
+        account: r.get(7)?,
         target: SessionTarget {
             host: r.get(2)?,
             session: r.get(3)?,
@@ -975,6 +925,10 @@ mod page_tests;
 #[cfg(test)]
 #[path = "team_store/prefix_id_tests.rs"]
 mod prefix_id_tests;
+
+#[cfg(test)]
+#[path = "team_store/profile_tests.rs"]
+mod profile_tests;
 
 #[cfg(test)]
 #[path = "team_store/status_tests.rs"]

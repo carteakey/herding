@@ -97,6 +97,8 @@ pub(super) fn member_info(
         name: member.display_name.clone(),
         supervisor: member.member_id == team.supervisor.member_id,
         agent,
+        model: member.model.clone(),
+        account: member.account.clone(),
     }
 }
 

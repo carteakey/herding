@@ -11,6 +11,8 @@ fn test_team() -> Team {
         supervisor: Member {
             member_id: "m_sup".into(),
             display_name: "supervisor".into(),
+            model: None,
+            account: None,
             target: SessionTarget {
                 host: "local".into(),
                 session: "default".into(),
@@ -22,6 +24,8 @@ fn test_team() -> Team {
             Member {
                 member_id: "m_w1".into(),
                 display_name: "worker1".into(),
+                model: None,
+                account: None,
                 target: SessionTarget {
                     host: "local".into(),
                     session: "default".into(),
@@ -32,6 +36,8 @@ fn test_team() -> Team {
             Member {
                 member_id: "m_w2".into(),
                 display_name: "worker2".into(),
+                model: None,
+                account: None,
                 target: SessionTarget {
                     host: "local".into(),
                     session: "default".into(),

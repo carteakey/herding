@@ -10,6 +10,8 @@ fn team_requests_have_stable_wire_forms() {
             op: TeamOp::Register {
                 team_id: "team-1".into(),
                 name: "builder".into(),
+                model: Some("claude-sonnet-4-5".into()),
+                account: Some("team-plan".into()),
             },
         }),
         Request::Team(Call {
@@ -73,6 +75,8 @@ fn team_replies_round_trip_and_delivery_states_are_enum_values() {
         name: "builder".into(),
         supervisor: false,
         agent: "codex".into(),
+        model: Some("gpt-5-codex".into()),
+        account: Some("team-plan".into()),
     };
     let entry = BulletinEntry {
         sequence: 7,
@@ -226,6 +230,8 @@ fn task_finding_and_status_wire_forms_round_trip() {
                 name: "worker".into(),
                 supervisor: false,
                 agent: "zcode".into(),
+                model: None,
+                account: None,
             }),
             pending_mentions: 2,
             open_tasks: 1,

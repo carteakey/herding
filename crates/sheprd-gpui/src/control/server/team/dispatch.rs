@@ -27,61 +27,67 @@ pub(crate) fn notify_team_mutation(reply: &Reply, cx: &mut App) {
         // silently: the dispatch would neither deliver nor log (#62).
         if let Err(error) = handle.update(cx, |view, _, cx| {
             view.team_bridge.mark_dirty();
-            if view.live.status.is_connected() {
-                for dispatch in &dispatches {
-                    // The escape hatch: a member whose session heartbeat is
-                    // dead is never dispatched to; the work stays pending on
-                    // the board until a live session takes it.
-                    if view.team_session_dead(&dispatch.host, &dispatch.pane_id) {
-                        tracing::info!(
-                            team = %dispatch.team_id,
-                            member = %dispatch.member,
-                            pane = %dispatch.pane_id,
-                            outcome = "skipped_dead_session",
-                            "team wake not dispatched: the pane's session reports crashed"
-                        );
-                        continue;
-                    }
-                    if !dispatch.signals.is_empty()
-                        && dispatch
-                            .signals
-                            .iter()
-                            .all(|signal| view.team_bridge.wake_seen(&dispatch.team_id, signal))
-                    {
-                        tracing::info!(
-                            team = %dispatch.team_id,
-                            member = %dispatch.member,
-                            pane = %dispatch.pane_id,
-                            outcome = "deduped",
-                            "team wake not dispatched: every wake signal was already seen"
-                        );
-                        continue;
-                    }
-                    let outcome = view.enqueue_or_dispatch_team_prompt(
-                        Some(dispatch.team_id.as_str()),
-                        crate::team::bridge::PromptDispatch {
-                            host: dispatch.host.clone(),
-                            pane_id: dispatch.pane_id.clone(),
-                            prompt: dispatch.prompt.clone(),
-                            summary: dispatch.summary.clone(),
-                        },
-                        dispatch.signals.clone(),
-                    );
+            // No connection gate here: a disconnected selected endpoint says
+            // nothing about the member's own host, and gating on it dropped
+            // every wake silently - no log, no hold, no retry - whenever the
+            // selected endpoint happened to be down (#35). The per-wake path
+            // already does the right thing: deliver_team_prompt logs and
+            // holds what it cannot reach, and the drain retries whenever any
+            // endpoint can prove a pane (prompts.rs dispatch_drained_team_
+            // prompts).
+            for dispatch in &dispatches {
+                // The escape hatch: a member whose session heartbeat is
+                // dead is never dispatched to; the work stays pending on
+                // the board until a live session takes it.
+                if view.team_session_dead(&dispatch.host, &dispatch.pane_id) {
                     tracing::info!(
                         team = %dispatch.team_id,
                         member = %dispatch.member,
                         pane = %dispatch.pane_id,
-                        ?outcome,
-                        "team wake dispatch outcome"
+                        outcome = "skipped_dead_session",
+                        "team wake not dispatched: the pane's session reports crashed"
                     );
-                    // A held or undeliverable wake is not recorded: the queued
-                    // prompt or the fallback still carries it.
-                    if matches!(outcome, crate::team::bridge::prompts::PromptOutcome::Sent)
-                        && !dispatch.signals.is_empty()
-                    {
-                        view.team_bridge
-                            .mark_supervisor_woken(&dispatch.team_id, dispatch.signals.clone());
-                    }
+                    continue;
+                }
+                if !dispatch.signals.is_empty()
+                    && dispatch
+                        .signals
+                        .iter()
+                        .all(|signal| view.team_bridge.wake_seen(&dispatch.team_id, signal))
+                {
+                    tracing::info!(
+                        team = %dispatch.team_id,
+                        member = %dispatch.member,
+                        pane = %dispatch.pane_id,
+                        outcome = "deduped",
+                        "team wake not dispatched: every wake signal was already seen"
+                    );
+                    continue;
+                }
+                let outcome = view.enqueue_or_dispatch_team_prompt(
+                    Some(dispatch.team_id.as_str()),
+                    crate::team::bridge::PromptDispatch {
+                        host: dispatch.host.clone(),
+                        pane_id: dispatch.pane_id.clone(),
+                        prompt: dispatch.prompt.clone(),
+                        summary: dispatch.summary.clone(),
+                    },
+                    dispatch.signals.clone(),
+                );
+                tracing::info!(
+                    team = %dispatch.team_id,
+                    member = %dispatch.member,
+                    pane = %dispatch.pane_id,
+                    ?outcome,
+                    "team wake dispatch outcome"
+                );
+                // A held or undeliverable wake is not recorded: the queued
+                // prompt or the fallback still carries it.
+                if matches!(outcome, crate::team::bridge::prompts::PromptOutcome::Sent)
+                    && !dispatch.signals.is_empty()
+                {
+                    view.team_bridge
+                        .mark_supervisor_woken(&dispatch.team_id, dispatch.signals.clone());
                 }
             }
             cx.notify();

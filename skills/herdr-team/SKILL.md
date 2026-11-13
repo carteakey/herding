@@ -157,10 +157,10 @@ the supervisor role, assignments, and mention history. Re-register instead.
 4. **Verify.** Check `herding team task list` and reassign any task that
    reset. Post one bulletin saying who is back and what each resumes.
 
-Known gap: `register` re-binds a row only from the same pane id, and a reboot
-assigns new ones, so it refuses with `Team already has a member named "<name>"`.
-Until the fix lands, do not register the supervisor under a new name; a new
-row is not the team's supervisor. Coordinate with `herdr pane run` meanwhile.
+After a reboot `register` re-binds the member's existing row from its new pane
+when the row's daemon is gone, keeping its role and assignments. A row whose
+holder is still running an agent stays refused: never register under a new
+name to get around that.
 
 ## File issues in this fork, not upstream
 

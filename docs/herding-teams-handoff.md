@@ -59,7 +59,7 @@ All in workspace `w22`, resumed after the reboot.
 | vice-supervisor | `w22:pQ` | Claude `d8db213b` | idle | m1 live wake test after #81 |
 | zcode1 | `w22:pM` | `sess_c6368d3e…` | waiting on review | live check of issue auto-sync after merge |
 | zcode2 | `w22:pN` | `sess_00d6a935…` | roster removal and restore, layer B | stall-detection PR replacing #68 |
-| zcode3 | `w22:pP` | `sess_2c5462d2…` | #81 CI | the pivot spikes |
+| zcode3 | `w22:pP` | `sess_2c5462d2…` | #81 CI | spikes A-D, now |
 
 - **vice-supervisor:** main `d091c73e0` is built and checked on fx505 and m1;
   m2 is down. The m1 wake test needs a member registered from m1 through
@@ -70,8 +70,8 @@ All in workspace `w22`, resumed after the reboot.
   team store and bridge, so it needs a full diff review before merging.
 - **zcode2:** working on identity-protection layers D, A, B (audit log,
   guarded Remove, removal with restore), approved in that order.
-- **zcode3:** after #81, record its board updates for c2a506e0, then take the
-  spikes below.
+- **zcode3:** can start spikes A-D now (they do not need #81); after #81,
+  record its board updates for c2a506e0.
 
 ## Open work to land or close
 
@@ -87,37 +87,69 @@ All in workspace `w22`, resumed after the reboot.
 
 ## Starting the pivot
 
-Do these once #81 is merged. Spikes first; they decide the identity design.
+`docs/herding-teams-on-core.md` is the authority. Where this note and the plan
+disagree, the plan wins. This is only the order of work.
 
-Spikes, research only, in a scratch HOME (give to zcode3):
+Phases (each leaves a working system; every team is marked `legacy` or
+`daemon` in `teams.delivery`, so nothing switches over on one day):
 
-1. Do herdr-core terminal ids and labels survive a core restart?
-2. Do `terminal.run` env and labels reach a terminal started with `on` on m1?
-3. Does `events.subscribe` report status changes for m1's terminals?
-4. Can a running command ask the core which terminal it is in? Fable cited
-   `HC_TERMINAL_ID`; our client code never reads it, so it is unconfirmed.
+0. #81 merges. Today's Teams then gets bug fixes only.
+1. **Extract** `sheprd-team` from `team_store*` and `scoped()`
+   (`crates/sheprd-gpui/src/control/server/team_worker.rs:679`): one set of
+   types, one validation layer, wire byte-identical. Gate:
+   `cargo tree -p sheprd-team` shows no GPUI or `gix`.
+2. **Schema and inbox:** `user_version`, the new member columns, and the
+   `inbox`, `doorbell`, `audit`, `requests` tables. Legacy teams behave as
+   before, including with today's binary writing to the migrated file.
+3. **The new path:** the `sheprd-team` binary on herdr-core terminals
+   (`create`, `spawn`, `inbox`, approvals, the daemon). Daemon teams only.
+   Needs spikes A, C, D.
+4. **Remote:** `spawn --machine` and the tunnel. Needs spike B. Gate: an m1
+   worker gets a doorbell, completes a task, and posts with the window closed.
+5. **Cut over and delete:** `adopt` moves a team to `daemon`; each current
+   member is started once on herdr-core with `spawn --resume`. A member left on
+   a Herdr 1 pane only pulls its inbox; it gets **no doorbell**.
+6. **Headless and UI:** `watch`, spawn limits, cost budget (#73), then the mod
+   spike and the repository decision.
 
-Phase 1, no behaviour change (give to zcode2 once its stall PR is up): extract
-`sheprd-team` with `team_store` and `scoped()`
-(`crates/sheprd-gpui/src/control/server/team_worker.rs:679`), one validation
-layer, one set of serde types. Dependencies: SQLite, serde,
-`sheprd-core-client` only.
+Spikes (research only, scratch `HOME`, private `HC_SOCKET`; give to zcode3):
 
-Then phases 2 to 5 as the plan lays out: CLI opens the store in-process plus
-`team create`; inbox, outbox, and `team spawn`; remote members (gate: an m1
-worker is woken, completes a task, and posts with the window closed); delete
-the window code and decide the UI.
+- **A. Restart:** do terminal ids and labels survive a herdr-core restart?
+- **B. Remote spawn:** do `Run.env` and `Run.labels` reach a terminal started
+  with `on`, and do events report its status changes?
+- **C. Receipts per agent:** for ZCode, Claude Code, and Codex, does
+  `send { if: "idle" }` return `started: true`, and is a send into a
+  permission dialog refused as blocked?
+- **D. Terminal from the core:** confirm herdr-core sets `HC_TERMINAL_ID` in
+  every terminal it starts (the `herding` CLI and `sheprd-automate` already
+  read it), then whether the CLI can learn its terminal from the core rather
+  than its environment.
 
-Decisions already taken:
+Sequencing: phase 1 moves `team_store` and `scoped()`, and three in-flight
+branches touch those files: zcode1's `team/issue-sync-zcode1`, zcode2's stall
+detection, and zcode2's layers D, A, B. Land or park all three before the
+extraction starts, never during it.
 
-- Trust model is "same user". Removing members and changing roles needs the
-  user's approval through the CLI, using something an agent cannot produce (a
-  one-time code or a phone confirmation), and every write is logged.
-- Schema changes are additive with a version check while the old window and
-  the new CLI share one SQLite file.
-- New members are herdr-core terminals. Herdr 1 panes become pull-only with a
-  `herdr pane run` doorbell. Moving the current workers is a restart with
-  `--resume`.
+| Part | Ready | Note |
+| --- | --- | --- |
+| Spikes A-D | yes, now | research only, independent of #81 |
+| Phase 1 (extract) | after the three branches | mechanical, clear gate; a cheaper worker can do it with the full diff reviewed |
+| Phase 2 (schema, inbox) | nearly | needs the layer D reconciliation and exact DDL as board tasks |
+| Phase 3 onward | no | waits on spike results |
+
+The plan gives gates per phase, not task-sized work. Break phases 1 and 2
+into board tasks, each with scope and acceptance checks, before assigning.
+
+Audit schema: zcode2's in-flight layer D (audit log) and the plan's `audit`
+table must be one schema. Whoever takes phase 2 starts from zcode2's work and
+reconciles the plan's table to it.
+
+**Open decision for the user: how approvals are confirmed.** The plan's
+`approve` refuses a caller that resolves to a member, which stops mistakes,
+not intent. A code stored in the database is readable by any same-user agent,
+so the only confirmation an agent cannot reach is outside the terminal: the
+phone through remote control, or the Teams window's dialog. Decide before
+phase 3.
 
 ## Rules and gotchas
 

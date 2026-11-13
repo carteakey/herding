@@ -10,18 +10,20 @@ session. For the why behind every decision here, read
 - **v1 is released.** Herding v1.0.0 (branch `v1-herding`, tags `v1` and
   `v1.0.0`, main `6264db98e`) checkpoints Teams as it runs in the window,
   including #81. Release notes only, no binaries.
-- **The pivot is on hold.** The user will restart it deliberately. Do not
-  start spikes or the `sheprd-team` extraction until they say so. zcode3 was
-  told to hold.
+- **The pivot restarted on 2026-11-13.** Wave 1 is issue sync (PR 88) and
+  layer D (PR 90); phases 1 and 2 are broken into tasks in the plan's
+  "Phase 1 and 2 tasks" section. Spikes A-D are done (task `8d2c281f`).
 - **Use v1 to build v2.** The v1 team coordinates the workers who will build
   the pivot, so v1 gets reliability fixes only. Do not extend code the pivot
   deletes (see "What the pivot replaces").
-- **A new Herding build with #81 is ready** (`target/release/herding`, 13:37)
-  but not running. Restart it, then re-register everyone (next section).
-- **The plan** is `docs/herding-teams-on-core.md`. Where this note and the plan
-  disagree, the plan wins.
+- **The running app** is on main (`2e808a02d` after PR 88's review fixes) and
+  members are registered. The plan is `docs/herding-teams-on-core.md`. Where
+  this note and the plan disagree, the plan wins.
 
-## First: restart and re-register
+## Restart and re-register
+
+The app is running and every member re-registered under its own name. Keep
+the procedure for the next restart:
 
 1. Restart `target/release/herding`. Terminals and agents survive it.
 2. `ss -xlp | grep gpui/control.sock` must show `herding`, not `herdr-gpui`.
@@ -39,38 +41,40 @@ All in workspace `w22`, resumed after the morning reboot.
 
 | Member | Pane | Session | State | Next |
 | --- | --- | --- | --- | --- |
-| claude (supervisor) | `w22:pJ` | Claude `27a6c02d` | session ended | re-register, park the work below |
-| vice-supervisor | `w22:pQ` | Claude `d8db213b` | idle | m1 live wake test, now unblocked by #81 |
-| zcode1 | `w22:pM` | `sess_c6368d3e…` | waiting on review | issue sync: land the store side only |
-| zcode2 | `w22:pN` | `sess_00d6a935…` | layers D, A, B | finish D (audit log); park A and B |
-| zcode3 | `w22:pP` | `sess_2c5462d2…` | holding | board bookkeeping for c2a506e0 after re-registering |
+| claude (supervisor) | `w22:pJ` | Claude `27a6c02d` | running wave 1 | phase 1-2 board tasks from the plan |
+| vice-supervisor | `w22:pQ` | Claude `d8db213b` | reviewing PRs 88 and 90 | LAND or FIX on each |
+| zcode1 | `w22:pM` | `sess_c6368d3e…` | PR 88 green, awaiting verdict | then the #35 wake diagnosis (F1/F2) |
+| zcode2 | `w22:pN` | `sess_00d6a935…` | PR 90 open, fixes applied | rebase on PR 88, then phase 2.4 |
+| zcode3 | `w22:pP` | `sess_2c5462d2…` | spikes A-D done | spike E (agent status into herdr-core) |
+| opencode | `w22:pX` | this session | phase 1-2 tasks written | phase 1.1 after the wave lands |
 
-- **vice-supervisor:** main `d091c73e0` is built and checked on fx505 and m1;
-  m2 is down. The m1 wake test registers a member from m1 through
-  `scripts/control-tunnel.sh m1`; roll the new main out first.
-- **zcode1:** upstream kingsword09/zcode-cli#275 (the herdr-zcode plugin fix)
-  is open and green, waiting on the maintainer. Its issue sync branch
-  (`team/issue-sync-zcode1`, `5b50a1827`, task 171f4799) touches the team
-  store and bridge: review the full diff, land the store side, and leave the
-  window-side sync loop for the pivot.
-- **zcode2:** layer D (audit log) carries into the pivot's phase 2. Layers A
-  (guarded Remove) and B (removal with restore) become the pivot's approval
-  requests; park them.
+- **vice-supervisor:** PR 88 (issue sync store) and PR 90 (layer D audit) are
+  the wave-1 gate. Main is `2e808a02d` after PR 88's review fixes.
+- **zcode1:** the issue sync store side landed as
+  `team/issue-sync-store-zcode1` (PR 88); the original
+  `team/issue-sync-zcode1` WIP branch is reviewed and superseded. Upstream
+  kingsword09/zcode-cli#275 (the herdr-zcode plugin fix) is green, waiting on
+  the maintainer.
+- **zcode2:** layer D is `team/audit-log-zcode2` (PR 90), a separate branch
+  from the parked layers A and B. Phase 2.4 starts from it.
+- **zcode3:** spikes A-D are recorded as findings `2eb2b7f6` (A), `43ba946e`
+  (B), `5c78160f` (C), `0c1aebe3` (D). C's result (no agent reports status
+  to herdr-core) is phase 3's blocker.
 
 ## Open work
 
 | Item | State | Recommendation |
 | --- | --- | --- |
-| `team/issue-sync-zcode1` (171f4799) | pushed, needs full review | land the store side |
-| zcode2's layer D (audit log) | in progress | finish; phase 2 builds on it |
-| zcode2's layers A, B | in progress | park as `archive/` tags |
-| #82 stall detection (`team/stall-on-wakes-zcode2`) | open | park: the pivot replaces it with `last_seen_at` |
-| #57 zero-touch dispatch | open | park: wake-path code the pivot deletes |
-| #58 supervisor handoff (`feat/supervisor-handoff-rebased`) | open | park: becomes an approval request in the pivot |
+| PR 88 `team/issue-sync-store-zcode1` (171f4799) | green, awaiting vicesuper's verdict | LAND after the verdict; the four review fixes are in |
+| PR 90 `team/audit-log-zcode2` (f4a5c9ee) | open, fixes applied | rebase on PR 88, then LAND; phase 2.4 starts from it |
+| Phase 1-2 tasks | written in the plan | the supervisor creates the board tasks |
+| #35 wake diagnosis (9863cb5d) | F2 confirmed, F1 plausible | F2 lands alone; F1 needs the pacing probe first |
+| Spike E (agent status into herdr-core) | new, zcode3 | research and design only; C blocks phase 3 |
 | #18, #19 old playbook PRs | open | user's call |
 | kingsword09/zcode-cli#275 | open, green | wait for the maintainer |
 | #85 control socket collision | filed | v1 fix if cheap; the pivot removes it |
-| Board: a0d0bc0a, 0506677f (#74) | open | unassigned |
+| #74 prune/archive (0506677f) | open, unassigned | deferred: the plan schedules pruning after phase 6 |
+| a0d0bc0a roster model/account | parked | folded into phase 2.2; branch kept as `archive/team/roster-profile-opencode` |
 
 To park a branch: `git tag archive/<branch> origin/<branch>`, push the tag,
 then close its PR with a comment naming the tag.
@@ -120,6 +124,11 @@ as a tag on origin. Restore one with `git branch <name> archive/<name>`.
 | `archive/feat/v2-brand` | V2 brand brief and mark (#33) | work in progress, stale |
 | `archive/preserve/supervisor-handoff-20261113` | #58 before its rebase | #58 is rebased |
 | `archive/preserve/zero-touch-dispatch-20261113` | #57 before its rebase | #57 is rebased |
+| `archive/team/stall-on-wakes-zcode2` | #82 stall detection | parked: the pivot replaces it with `last_seen_at` |
+| `archive/feat/zero-touch-dispatch-rebased` | #57 zero-touch dispatch | parked: wake-path code the pivot deletes |
+| `archive/feat/supervisor-handoff-rebased` | #58 supervisor handoff | parked: becomes an approval request in the pivot |
+| `archive/team/identity-audit-zcode2` | layers A (guarded Remove) and B (restore) | parked: become phase-2 approval requests |
+| `archive/team/roster-profile-opencode` | roster model and account (a0d0bc0a) | parked: folds into phase 2.2's member columns |
 
 Deleted without a tag because main already holds their changes:
 `fix/team-block-permission` (#63), `team/supervisor-playbook-vice` (#76),
@@ -128,12 +137,12 @@ Deleted without a tag because main already holds their changes:
 in #71), `fix/stale-wake-targets` and its `preserve/` copy.
 
 Kept: `main`, `v0-herding`, `v1-herding`, `team/host-identity-zcode3` (merged;
-zcode3's worktree still uses it), `team/issue-sync-zcode1`,
-`team/identity-audit-zcode2`, `team/stall-on-wakes-zcode2`, #57's and #58's
-branches, `handoff-rebase-tmp` (vice-supervisor's worktree), and #18's and
+zcode3's worktree still uses it), `team/issue-sync-store-zcode1` (PR 88),
+`team/audit-log-zcode2` (PR 90), `team/issue-sync-zcode1` (the superseded WIP
+branch), `handoff-rebase-tmp` (vice-supervisor's worktree), and #18's and
 #19's branches.
 
-## When the pivot resumes
+## Pivot order of work
 
 `docs/herding-teams-on-core.md` is the authority. Where this note and the plan
 disagree, the plan wins. This is only the order of work.
@@ -160,37 +169,42 @@ Phases (each leaves a working system; every team is marked `legacy` or
 6. **Headless and UI:** `watch`, spawn limits, cost budget (#73), then the mod
    spike and the repository decision.
 
-Spikes (research only, scratch `HOME`, private `HC_SOCKET`; give to zcode3):
+Spikes A-D are done (task `8d2c281f`); spike E is the phase-3 blocker:
 
-- **A. Restart:** do terminal ids and labels survive a herdr-core restart?
-- **B. Remote spawn:** do `Run.env` and `Run.labels` reach a terminal started
-  with `on`, and do events report its status changes?
-- **C. Receipts per agent:** for ZCode, Claude Code, and Codex, does
-  `send { if: "idle" }` return `started: true`, and is a send into a
-  permission dialog refused as blocked?
-- **D. Terminal from the core:** confirm herdr-core sets `HC_TERMINAL_ID` in
-  every terminal it starts (the `herding` CLI and `sheprd-automate` already
-  read it), then whether the CLI can learn its terminal from the core rather
-  than its environment.
+- **A. Restart:** done (finding `2eb2b7f6`) - terminal ids, names, and labels
+  survive a graceful stop and a crash restart.
+- **B. Remote spawn:** done (finding `43ba946e`) - `Run.env`, labels, status
+  events, gated-send receipts, and dialog refusal work on m1; `HC_TERMINAL_ID`
+  is bare, so spawn carries the machine name in the environment.
+- **C. Receipts per agent:** done (finding `5c78160f`) - the core's semantics
+  are correct, but no agent reports status to it today; phase 3 needs spike E.
+- **D. Terminal from the core:** done (finding `0c1aebe3`) - the environment
+  is set in every local terminal; the core does not resolve callers from peer
+  credentials, so identity stays environment-carried and the audit records
+  the claimed terminal.
 
-Sequencing: phase 1 moves `team_store` and `scoped()`, and three in-flight
-branches touch those files: zcode1's `team/issue-sync-zcode1`, zcode2's stall
-detection, and zcode2's layers D, A, B. Land or park all three before the
+Sequencing: phase 1 moves `team_store` and `scoped()`, and the wave-1
+branches touch those files: PR 88 (`team/issue-sync-store-zcode1`) and PR 90
+(`team/audit-log-zcode2`) land first. #82 stall detection, #57 zero-touch
+dispatch, #58 supervisor handoff, layers A and B, and the roster profile are
+already parked as `archive/` tags. Land or park every branch before the
 extraction starts, never during it.
 
 | Part | Ready | Note |
 | --- | --- | --- |
-| Spikes A-D | yes, when the pivot resumes | research only |
-| Phase 1 (extract) | after the three branches | mechanical, clear gate; a cheaper worker can do it with the full diff reviewed |
-| Phase 2 (schema, inbox) | nearly | needs the layer D reconciliation and exact DDL as board tasks |
-| Phase 3 onward | no | waits on spike results |
+| Spikes A-D | done | findings `2eb2b7f6`, `43ba946e`, `5c78160f`, `0c1aebe3`; C blocks phase 3 |
+| Phase 1 (extract) | after PR 88 and PR 90 | mechanical, clear gate; a cheaper worker can do it with the full diff reviewed |
+| Phase 2 (schema, inbox) | after phase 1 | 2.4 needs PR 90's audit table; the exact DDL is in the plan's task list |
+| Phase 3 onward | no | needs spike E (agent status into herdr-core) |
 
-The plan gives gates per phase, not task-sized work. Break phases 1 and 2
-into board tasks, each with scope and acceptance checks, before assigning.
+The plan now carries one task per phase-1 and phase-2 step, with scope,
+acceptance checks, dependencies, and review tier. The supervisor creates the
+board rows from it before assigning.
 
-Audit schema: zcode2's in-flight layer D (audit log) and the plan's `audit`
-table must be one schema. Whoever takes phase 2 starts from zcode2's work and
-reconciles the plan's table to it.
+Audit schema: PR 90 creates the unified `audit` table (the plan's shape plus
+the identity snapshot columns, `actor` defaulting to `unknown`, `ref_id =
+member_id` for identity ops). Phase 2.4 fills `actor` and `terminal` from
+`apply`, logs `delete_team`, and edits the plan's Audit section to match.
 
 **Approvals (decided 2026-11-13):** `approve` refusing a caller that resolves
 to a member, plus the audit log, is enough. The risk is mistakes, not malice,

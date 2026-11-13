@@ -27,7 +27,7 @@ fn team(team_id: &str, workers: &[&str]) -> Team {
 }
 
 #[test]
-fn removing_a_member_deletes_their_mentions_and_acknowledgements() {
+fn removing_a_member_tombstones_the_row_and_keeps_their_delivery_rows() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = TeamStore::open(&dir.path().join("team").join("team.sqlite3")).unwrap();
     store
@@ -50,20 +50,57 @@ fn removing_a_member_deletes_their_mentions_and_acknowledgements() {
 
     store.remove_member("t", "departing").unwrap();
 
-    assert_eq!(store.posts("t", 0, 10).unwrap()[0].1.mentions, ["staying"]);
-    let statuses = store.recipient_statuses("p").unwrap();
-    assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].0, "staying");
-    assert!(matches!(statuses[0].1, RecipientStatus::Acknowledged(_)));
-    assert_eq!(
-        store
-            .acknowledgements("p")
-            .unwrap()
+    // The row is tombstoned, not deleted: the roster no longer lists them,
+    // and the board's deliveries hide their receipts while they are gone.
+    let roster = store.team("t").unwrap().unwrap();
+    assert!(
+        !roster
+            .members
             .iter()
-            .map(|ack| ack.recipient_id.as_str())
-            .collect::<Vec<_>>(),
-        ["staying"]
+            .any(|member| member.member_id == "departing")
     );
+    assert_eq!(
+        store.posts("t", 0, 10).unwrap()[0].1.mentions,
+        ["staying"],
+        "the tombstoned member's receipt waits for a restore"
+    );
+
+    // Re-registering the same member and pane restores their identity and
+    // their delivery state instead of minting a new member.
+    let returning = Member {
+        member_id: "departing-resumed".into(),
+        display_name: "departing".into(),
+        target: SessionTarget {
+            host: "local".into(),
+            session: "session-departing-resumed".into(),
+            workspace: Some("ws".into()),
+            pane: Some("pane-departing".into()),
+        },
+    };
+    let restored = store
+        .register_member(
+            "t",
+            "departing-resumed",
+            "departing",
+            &returning.target,
+            &["local".into()],
+        )
+        .unwrap();
+    assert_eq!(
+        restored.member_id, "departing",
+        "the row's own id comes back"
+    );
+    assert_eq!(
+        store.posts("t", 0, 10).unwrap()[0].1.mentions,
+        ["departing", "staying"],
+        "the restored member's delivery state came back with them"
+    );
+    let statuses = store.recipient_statuses("p").unwrap();
+    let departing = statuses
+        .iter()
+        .find(|(recipient, _)| recipient == "departing")
+        .unwrap();
+    assert!(matches!(departing.1, RecipientStatus::Acknowledged(_)));
 }
 
 #[test]
@@ -89,6 +126,15 @@ fn removing_a_member_leaves_another_teams_delivery_rows_intact() {
 
     store.remove_member("a", "worker").unwrap();
 
-    assert!(store.recipient_statuses("p-a").unwrap().is_empty());
+    // The tombstone deletes nothing: both teams keep their delivery rows,
+    // and team a's roster no longer lists the removed worker.
+    assert_eq!(store.recipient_statuses("p-a").unwrap().len(), 1);
     assert_eq!(store.recipient_statuses("p-b").unwrap().len(), 1);
+    let roster_a = store.team("a").unwrap().unwrap();
+    assert!(
+        !roster_a
+            .members
+            .iter()
+            .any(|member| member.member_id == "worker")
+    );
 }

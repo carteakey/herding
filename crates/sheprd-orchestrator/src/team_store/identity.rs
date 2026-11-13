@@ -13,11 +13,12 @@ pub(crate) const IDENTITY_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS identity_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         at TEXT NOT NULL,
-        action TEXT NOT NULL CHECK(action IN ('registered','rebound','removed')),
+        action TEXT NOT NULL CHECK(action IN ('registered','rebound','removed','restored')),
         team_id TEXT NOT NULL,
         member_id TEXT NOT NULL,
         display_name TEXT NOT NULL,
-        host TEXT, session TEXT, workspace TEXT, pane TEXT
+        host TEXT, session TEXT, workspace TEXT, pane TEXT,
+        details TEXT
     );
     CREATE INDEX IF NOT EXISTS identity_log_member_idx
         ON identity_log(team_id, member_id, id);
@@ -39,6 +40,34 @@ pub struct IdentityEvent {
     pub pane: Option<String>,
 }
 
+/// Adds the tombstone column to stores opened before layer B; the schema
+/// above already carries it for fresh stores.
+pub(crate) fn migrate(db: &rusqlite::Connection) -> Result<()> {
+    let has_removed_at: i64 = db.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('members') WHERE name = 'removed_at'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_removed_at == 0 {
+        db.execute("ALTER TABLE members ADD COLUMN removed_at TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// Whether a live (not tombstoned) member row exists for the id: removed
+/// members cannot author posts, acknowledge, or hold permissions.
+pub(super) fn is_member(
+    tx: &rusqlite::Transaction<'_>,
+    team_id: &str,
+    member_id: &str,
+) -> rusqlite::Result<bool> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM members WHERE team_id = ?1 AND member_id = ?2 AND removed_at IS NULL)",
+        params![team_id, member_id],
+        |row| row.get(0),
+    )
+}
+
 /// Records one identity event inside the caller's transaction, so the log
 /// commits atomically with the mutation it witnesses.
 pub(super) fn record(
@@ -46,11 +75,12 @@ pub(super) fn record(
     action: &str,
     team_id: &str,
     member: &Member,
+    details: Option<&str>,
 ) -> Result<()> {
     let (_, stamp) = now_stamp()?;
     connection.execute(
-        "INSERT INTO identity_log(at, action, team_id, member_id, display_name, host, session, workspace, pane)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT INTO identity_log(at, action, team_id, member_id, display_name, host, session, workspace, pane, details)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             stamp,
             action,
@@ -61,6 +91,7 @@ pub(super) fn record(
             member.target.session,
             member.target.workspace,
             member.target.pane,
+            details,
         ],
     )?;
     tracing::info!(
@@ -70,6 +101,7 @@ pub(super) fn record(
         host = %member.target.host,
         pane = ?member.target.pane,
         action,
+        details = ?details,
         "team member identity changed"
     );
     Ok(())
@@ -125,7 +157,7 @@ pub(super) fn record_new_members<'a>(
             .map(|exists| exists == 1)
             .unwrap_or(false);
         if !known {
-            record(connection, "registered", team_id, member)?;
+            record(connection, "registered", team_id, member, None)?;
         }
     }
     Ok(())

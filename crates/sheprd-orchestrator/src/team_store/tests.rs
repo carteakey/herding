@@ -548,7 +548,10 @@ fn pending_mention_count_matches_the_old_scan_and_departures() {
     assert_eq!(store.pending_mention_count("team-c", "w1").unwrap(), 3);
     assert_eq!(store.pending_mention_count("team-c", "w2").unwrap(), 3);
     assert_eq!(store.pending_mention_count("team-c", "lead").unwrap(), 0);
-    // Departure removes the mention rows, so the count follows abb045ee.
+    // Departure tombstones the row instead of deleting the mention rows:
+    // the count keeps answering from the table (a removed member's CLI
+    // cannot reach it, and a restore within the grace window brings the
+    // pending mentions back with them).
     store.remove_member("team-c", "w2").unwrap();
-    assert_eq!(store.pending_mention_count("team-c", "w2").unwrap(), 0);
+    assert_eq!(store.pending_mention_count("team-c", "w2").unwrap(), 3);
 }

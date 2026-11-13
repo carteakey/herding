@@ -2,7 +2,7 @@
 //! atomic witness - the evidence the Nov 12 roster-cleanup investigation
 //! lacked.
 
-use super::super::Team;
+use super::super::{Author, TaskStatus, Team};
 use super::*;
 
 fn member(id: &str) -> Member {
@@ -132,4 +132,105 @@ fn member_history_scopes_to_one_member() {
 fn unknown_team_has_an_empty_history() {
     let store = open();
     assert!(store.identity_history("nope", None).unwrap().is_empty());
+}
+
+#[test]
+fn a_mistaken_removal_heals_on_re_registration_within_the_window() {
+    let mut store = open();
+    store.save_team(&team("t", &["w1"])).unwrap();
+    store
+        .create_task(
+            "task1",
+            "t",
+            &Author::Human {
+                user_id: "human".into(),
+            },
+            "Write report",
+            "",
+            Some("w1"),
+        )
+        .unwrap();
+    store.claim_task("t", "task1", "w1").unwrap();
+
+    // The cleanup removes the live worker: the row tombstones, the task
+    // returns to the board.
+    store.remove_member("t", "w1").unwrap();
+    let roster = store.team("t").unwrap().unwrap();
+    assert!(roster.members.iter().all(|m| m.member_id != "w1"));
+    let task = store
+        .tasks("t", 10)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.task_id == "task1")
+        .expect("the reset task");
+    assert_eq!(task.status, TaskStatus::Open);
+    assert!(task.assignee.is_none());
+
+    // The worker's pane comes back and registers under a fresh member id:
+    // the tombstoned row restores with its own id and its reset work
+    // re-linked, so the identity and the assignment survive the mistake.
+    let mut resumed = member("w1").target;
+    resumed.session = "session-w1-resumed".into();
+    let restored = store
+        .register_member("t", "w1-resumed", "w1", &resumed, &["local".into()])
+        .unwrap();
+    assert_eq!(
+        restored.member_id, "w1",
+        "the row's own id comes back, not the CLI-minted one"
+    );
+    let roster = store.team("t").unwrap().unwrap();
+    assert!(roster.members.iter().any(|m| m.member_id == "w1"));
+    let task = store
+        .tasks("t", 10)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.task_id == "task1")
+        .expect("the task");
+    assert_eq!(
+        task.assignee.as_deref(),
+        Some("w1"),
+        "the assignment is re-linked"
+    );
+    assert_eq!(
+        task.status,
+        TaskStatus::Open,
+        "the worker re-claims to resume"
+    );
+
+    let events = store.identity_history("t", Some("w1")).unwrap();
+    let actions: Vec<&str> = events.iter().map(|event| event.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        vec!["registered", "removed", "restored"],
+        "the audit trail tells the whole story"
+    );
+}
+
+#[test]
+fn a_tombstone_beyond_the_grace_window_mints_a_new_identity() {
+    let mut store = open();
+    store.save_team(&team("t", &["w1"])).unwrap();
+    store.remove_member("t", "w1").unwrap();
+    // Age the tombstone past the grace window.
+    store
+        .db
+        .execute(
+            "UPDATE members SET removed_at = '2020-01-01T00:00:00.000Z'
+             WHERE team_id = 't' AND member_id = 'w1'",
+            [],
+        )
+        .unwrap();
+
+    let mut moved = member("w1").target;
+    moved.session = "session-w1-resumed".into();
+    let registered = store
+        .register_member("t", "w1-resumed", "w1", &moved, &["local".into()])
+        .unwrap();
+    assert_eq!(
+        registered.member_id, "w1-resumed",
+        "a long-gone member's name is re-registered, not restored"
+    );
+    // The old tombstone stays for the audit trail.
+    let events = store.identity_history("t", Some("w1")).unwrap();
+    assert_eq!(events.last().unwrap().action, "removed");
 }

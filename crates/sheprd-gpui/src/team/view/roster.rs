@@ -94,6 +94,32 @@ impl TeamView {
             )
     }
 
+    /// The roster's remove control. A member whose pane still reports a
+    /// live agent is confirmed with the evidence named; a row with no live
+    /// agent in any connected snapshot removes straight away.
+    pub(crate) fn request_remove_member(
+        &mut self,
+        team_id: &str,
+        member_id: &str,
+        evidence: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        match evidence {
+            Some(evidence) => {
+                self.confirming_remove_member =
+                    Some((team_id.to_owned(), member_id.to_owned(), evidence));
+            }
+            None => {
+                self.confirming_remove_member = None;
+                cx.emit(TeamAction::RemoveMember {
+                    team_id: team_id.to_owned(),
+                    member_id: member_id.to_owned(),
+                });
+            }
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_roster(&self, team_id: &str, cx: &mut Context<Self>) -> Div {
         let theme = &self.theme;
         let mut section = div().flex().flex_col().gap_2();
@@ -134,6 +160,72 @@ impl TeamView {
                     .text_size(px(12.))
                     .text_color(rgb(theme.muted))
                     .child(fl!("team-roster-empty")),
+            );
+        }
+
+        if let Some((confirm_team, confirm_member, evidence)) = &self.confirming_remove_member
+            && confirm_team == team_id
+        {
+            let name = self
+                .snapshot
+                .members
+                .iter()
+                .find(|member| member.member_id == *confirm_member)
+                .map(|member| member.name.clone())
+                .unwrap_or_else(|| confirm_member.clone().into());
+            section = section.child(
+                self.card()
+                    .id("team-remove-confirm-banner")
+                    .p_3()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(theme.foreground))
+                            .child(fl!(
+                                "team-action-remove-confirm",
+                                name = name.as_ref(),
+                                evidence = evidence.as_ref()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                self.button(
+                                    "team-remove-confirm-btn",
+                                    fl!("team-action-confirm"),
+                                    ButtonVariant::Primary,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        if let Some((team_id, member_id, _)) =
+                                            this.confirming_remove_member.take()
+                                        {
+                                            cx.emit(TeamAction::RemoveMember {
+                                                team_id,
+                                                member_id,
+                                            });
+                                        }
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.button(
+                                    "team-remove-cancel-btn",
+                                    fl!("team-action-cancel"),
+                                    ButtonVariant::Ghost,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.confirming_remove_member = None;
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    ),
             );
         }
 
@@ -252,16 +344,34 @@ impl TeamView {
                         },
                         cx,
                     ))
-                    .child(self.icon_action_button(
-                        SharedString::from(format!("team-remove-{index}")),
-                        "icons/trash.svg",
-                        fl!("team-action-remove-member"),
-                        TeamAction::RemoveMember {
-                            team_id: team_id.to_owned(),
-                            member_id: member.member_id.clone(),
-                        },
-                        cx,
-                    ));
+                    .child({
+                        let live = member.pane.is_some()
+                            && !member.agent.is_empty()
+                            && member.status != fl!("team-status-unavailable")
+                            && member.status != fl!("team-status-crashed");
+                        let evidence = live.then(|| {
+                            let host = member
+                                .target_pane
+                                .as_ref()
+                                .map(|pane| pane.daemon_id.clone())
+                                .unwrap_or_default();
+                            SharedString::from(fl!(
+                                "team-action-remove-evidence-live",
+                                status = member.status.as_ref(),
+                                host = host.as_str()
+                            ))
+                        });
+                        let member_id = member.member_id.clone();
+                        let team_id = team_id.to_owned();
+                        self.icon_button(
+                            SharedString::from(format!("team-remove-{index}")),
+                            "icons/trash.svg",
+                            fl!("team-action-remove-member"),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request_remove_member(&team_id, &member_id, evidence.clone(), cx);
+                        }))
+                    });
             }
 
             card = card.child(

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 mod board;
 mod bulletin;
+mod confirmations;
 mod findings;
 mod roster;
 mod task_icons;
@@ -174,6 +175,9 @@ pub(crate) struct TeamView {
     pub(super) editing_task_id: Option<String>,
     pub(super) finding_form_open: bool,
     pub(super) confirming_delete_team: bool,
+    /// Pending removal of a member whose pane still reports a live agent:
+    /// (team, member, evidence) - finding 7ad9beb0.
+    pub(super) confirming_remove_member: Option<(String, String, SharedString)>,
     pub(super) completed_tasks_open: bool,
     pub(super) expanded_task_ids: HashSet<String>,
     pub(super) findings_collapsed: bool,
@@ -306,6 +310,7 @@ impl TeamView {
             editing_task_id: None,
             finding_form_open: false,
             confirming_delete_team: false,
+            confirming_remove_member: None,
             completed_tasks_open: false,
             expanded_task_ids: HashSet::new(),
             findings_collapsed: false,
@@ -365,6 +370,7 @@ impl TeamView {
             self.editing_goal = false;
             self.editing_task_id = None;
             self.confirming_delete_team = false;
+            self.confirming_remove_member = None;
             self.action_warning = None;
             self.active_tasks_show_all = false;
             self.completed_tasks_show_all = false;
@@ -873,58 +879,8 @@ impl Render for TeamView {
             );
         }
 
-        if self.confirming_delete_team {
-            let team_id_del = team_id.clone();
-            let team_name_display = self.snapshot.team_name.clone().unwrap_or_default();
-            header_card = header_card.child(
-                self.card()
-                    .id("team-delete-confirm-banner")
-                    .p_3()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(theme.foreground))
-                            .child(fl!(
-                                "team-action-delete-confirm",
-                                team = team_name_display.as_ref()
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                self.button(
-                                    "team-delete-confirm-btn",
-                                    fl!("team-action-delete-permanently"),
-                                    ButtonVariant::Primary,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.confirming_delete_team = false;
-                                        cx.emit(TeamAction::DeleteTeam {
-                                            team_id: team_id_del.clone(),
-                                        });
-                                    },
-                                )),
-                            )
-                            .child(
-                                self.button(
-                                    "team-delete-cancel-btn",
-                                    fl!("team-action-cancel"),
-                                    ButtonVariant::Ghost,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.confirming_delete_team = false;
-                                        cx.notify();
-                                    },
-                                )),
-                            ),
-                    ),
-            );
+        if let Some(banner) = self.render_delete_team_banner(&team_id, cx) {
+            header_card = header_card.child(banner);
         }
 
         body = body.child(header_card);

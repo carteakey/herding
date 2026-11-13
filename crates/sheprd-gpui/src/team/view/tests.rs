@@ -494,3 +494,101 @@ fn bulletin_composer_renders_input_wrapper_and_submit(cx: &mut TestAppContext) {
         "the bulletin post submit button should be laid out"
     );
 }
+
+#[gpui::test]
+fn a_live_member_confirms_removal_with_the_evidence(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| TeamView::new(font(), Theme::default(), cx));
+    view.update(cx, |view, cx| {
+        view.snapshot = TeamSnapshot {
+            state: TeamLoadState::Ready,
+            team_id: Some("team-test".into()),
+            team_name: Some("herding".into()),
+            members: vec![
+                // A member the daemons still report: pane matched, agent
+                // present, status not the stale vocabulary.
+                TeamMember {
+                    member_id: "live".into(),
+                    name: "worker".into(),
+                    role: "worker".into(),
+                    agent: "zcode".into(),
+                    pane: Some(PaneIdentity {
+                        daemon_id: "boot-m1".into(),
+                        session_id: Some("agent:zcode:ws:ws:p2".into()),
+                        workspace_id: "ws".into(),
+                        pane_id: "ws:p2".into(),
+                    }),
+                    target_pane: Some(PaneIdentity {
+                        daemon_id: "boot-m1".into(),
+                        session_id: Some("agent:zcode:ws:ws:p2".into()),
+                        workspace_id: "ws".into(),
+                        pane_id: "ws:p2".into(),
+                    }),
+                    status: "Working".into(),
+                    supervisor: false,
+                    paused: false,
+                },
+                // A member no snapshot matches: the stale shape.
+                TeamMember {
+                    member_id: "stale".into(),
+                    name: "gone".into(),
+                    role: "worker".into(),
+                    agent: String::new().into(),
+                    pane: None,
+                    target_pane: None,
+                    status: "Session not attached".into(),
+                    supervisor: false,
+                    paused: false,
+                },
+            ],
+            ..TeamSnapshot::default()
+        };
+        cx.notify();
+    });
+
+    view.update(cx, |view, cx| {
+        // The live member's removal asks for confirmation, naming the
+        // evidence the click saw (finding 7ad9beb0: live workers looked
+        // removable when the status pipeline was broken).
+        view.request_remove_member(
+            "team-test",
+            "live",
+            Some("Their pane reports a live agent (Working) on boot-m1.".into()),
+            cx,
+        );
+        let (team, member, evidence) = view
+            .confirming_remove_member
+            .clone()
+            .expect("the live member confirms");
+        assert_eq!(team, "team-test");
+        assert_eq!(member, "live");
+        assert!(evidence.contains("boot-m1"));
+
+        // The stale member removes straight away: no confirmation state.
+        view.request_remove_member("team-test", "stale", None, cx);
+        assert!(view.confirming_remove_member.is_none());
+    });
+}
+
+#[gpui::test]
+fn a_team_or_snapshot_change_clears_the_removal_confirmation(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| TeamView::new(font(), Theme::default(), cx));
+    view.update(cx, |view, cx| {
+        view.request_remove_member(
+            "team-test",
+            "live",
+            Some("Their pane reports a live agent (Working).".into()),
+            cx,
+        );
+        assert!(view.confirming_remove_member.is_some());
+        // A snapshot for another team clears the pending confirmation.
+        view.set_snapshot(
+            TeamSnapshot {
+                state: TeamLoadState::Ready,
+                team_id: Some("team-other".into()),
+                ..TeamSnapshot::default()
+            },
+            cx,
+        );
+        assert!(view.confirming_remove_member.is_none());
+    });
+}

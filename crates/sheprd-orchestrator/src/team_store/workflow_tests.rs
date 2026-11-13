@@ -234,6 +234,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
                 caller_boot: "local".into(),
                 live_hosts: Vec::new(),
                 endpoint_ids: vec!["local".to_owned()],
+                live_panes: Vec::new(),
             },
         )
         .unwrap();
@@ -256,6 +257,7 @@ fn team_goal_registration_discovery_and_mention_validation() {
                 caller_boot: "local".into(),
                 live_hosts: Vec::new(),
                 endpoint_ids: vec!["local".to_owned()],
+                live_panes: Vec::new(),
             },
         )
         .unwrap();
@@ -271,14 +273,16 @@ fn team_goal_registration_discovery_and_mention_validation() {
         1
     );
 
-    // The same name from a DIFFERENT pane is a different agent: rejected.
+    // The same name from a DIFFERENT pane on the SAME machine re-binds the
+    // holder: the machine is the anchor, and a restart hands out new pane
+    // ids. The member id survives.
     let stolen_target = SessionTarget {
         session: "sess-w5".into(),
         pane: Some("pane-w-5".into()),
         ..new_target.clone()
     };
-    assert!(matches!(
-        store.register_member(
+    let moved = store
+        .register_member(
             "team-1",
             "w-5",
             "zcode-1",
@@ -287,20 +291,23 @@ fn team_goal_registration_discovery_and_mention_validation() {
                 caller_boot: "local".into(),
                 live_hosts: Vec::new(),
                 endpoint_ids: vec!["local".to_owned()],
+                live_panes: vec!["pane-w-5".to_owned()],
             },
-        ),
-        Err(Error::DuplicateDisplayName(_))
-    ));
+        )
+        .unwrap();
+    assert_eq!(moved.member_id, "w-3");
 
-    // Session discovery finds the team without knowing team_id.
+    // Session discovery finds the team without knowing team_id, from the
+    // row's current session (the pane moved by the re-bind above).
     let (found_team, found_member) = store
         .find_member_team(
             None,
-            &resumed_target,
+            &stolen_target,
             &HostContext {
                 caller_boot: "local".into(),
                 live_hosts: Vec::new(),
                 endpoint_ids: vec!["local".to_owned()],
+                live_panes: vec!["pane-w-5".to_owned()],
             },
         )
         .unwrap()
@@ -353,6 +360,7 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
                 caller_boot: "boot-old".into(),
                 live_hosts: Vec::new(),
                 endpoint_ids: vec!["local".to_owned()],
+                live_panes: Vec::new(),
             },
         )
         .unwrap();
@@ -376,6 +384,7 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
                 caller_boot: "boot-new".into(),
                 live_hosts: live.clone(),
                 endpoint_ids: vec!["local".to_owned()].clone(),
+                live_panes: Vec::new(),
             },
         )
         .unwrap();
@@ -392,8 +401,9 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
         "the re-bind keeps one member under the name"
     );
 
-    // A holder whose boot IS live keeps the name: the same pane id claimed
-    // from another live boot is identity theft across the fleet, not drift.
+    // A holder whose boot IS live keeps the name against another machine,
+    // whatever the pane: the holder's endpoint is connected, so a claim
+    // from elsewhere is identity theft, not drift.
     let stolen = SessionTarget {
         host: "boot-other".into(),
         session: "sess-w5".into(),
@@ -410,30 +420,7 @@ fn a_stale_boot_rebinds_a_pane_while_a_live_other_boot_stays_refused() {
                 caller_boot: "boot-other".into(),
                 live_hosts: live.clone(),
                 endpoint_ids: vec!["local".to_owned()].clone(),
-            },
-        ),
-        Err(Error::DuplicateDisplayName(_))
-    ));
-
-    // A different pane is a different agent even when the holder's boot
-    // has drifted away.
-    let other_pane = SessionTarget {
-        host: "boot-new".into(),
-        session: "sess-w6".into(),
-        pane: Some("pane-w-6".into()),
-        ..target.clone()
-    };
-    let live = vec!["boot-new".to_owned()];
-    assert!(matches!(
-        store.register_member(
-            "team-1",
-            "w-11",
-            "zcode-1",
-            &other_pane,
-            &HostContext {
-                caller_boot: "boot-new".into(),
-                live_hosts: live.clone(),
-                endpoint_ids: vec!["local".to_owned()],
+                live_panes: vec!["pane-w-3".to_owned()],
             },
         ),
         Err(Error::DuplicateDisplayName(_))

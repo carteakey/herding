@@ -382,3 +382,128 @@ fn a_wake_to_a_gone_pane_waits_out_its_retry_then_is_marked_undeliverable(
         })
         .expect("window open");
 }
+
+/// A bulletin post mentioning a member whose pane lives on a connected
+/// endpoint that is NOT the window's selected one. The pre-fix gate dropped
+/// every such wake silently whenever the selected endpoint was down (#35):
+/// no log, no hold, no retry.
+#[gpui::test]
+fn a_wake_reaches_a_connected_host_while_the_selected_endpoint_is_down(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            // The selected endpoint is down.
+            view.live.status = ConnectionStatus::Disconnected;
+            view.live.snapshot = None;
+            // The member's own host is a different, connected endpoint whose
+            // snapshot shows their pane.
+            let mut remote = Endpoint::new(
+                "boot-remote".into(),
+                "Remote".into(),
+                ConnectTarget::Socket("/unused-wake-test.sock".into()),
+                true,
+            );
+            remote.live.status = ConnectionStatus::Connected;
+            remote.live.snapshot = Some(Arc::new(snapshot(
+                "boot-remote",
+                "w9",
+                "w9:p1",
+                Some("zcode"),
+            )));
+            view.endpoints.push(remote);
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&mention_wake_on_host("boot-remote", "w9:p1"), app));
+
+    window
+        .update(cx, |view, _, _| {
+            // The pane's agent is mid-turn, so the wake is held for the
+            // drain - but held, with the outcome on the status line, never
+            // silently dropped.
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits in the team queue instead of being dropped"
+            );
+            let activity = view
+                .team_bridge
+                .snapshot(&[])
+                .last_activity
+                .expect("the wake attempt is recorded");
+            assert!(
+                activity.contains("Held"),
+                "the outcome is shown: {activity}"
+            );
+        })
+        .expect("window open");
+}
+
+/// With nothing connected at all, the wake is still queued for the drain to
+/// retry once an endpoint can prove a pane, rather than vanishing.
+#[gpui::test]
+fn a_wake_with_no_connected_endpoint_is_held_not_dropped(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Disconnected;
+            view.live.snapshot = None;
+            view.endpoints[0].live.status = ConnectionStatus::Disconnected;
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&mention_wake_on_host("boot-local", "w1X:p9"), app));
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "an unreachable wake is held for the drain, not dropped"
+            );
+        })
+        .expect("window open");
+}
+
+/// A bulletin post whose mention recipient sits on `host` at `pane`.
+fn mention_wake_on_host(host: &str, pane: &str) -> Reply {
+    Reply::ScopedPosted {
+        team: Team {
+            team_id: "t-x".into(),
+            name: "wake-test".into(),
+            supervisor: Member {
+                member_id: "m_sup".into(),
+                display_name: "supervisor".into(),
+                target: SessionTarget {
+                    host: "boot-local".into(),
+                    session: "default".into(),
+                    workspace: Some("w1X".into()),
+                    pane: Some("p_sup".into()),
+                },
+            },
+            members: vec![Member {
+                member_id: "m_w1".into(),
+                display_name: "worker1".into(),
+                target: SessionTarget {
+                    host: host.into(),
+                    session: "default".into(),
+                    workspace: Some("w9".into()),
+                    pane: Some(pane.into()),
+                },
+            }],
+        },
+        post: sheprd_orchestrator::team_store::Post {
+            post_id: "post-1".into(),
+            team_id: "t-x".into(),
+            author: Author::Member {
+                member_id: "m_sup".into(),
+            },
+            reply_to: None,
+            body: "wake up".into(),
+            mentions: vec!["m_w1".into()],
+            created_at: at(1),
+        },
+    }
+}

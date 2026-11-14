@@ -22,11 +22,11 @@ use std::{
 mod actions;
 pub(crate) mod prompts;
 mod queue;
-pub(crate) use queue::PromptDispatch;
 use queue::{HeldPrompts, QueuedPrompt, SupervisorWake};
+pub(crate) use queue::{PromptDispatch, WakeEnter};
 // The pause-queue bounds are only named outside the queue module by tests.
 #[cfg(test)]
-use queue::{PAUSE_QUEUE_CAPACITY, PROMPT_HOLD_CAPACITY};
+use queue::{PAUSE_QUEUE_CAPACITY, PROMPT_HOLD_CAPACITY, WAKE_ENTER_QUEUE_CAP};
 mod views;
 pub(super) use views::*;
 
@@ -39,6 +39,16 @@ const POST_LIMIT: usize = 200;
 /// still unreachable after this long is marked undeliverable instead of
 /// being re-offered forever.
 pub(crate) const WAKE_RETRY: Duration = Duration::from_secs(5);
+/// How long the wake text waits before its Enter goes out as a second
+/// ordered batch. Text and a trailing CR in one write read as editor
+/// content in Claude Code, not a submit (#35); a discrete Enter after this
+/// probe-validated spacing submits. No UI thread sleeps: the drain sends
+/// the Enter on a later tick.
+pub(crate) const WAKE_ENTER_DELAY: Duration = Duration::from_millis(200);
+/// How long an owed Enter stays sendable after it comes due: five times
+/// the delay. Past this the pane's input may hold the member's own typing,
+/// so the Enter is dropped with a log instead of submitting stale content.
+pub(crate) const WAKE_ENTER_STALE_AFTER: Duration = Duration::from_millis(1000);
 /// How often the periodic supervisor catch-up may attempt a wake. It only
 /// fires on stored results no wake has covered, so a quiet team is silent.
 pub(crate) const SUPERVISOR_FALLBACK: Duration = Duration::from_secs(600);
@@ -120,6 +130,14 @@ pub(crate) struct Bridge {
     /// once per episode, and the roster shows the mark until the member is
     /// proved again or re-registers.
     needs_reregister: HashMap<String, String>,
+    /// Typed wake texts whose Enter is still owed, due after
+    /// [`WAKE_ENTER_DELAY`]. The text is already in the pane's input; a
+    /// single write of text plus CR would not submit it, so the drain
+    /// releases the Enter on a later tick. Bounded twice over: the queue is
+    /// capped at [`queue::WAKE_ENTER_QUEUE_CAP`] rows, and an entry past
+    /// [`WAKE_ENTER_STALE_AFTER`] beyond its due time is dropped with a log
+    /// instead of being sent.
+    wake_enters: VecDeque<WakeEnter>,
     last_fallback: Option<Instant>,
     last_activity: Option<SharedString>,
     dirty: bool,
@@ -221,6 +239,12 @@ impl Bridge {
     #[cfg(test)]
     pub(crate) fn queued_count_for_test(&self) -> usize {
         self.queued_count()
+    }
+
+    /// Test-only: how many Enters are still owed for typed wake texts.
+    #[cfg(test)]
+    pub(crate) fn pending_enter_count_for_test(&self) -> usize {
+        self.wake_enters.len()
     }
 
     /// Test-only: make every queued retry due now, as another five seconds of
@@ -536,6 +560,9 @@ mod tests;
 
 #[cfg(test)]
 mod view_tests;
+
+#[cfg(test)]
+mod wake_enter_tests;
 
 #[cfg(test)]
 mod wake_host_tests;

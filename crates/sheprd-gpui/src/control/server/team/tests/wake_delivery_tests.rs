@@ -441,6 +441,44 @@ fn a_wake_reaches_a_connected_host_while_the_selected_endpoint_is_down(
         .expect("window open");
 }
 
+/// A wake held because its pane's agent is mid-turn owes no Enter: the
+/// text never reached the pane, so there is nothing in the input to
+/// submit. The Enter is owed only after a successful text batch.
+#[gpui::test]
+fn a_held_wake_owes_no_enter(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits for the pane to go idle"
+            );
+            assert_eq!(
+                view.team_bridge.pending_enter_count_for_test(),
+                0,
+                "a held wake schedules no Enter: no text was typed"
+            );
+        })
+        .expect("window open");
+}
+
 /// With nothing connected at all, the wake is still queued for the drain to
 /// retry once an endpoint can prove a pane, rather than vanishing.
 #[gpui::test]
@@ -462,6 +500,55 @@ fn a_wake_with_no_connected_endpoint_is_held_not_dropped(cx: &mut gpui::TestAppC
                 view.team_bridge.queued_count_for_test(),
                 1,
                 "an unreachable wake is held for the drain, not dropped"
+            );
+        })
+        .expect("window open");
+}
+
+/// A wake to a member whose pane is backed by an ACP chat is Sent through
+/// the chat's own connection - no text is typed into a terminal - so no
+/// Enter is owed. Before the fix, scheduling on the Sent outcome fired a
+/// stray Enter into the chat pane's terminal on every such wake.
+#[gpui::test]
+fn a_wake_to_a_chat_backed_member_owes_no_enter(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            // The dispatched member's pane is a chat on this window's own
+            // daemon: the member's recorded host is the endpoint id "local".
+            view.chats.track_pane_for_test("p_sup");
+        })
+        .expect("window open");
+
+    let mut reply = supervisor_wake_reply();
+    if let Reply::ScopedTask { team, .. } = &mut reply {
+        team.supervisor.target.host = "local".into();
+    }
+    cx.update(|app| notify_team_mutation(&reply, app));
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.pending_enter_count_for_test(),
+                0,
+                "a chat wake owes no Enter: its prompt is submitted by the chat itself"
+            );
+            assert!(
+                !view
+                    .team_bridge
+                    .snapshot(&[])
+                    .last_activity
+                    .is_some_and(|activity| activity.contains("Held")),
+                "the chat took the prompt; nothing was held"
             );
         })
         .expect("window open");

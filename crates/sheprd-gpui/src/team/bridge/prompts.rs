@@ -1,6 +1,6 @@
 use super::{
-    PaneCandidate, PromptDispatch, REFRESH, SupervisorWake, TeamAction, WAKE_RETRY, roster,
-    status_label,
+    PaneCandidate, PromptDispatch, REFRESH, SupervisorWake, TeamAction, WAKE_ENTER_DELAY,
+    WAKE_RETRY, roster, status_label,
 };
 use crate::{SheprdWindow, i18n::fl, navigation::NavigationTarget, team::model::PaneIdentity};
 use gpui::Context;
@@ -302,6 +302,26 @@ impl SheprdWindow {
     /// the roster and every connected snapshot is marked undeliverable once
     /// its retry waits out, instead of being re-offered forever.
     pub(crate) fn dispatch_drained_team_prompts(&mut self) {
+        // Owed Enters from wake texts typed on earlier ticks are settled
+        // BEFORE the connectivity check below: they must not pile up behind
+        // it during an outage, and one that came due too long ago is
+        // dropped with a log, never sent - by then the pane's input may
+        // hold the member's own typing instead of the wake text (#35).
+        let now = Instant::now();
+        let (due, stale) = self.team_bridge.drain_due_enters(now);
+        for item in due {
+            // The delivery logs every exit itself, including the drop; the
+            // outcome needs no further handling.
+            let _ = self.deliver_team_enter(&item.host, &item.pane_id);
+        }
+        for item in stale {
+            tracing::info!(
+                host = %item.host,
+                pane = %item.pane_id,
+                outcome = "dropped_stale",
+                "team wake enter dropped: it came due too long ago; the typed text stays in the pane's input"
+            );
+        }
         // A drain with no connected daemon has no snapshot to prove a pane
         // against, so it would fail every delivery. Keep the queue. One host
         // being down must not stall the rest: the drain runs whenever any
@@ -544,7 +564,19 @@ impl SheprdWindow {
         // A pane no snapshot proves comes back as Unreachable so the drain
         // backs off and expires it instead of re-offering it every tick.
         match self.deliver_team_prompt(host, pane_id, prompt) {
-            crate::agent_notes::Delivered::Agent => PromptOutcome::Sent,
+            crate::agent_notes::Delivered::Agent => {
+                // The text is in the pane's input; the Enter follows as its
+                // own ordered batch once the delay is up (#35). Only this
+                // branch owes an Enter: the ACP chat path above returns Sent
+                // without typing into a pane, so scheduling on the outcome
+                // would fire a stray Enter into the chat pane's terminal.
+                self.team_bridge.schedule_wake_enter(
+                    host,
+                    pane_id,
+                    Instant::now() + WAKE_ENTER_DELAY,
+                );
+                PromptOutcome::Sent
+            }
             crate::agent_notes::Delivered::Kept => PromptOutcome::Held,
             crate::agent_notes::Delivered::Unreachable => PromptOutcome::Unreachable,
             crate::agent_notes::Delivered::Copy(_) => PromptOutcome::Unavailable,

@@ -433,7 +433,10 @@ fn a_wake_reaches_a_connected_host_while_the_selected_endpoint_is_down(
                 .snapshot(&[])
                 .last_activity
                 .expect("the wake attempt is recorded");
-            assert!(activity.contains("Held"), "the outcome is shown: {activity}");
+            assert!(
+                activity.contains("Held"),
+                "the outcome is shown: {activity}"
+            );
         })
         .expect("window open");
 }

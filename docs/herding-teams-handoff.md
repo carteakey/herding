@@ -1,80 +1,114 @@
-# Herding Teams handoff, 2026-11-13
+# Herding Teams handoff, 2026-11-14
 
-From the supervisor session (`claude`, pane `w22:pJ`) to whoever supervises
-next. Team `c48cfdff-0422-4299-b03c-804ac19f94f3`. Updated at the end of the
-session. For the why behind every decision here, read
+From the supervisor session (`super`, pane `w22:pJ`) to whoever supervises
+next. Team `c48cfdff-0422-4299-b03c-804ac19f94f3`. Checkpointed at the
+user's request on 2026-11-14. For the reason behind each decision, read
 `docs/herding-teams-decision-log.md`.
 
 ## Where things stand
 
 - **v1 is released.** Herding v1.0.0 (branch `v1-herding`, tags `v1` and
-  `v1.0.0`, main `6264db98e`) checkpoints Teams as it runs in the window,
-  including #81. Release notes only, no binaries.
-- **The pivot restarted on 2026-11-13.** Wave 1 is issue sync (PR 88) and
-  layer D (PR 90); phases 1 and 2 are broken into tasks in the plan's
-  "Phase 1 and 2 tasks" section. Spikes A-D are done (task `8d2c281f`).
-- **Use v1 to build v2.** The v1 team coordinates the workers who will build
-  the pivot, so v1 gets reliability fixes only. Do not extend code the pivot
-  deletes (see "What the pivot replaces").
-- **The running app** is on main (`2e808a02d` after PR 88's review fixes) and
-  members are registered. The plan is `docs/herding-teams-on-core.md`. Where
-  this note and the plan disagree, the plan wins.
+  `v1.0.0`, `6264db98e`) checkpoints Teams as it runs in the window.
+- **The pivot is running, and phase 1 has started.** Main is `d007abdb1`.
+  Wave 1 landed: PR 88 (issue sync, store side), PR 90 (audit log, created
+  as the final `audit` table), PR 92 (F2 wake fix), and PR 91 (phase 1 and 2
+  tasks in the plan, plus team templates in phase 6). Spikes A to E are
+  done.
+- **Use v1 to build v2.** The v1 team builds the pivot, so v1 gets
+  reliability fixes only.
+- **The running app** is the 2026-11-13 13:38 build of `6264db98e`. It has
+  neither wake fix: app wakes are unreliable, so the supervisor sends them by
+  hand with `herdr pane run`, and in Claude Code panes the user presses Enter.
+  PR 92 is on main; PR 93 waits for native QA.
+
+## Next steps, in order
+
+1. **PR 93 native QA (F1, the Enter fix).** The binary is built at the
+   reviewed tip `71dadaf44`:
+   `/home/kchauhan/repos/forks/herding-wake-enter-zcode1/target/release/herding`.
+   The user quits Herding and starts that binary. Pass: a mention to zcode1's
+   scratch Claude pane `w22:pZ` lands its text and submits about 200 ms
+   later; the same happens in a ZCode pane; the supervisor's pane no longer
+   needs Enter pressed. On a pass, merge PR 93: CI and vicesuper's LAND are
+   in. Then rebuild main in the shared checkout
+   (`CARGO_INCREMENTAL=0 cargo build --release -p sheprd-gpui --locked`) and
+   restart from it.
+2. **Phase 1.1 (zcode3, d168eb1a).** It is done on
+   `team/phase1-scaffold-zcode3` at `01831a644`, one commit on `d007abdb1`, and
+   not pushed. Authorize the push and the PR, then get vicesuper's full-diff
+   review.
+3. **Answer the prep questions** before 1.2 and 1.3 start: zcode1's 1.3
+   questions (bulletin seq 440: scope now includes `identity.rs` and
+   `prefix.rs`; the `private_file` seam) and zcode2's 1.2 questions (seq 444).
+4. **Then 1.2 and 1.3 run in parallel, followed by 1.4 and 1.5** (opencode,
+   on one branch with two commits and one PR).
+
+## Decisions waiting on the user
+
+- **Upstream report for herdr-core's 7501 probe.** Spike E found that
+  herdr-core answers Claude Code's status probe on the screen instead of the
+  program's input, so Claude never reports status. zcode3's draft is at
+  `/tmp/zcode3-spikes/upstream-report-draft.md`. It is not filed; only the
+  user can decide to send it upstream.
+- **Team templates issue.** The draft is at
+  `/tmp/claude-1000/-home-kchauhan-repos-forks-herding/27a6c02d-4e46-49a8-9b52-5a9a222827bf/scratchpad/templates-issue.md`.
+  Filing it was blocked by the permission check. The idea is in the plan's
+  phase 6 either way.
+- **`~/.cache/uv` (16G) and `~/.cache/huggingface` (3.4G)**, if disk gets
+  tight again.
 
 ## Restart and re-register
 
-The app is running and every member re-registered under its own name. Keep
-the procedure for the next restart:
+Terminals and agents survive an app restart, and #81 re-binds members, so a
+restart needs no roster work in the normal case.
 
-1. Restart `target/release/herding`. Terminals and agents survive it.
-2. `ss -xlp | grep gpui/control.sock` must show `herding`, not `herdr-gpui`.
-   If it shows `herdr-gpui`, ask the user to quit that app (#85).
-3. Supervisor first, from its own pane:
-   `herding team register c48cfdff-0422-4299-b03c-804ac19f94f3 --name claude`.
-4. Send each member its register command with `herdr pane run`, under its own
-   name (table below). #81 re-binds each existing row, keeping roles and
-   assignments. Never register under a new name; never remove roster rows.
-5. `herding team task list`: reassign any task that reset.
+1. Restart the app binary. `ss -xlp | grep gpui/control.sock` must show
+   `herding`, not `herdr-gpui` (#85).
+2. `herding team status` from each pane. If a member's binding dropped, send
+   it `herding team register c48cfdff-0422-4299-b03c-804ac19f94f3 --name <name>`
+   with `herdr pane run`, under its own name. Never register under a new name
+   and never remove roster rows.
+3. `herding team task list`: reassign any task that reset.
 
 ## Members
 
-All in workspace `w22`, resumed after the morning reboot.
+The user rebuilt the roster on 2026-11-13: the old `claude` supervisor row
+and the pre-reboot worker rows were removed in the window, and the members
+below were added. All are in workspace `w22`.
 
-| Member | Pane | Session | State | Next |
+| Member | Pane | Agent | Role | Now |
 | --- | --- | --- | --- | --- |
-| claude (supervisor) | `w22:pJ` | Claude `27a6c02d` | running wave 1 | phase 1-2 board tasks from the plan |
-| vice-supervisor | `w22:pQ` | Claude `d8db213b` | reviewing PRs 88 and 90 | LAND or FIX on each |
-| zcode1 | `w22:pM` | `sess_c6368d3e…` | PR 88 green, awaiting verdict | then the #35 wake diagnosis (F1/F2) |
-| zcode2 | `w22:pN` | `sess_00d6a935…` | PR 90 open, fixes applied | rebase on PR 88, then phase 2.4 |
-| zcode3 | `w22:pP` | `sess_2c5462d2…` | spikes A-D done | spike E (agent status into herdr-core) |
-| opencode | `w22:pX` | this session | phase 1-2 tasks written | phase 1.1 after the wave lands |
+| super | `w22:pJ` | Claude Code, Opus | supervisor | coordinates and lands |
+| vicesuper | `w22:pY` | Claude Code, Sonnet | full-diff reviewer (4cf01afd) | reviews every phase 1 PR; LAND or FIX verdicts, never lands |
+| opencode | `w22:pX` | opencode, stronger than the workers | planner, harder tasks | 1.4 and 1.5, blocked on 1.3 |
+| zcode1 | `w22:pT` | ZCode | worker | PR 93 QA, then 1.3; scratch Claude pane `w22:pZ` for QA |
+| zcode2 | `w22:pV` | ZCode | worker | 1.2, prep done |
+| zcode3 | `w22:pW` | ZCode | worker | 1.1 done, awaiting AUTHORIZED |
 
-- **vice-supervisor:** PR 88 (issue sync store) and PR 90 (layer D audit) are
-  the wave-1 gate. Main is `2e808a02d` after PR 88's review fixes.
-- **zcode1:** the issue sync store side landed as
-  `team/issue-sync-store-zcode1` (PR 88); the original
-  `team/issue-sync-zcode1` WIP branch is reviewed and superseded. Upstream
-  kingsword09/zcode-cli#275 (the herdr-zcode plugin fix) is green, waiting on
-  the maintainer.
-- **zcode2:** layer D is `team/audit-log-zcode2` (PR 90), a separate branch
-  from the parked layers A and B. Phase 2.4 starts from it.
-- **zcode3:** spikes A-D are recorded as findings `2eb2b7f6` (A), `43ba946e`
-  (B), `5c78160f` (C), `0c1aebe3` (D). C's result (no agent reports status
-  to herdr-core) is phase 3's blocker.
+How this team works:
+
+- Reports go to `@super` and `@vicesuper`. vicesuper posts the verdict, super
+  lands: a fast-forward when main has not moved, a GitHub rebase merge when
+  the files don't overlap.
+- Until the wake fixes run, send every important bulletin as a manual
+  `herdr pane run` wake as well.
+- `--reply-to` with a short id prefix is sometimes refused; use the full id.
 
 ## Open work
 
-| Item | State | Recommendation |
+| Item | State | Next |
 | --- | --- | --- |
-| PR 88 `team/issue-sync-store-zcode1` (171f4799) | green, awaiting vicesuper's verdict | LAND after the verdict; the four review fixes are in |
-| PR 90 `team/audit-log-zcode2` (f4a5c9ee) | open, fixes applied | rebase on PR 88, then LAND; phase 2.4 starts from it |
-| Phase 1-2 tasks | written in the plan | the supervisor creates the board tasks |
-| #35 wake diagnosis (9863cb5d) | F2 confirmed, F1 plausible | F2 lands alone; F1 needs the pacing probe first |
-| Spike E (agent status into herdr-core) | new, zcode3 | research and design only; C blocks phase 3 |
+| PR 93 F1 delayed Enter (`team/wake-enter-zcode1`) | LAND from vicesuper, CI green | native QA, then merge |
+| 1.1 `team/phase1-scaffold-zcode3` (d168eb1a) | done, local | push, PR, review |
+| 1.2 (8dcc7816, zcode2), 1.3 (ea038667, zcode1) | prep and questions posted | start when 1.1 lands |
+| 1.4 (72845fce), 1.5 (58c26ef7), opencode | design decided (bulletin seq 434) | after 1.3 |
+| Phase 2 (2.1 to 2.6) | written in the plan | board tasks after phase 1 |
+| Spike E (40db3d58) | done | ZCode: plugin prototype on `feat/herdr-core-status-report` in the ZCode fork (`815fe4872`, not pushed). Claude: upstream fix or our own wrapper. Codex: one signed-in run to confirm |
+| a0d0bc0a roster model and account | parked (`archive/team/roster-profile-opencode`) | the board still shows it in progress; cancel it |
+| #74 prune/archive (0506677f) | unassigned | deferred |
 | #18, #19 old playbook PRs | open | user's call |
 | kingsword09/zcode-cli#275 | open, green | wait for the maintainer |
-| #85 control socket collision | filed | v1 fix if cheap; the pivot removes it |
-| #74 prune/archive (0506677f) | open, unassigned | deferred: the plan schedules pruning after phase 6 |
-| a0d0bc0a roster model/account | parked | folded into phase 2.2; branch kept as `archive/team/roster-profile-opencode` |
+| #85 control socket collision | filed | the pivot removes it |
 
 To park a branch: `git tag archive/<branch> origin/<branch>`, push the tag,
 then close its PR with a comment naming the tag.
@@ -137,10 +171,11 @@ Deleted without a tag because main already holds their changes:
 in #71), `fix/stale-wake-targets` and its `preserve/` copy.
 
 Kept: `main`, `v0-herding`, `v1-herding`, `team/host-identity-zcode3` (merged;
-zcode3's worktree still uses it), `team/issue-sync-store-zcode1` (PR 88),
-`team/audit-log-zcode2` (PR 90), `team/issue-sync-zcode1` (the superseded WIP
-branch), `handoff-rebase-tmp` (vice-supervisor's worktree), and #18's and
-#19's branches.
+its worktree is gone), `team/issue-sync-store-zcode1` (PR 88, merged),
+`team/issue-sync-zcode1` (the superseded WIP branch), `team/wake-fix-zcode1`
+(PR 92, merged), `team/wake-enter-zcode1` (PR 93), `handoff-rebase-tmp`, and
+#18's and #19's branches. zcode2 deleted `team/audit-log-zcode2` after PR 90
+merged.
 
 ## Pivot order of work
 

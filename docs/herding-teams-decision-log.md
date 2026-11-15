@@ -144,3 +144,29 @@ replaces".
   carried over `hc`, or a small authenticated listener.
 - Whether a mod in Herdr's official app can show the Teams board (spike 2),
   which decides the UI layer and the repo split.
+
+## 2026-11-13 evening to 2026-11-14: the pivot restarts
+
+The user rebuilt the team in the window: the supervisor became `super`, and
+vicesuper (Claude Code on Sonnet, the full-diff reviewer), opencode (a
+stronger planner), and zcode1 to zcode3 joined. The old pre-reboot rows were
+removed. The pivot was taken off hold.
+
+| Decision or finding | Reason |
+| --- | --- |
+| A dedicated reviewer (vicesuper) posts LAND or FIX verdicts; the supervisor only lands | Keeps the expensive supervisor thin. Its reviews caught real bugs in every wave-1 PR before main |
+| Park #82, #57, #58 and layers A and B as `archive/` tags (user approved) | All are window-side code the pivot deletes, and three store branches had to settle before phase 1 |
+| Park opencode's roster model and account work; fold it into phase 2.2 | A v1 feature and a fourth branch touching the store before phase 1 |
+| PR 90 creates the final `audit` table now, not `identity_log` | Phase 2 then needs no data migration, and rows written in between are already in the final table |
+| Wakes, F2: the app dropped every wake while the window's selected endpoint (an SSH host whose sshd was down) was reconnecting, with no log and no retry | Found by zcode1 from the absence of every wake log line. Fixed in PR 92: the drain's per-host routing decides, and nothing connected means held, not dropped |
+| Wakes, F1: in Claude Code panes the text landed but Enter never submitted | Probed in a scratch pane: text and CR in one write stays in the input box, while an Enter 200 ms later submits. PR 93 sends the Enter as its own delayed batch, never for chat members, with stale Enters dropped and logged |
+| Spike E: agent status can reach herdr-core without modifying Herdr | Any pty writer can emit `ESC]7501;state=...`. The ZCode plugin can do it in about 40 lines (prototype on the ZCode fork). Claude Code is blocked by a herdr-core bug that answers its probe on the screen, not stdin. Codex emits status unconditionally |
+| Phase 1 design (bulletin seq 434) | Keep today's error order (proof, validate, store); `apply` takes the wire `Op` and mints ids itself; `Actor { caller, hosts }` for phase 1; the store keeps its own invariants; 1.4 and 1.5 on one branch |
+| Phase 2.2: legacy teams keep reading host and pane until phase 5 | v1.0.0 keeps writing only the legacy columns, so the new address columns would go stale for legacy teams (vicesuper's PR 91 review) |
+| Team templates go in phase 6 (the user's idea) | `team create --template` is spawn applied to each member. Shapes: supervisor plus 3 workers, and this session's review crew |
+| Disk dropped to 7G with eight worktrees building | Owners deleted `target/` in finished worktrees. The 15G floor needs active policing when several workers build at once |
+
+What went wrong and was corrected: zcode1 probed the supervisor's live pane
+after being told to use a scratch one, and once pushed a commit whose
+formatting fix was left in the working tree. CI caught the second, and both
+are now noted in the team's practice.

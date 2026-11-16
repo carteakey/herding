@@ -6,12 +6,12 @@ new worktree with a prompt. They are meant to be written by an agent from a
 sentence ("every day at 3am, pull main, run validation, then start an agent
 with this prompt") and reviewed by a person before they run.
 
-`herdr-automate` runs them: a small daemon per host that keeps going when
-Herdr UI quits and when Herdr itself is killed, and a command line for
-people, agents, and Herdr UI's Automations section.
+`sheprd-automate` runs them: a small daemon per host that keeps going when
+Herding quits and when Herdr itself is killed, and a command line for
+people, agents, and Herding's Automations section.
 
-Herdr UI's Automations section can be turned off in Settings, Sidebar, Show
-automations (`[sidebar] automations = false`). Herdr UI then leaves the
+Herding's Automations section can be turned off in Settings, Sidebar, Show
+automations (`[sidebar] automations = false`). Herding then leaves the
 section off the activity bar and neither reads nor starts any host's daemon;
 daemons already running keep running their approved scripts.
 
@@ -42,7 +42,7 @@ herdr.manual({ name = "deploy-preview" }, function(fire)
 end)
 ```
 
-`herdr-automate check nightly.luau` prints:
+`sheprd-automate check nightly.luau` prints:
 
 ```text
 nightly
@@ -152,23 +152,26 @@ the Luau type checker is not part of the embedded interpreter.
 On each host:
 
 ```sh
-herdr-automate repo add ~/code/app       # load ~/code/app/.herdr/automations
-herdr-automate install-service           # keep the daemon running (or: start)
-herdr-automate approve ~/code/app/.herdr/automations/nightly.luau
-herdr-automate status
+sheprd-automate repo add ~/code/app       # load ~/code/app/.herdr/automations
+sheprd-automate install-service           # keep the daemon running (or: start)
+sheprd-automate approve ~/code/app/.herdr/automations/nightly.luau
+sheprd-automate status
 ```
 
 The daemon starts by itself once there is something to run: `approve`,
 `run-now` and `repo add` (for a repository with scripts) start it when none
-is running, and Herdr UI starts it on any host that lists scripts with no
+is running, and Herding starts it on any host that lists scripts with no
 daemon up, retrying at most every five minutes. It rescans scripts every 30
 seconds. A script runs only once it is
 approved on that host, and only in the exact text approved: any change,
 including one a `git pull` brings in, waits for approval again. A person
 approves either at a terminal, typing the script's name after reading its
-plan, or in Herdr UI's dialog. `approve` refuses when its input is not a
-terminal or when the pane it runs in runs an agent, and `--hash` (Herdr UI's
-path) is refused inside any Herdr pane. This guards against mistakes, not a
+plan, or in Herding's dialog. `approve` refuses when its input is not a
+terminal or when the pane it runs in runs an agent, and `--hash` (Herding's
+path) is refused inside any Herdr pane. A Herdr 2 terminal (`HC_TERMINAL_ID`
+set) counts as a pane: `--hash` is refused there too, and approving there
+needs its core to report no agent in it, so an agent, or a core that cannot
+say, refuses the approval. Both panes are checked when both are set. This guards against mistakes, not a
 hostile agent: an agent with a shell could run commands directly.
 
 | Command | Does |
@@ -196,8 +199,8 @@ Every command takes `--json`; errors are then `{"ok": false, "message": ...}`.
 - `pull` refuses a dirty checkout or one on another branch, and only
   fast-forwards. `run` and `sh` run as child processes with their output
   logged; a timeout or `stop` ends the whole process group. `worktree`,
-  `agent` and `notify` go through the `herdr` CLI; when a step needs Herdr and
-  its server is not running, the daemon starts it.
+  `agent` and `notify` drive the host's Herdr (below); when a step needs it
+  and it is not running, the daemon starts it.
 - Personal scripts have no repository, so they can use only `sh` and
   `notify`.
 - Three failed runs in a row pause a script.
@@ -210,9 +213,31 @@ Besides each script's caps, the host has its own in
 ```toml
 max_agents = 3                # agents automations may run at once
 max_tokens_per_day = 10000000 # every script together
+# terminals = "herdr-core"    # drive Herdr 2 instead of Herdr 1 (below)
 # herdr = "/path/to/herdr"    # when not on PATH
 # herdr_session = "work"      # a Herdr session other than the default
+# herdr_core = "/path/to/herdr-core" # started when no core runs, if not on PATH
 ```
+
+### Herdr 1 or Herdr 2
+
+`terminals` chooses which Herdr runs the agents: `"herdr"` (Herdr 1, through
+the `herdr` command line) or `"herdr-core"` (Herdr 2, through its socket).
+Without it, the daemon drives Herdr 1 when `herdr` is installed and Herdr 2
+otherwise; the daemon's log says which when it starts.
+
+On Herdr 2, which keeps no workspaces, `worktree` and `agent` make the
+checkout where Herdr 1 would (`~/.herdr/worktrees/REPO/BRANCH`), and `agent`
+starts the harness in a herdr-core terminal there, labelled
+`sheprd.automation=SCRIPT-RUN`. The prompt goes in once the agent reports it
+is ready; an agent that does not within 90 seconds, such as one asking
+whether to trust its new folder, fails the step with nothing typed into it,
+and stays open for you to answer. A run's page in Herding opens the agent's
+terminal in a tab on this computer. `worktree` opens no shell, as Herdr 2 has
+no workspace for one. `notify` shows a system notification (macOS and
+Linux; Windows needs Herdr 1). The agent counts as done once its terminal
+finishes or is removed; its tokens come from its recent session files, as
+herdr-core reports no session.
 
 A run halts before an agent step that would cross the script's
 `agents_per_run`, the host's `max_agents`, or a daily token budget; a script
@@ -229,17 +254,26 @@ unit (Linux) or a logon task (Windows), printing what it writes. No admin
 rights are needed. The service runs the executable that installed it, with
 that command's `PATH` and state and config directories, so a
 `HERDR_AUTOMATE_HOME` or XDG directory set only in your shell still applies;
-run `install-service` again after moving either. The daemon restarts after a crash; `shutdown` stops it
-after its runs and it stays stopped. On a headless Linux host, a user unit
+run `install-service` again after moving either. The daemon restarts after a crash; `shutdown` stops its
+runs, then the daemon, and it stays stopped. On a headless Linux host, a user unit
 only runs while the user is logged in unless lingering is on
 (`loginctl enable-linger`); `install-service` does not change that for you.
+
+Updating the app does not update a running daemon. When a daemon runs another
+version than the app ships, its host's card under Automations offers
+**Update to VERSION**, on this computer as on a remote host: it copies the
+app's build into `~/.local/share/herdr-automate/bin/VERSION/`, relinks
+`~/.local/bin`, stops the daemon, and starts the new one through a service that
+names the copy. `shutdown` stops every run, so the update refuses while any is
+going: try again once they finish. On Windows, this computer's card offers
+no update, because the copy needs a shell.
 
 State lives in `~/.local/state/herdr-automate` (`%LOCALAPPDATA%` on
 Windows): the database, the daemon's log, and each run's step output.
 
 ## For agents
 
-Herdr UI installs a `herdr-automations` skill beside its browser skill (once
+Herding installs a `herdr-automations` skill beside its browser skill (once
 you agree), so agents in your panes know how to write a script, check its
 plan, and ask you to approve it. Its source is
 [`skills/herdr-automations/SKILL.md`](../skills/herdr-automations/SKILL.md).

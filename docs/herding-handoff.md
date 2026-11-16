@@ -7,7 +7,7 @@ are in [herding-spec.md](herding-spec.md). The earlier Python experiment under
 
 ## Intended first experience
 
-In the existing Herdr UI window, create a team with a supervisor, add real
+In the existing Herding window, create a team with a supervisor, add real
 agent sessions, and use a shared bulletin with replies and `@mentions`. Agents
 need tools to inspect the roster and bulletin, post, and acknowledge messages;
 the UI should show which deliveries are pending or acknowledged. The chosen
@@ -16,21 +16,21 @@ research, and binary analysis should all work, without requiring a Git repo.
 
 ## Where the current implementation lives
 
-- `crates/herdr-gpui/src/team/`: native Team view, session candidates, and
+- `crates/sheprd-gpui/src/team/`: native Team view, session candidates, and
   background bridge. The activity bar opens the Team section.
-- `crates/herdr-orchestrator/src/team_store.rs` and `team_store/`: bounded,
+- `crates/sheprd-orchestrator/src/team_store.rs` and `team_store/`: bounded,
   local SQLite team, member, post, recipient, and acknowledgement records.
-- `crates/herdr-gpui/src/control/server/team*.rs` and `team_worker/`: app
+- `crates/sheprd-gpui/src/control/server/team*.rs` and `team_worker/`: app
   control and serialized background storage work.
-- `crates/herdr-control-protocol/src/protocol/team.rs` and
-  `crates/herdr-gpui/src/cli/control/team.rs`: agent-facing roster and bulletin
+- `crates/sheprd-control-protocol/src/protocol/team.rs` and
+  `crates/sheprd-gpui/src/cli/control/team.rs`: agent-facing roster and bulletin
   control protocol and commands. See `docs/cli.md`.
-- `crates/herdr-gpui/locales/en-US/team.ftl`: current Team strings.
+- `crates/sheprd-gpui/locales/en-US/team.ftl`: current Team strings.
 
 The UI and agent tools use the Rust store; they do not use the Python prototype
 database. UI work is unverified in a live app. A previous isolated snapshot
-passed `cargo check --locked --offline -p herdr-gpui --bin herdr-gpui` and
-`cargo check --locked --offline -p herdr-gpui --tests`; those checks did not
+passed `cargo check --locked --offline -p sheprd-gpui --bin herding` and
+`cargo check --locked --offline -p sheprd-gpui --tests`; those checks did not
 execute tests or prove the exact final branch state.
 
 ## Complete the first vertical slice

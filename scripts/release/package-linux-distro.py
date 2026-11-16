@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Repackage the manual Linux archive as .deb, .rpm, and Arch packages.
 
-The packages install exactly the files of Herdr-VERSION-TARGET.tar.gz under
-/usr, so every Linux format ships the same bytes. nfpm (pinned by
+The packages install the files of Herding-VERSION-TARGET.tar.gz under /usr,
+materializing its main command aliases (bin/sheprd and bin/herdr-gpui, both
+links to bin/herding) as real copies for the deployed privileged updater.
+Every Linux format ships the same bytes. nfpm (pinned by
 install-nfpm.sh) writes each format from one generated configuration.
 """
 import argparse
@@ -10,6 +12,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -20,10 +23,11 @@ ARCHES = {"x86_64-unknown-linux-gnu": "amd64", "aarch64-unknown-linux-gnu": "arm
 # (nfpm packager, published extension)
 FORMATS = (("deb", "deb"), ("rpm", "rpm"), ("archlinux", "pkg.tar.zst"))
 TREE = {
-    "bin/herdr-acp", "bin/herdr-automate", "bin/herdr-core", "bin/herdr-gpui",
-    "bin/herdr-remote-control",
-    "share/applications/so.pen.herdr-gpui.desktop",
-    "share/icons/hicolor/scalable/apps/herdr-gpui.svg",
+    "bin/herding", "bin/herdr-core", "bin/herdr-gpui", "bin/sheprd",
+    *(f"bin/{prefix}-{helper}" for prefix in ("sheprd", "herdr")
+      for helper in ("acp", "automate", "nearby", "remote-control")),
+    "share/applications/org.sheprd.Sheprd.desktop",
+    "share/icons/hicolor/scalable/apps/herding.svg",
     *(f"share/licenses/herdr-gpui/{name}" for name in (
         "LICENSE", "NOTICE", "LICENSE-octicons", "LICENSE-APACHE", "NOTICE.md",
         "SOUND-NOTICE.md", "THIRD-PARTY-NOTICES.txt", "HERDR-CORE-LICENSES.txt")),
@@ -48,7 +52,8 @@ DEPENDS = {
 RECOMMENDS = {
     "deb": ["mesa-vulkan-drivers | vulkan-icd", "fonts-dejavu-core"],
     "rpm": ["mesa-vulkan-drivers"],
-    "archlinux": [],
+    # Arch splits Mesa's Vulkan drivers by vendor; nfpm writes these as optdepends.
+    "archlinux": ["vulkan-radeon", "vulkan-intel"],
 }
 
 
@@ -60,22 +65,34 @@ def check_version(version):
 
 
 def extract(archive, prefix, destination):
-    """Extract the manual archive's regular files, refusing anything unexpected."""
+    """Extract regular files and materialize the permitted command symlinks."""
     with tarfile.open(archive) as source:
         members = source.getmembers()
         files = {}
+        seen = set()
         for member in members:
             path = PurePosixPath(member.name)
             if path.parts[:1] != (prefix,) or ".." in path.parts or path.is_absolute():
                 raise ValueError(f"Unexpected archive entry: {member.name}")
-            if member.isfile():
-                files[str(path.relative_to(prefix))] = member
+            relative = str(path.relative_to(prefix))
+            if relative in seen:
+                raise ValueError(f"Duplicate archive entry: {member.name}")
+            seen.add(relative)
+            if member.isfile() or (member.issym() and relative in ("bin/sheprd", "bin/herdr-gpui")
+                                   and member.linkname == "herding"):
+                files[relative] = member
             elif not member.isdir():
                 raise ValueError(f"Archive entry is not a regular file or directory: {member.name}")
         if set(files) != TREE:
             raise ValueError("Archive does not contain the expected Linux tree")
-        source.extractall(destination, members=list(files.values()), filter="data")
-    return destination / prefix
+        # Never extract a link. The validated canonical entry must be regular;
+        # copy its bytes only after the entire archive has passed validation.
+        source.extractall(destination, members=[m for m in files.values() if m.isfile()], filter="data")
+    root = destination / prefix
+    for alias in ("bin/sheprd", "bin/herdr-gpui"):
+        if files[alias].issym():
+            shutil.copy2(root / "bin/herding", root / alias)
+    return root
 
 
 def config(version, target, root, mtime):
@@ -83,9 +100,11 @@ def config(version, target, root, mtime):
         "src": str(root / relative),
         "dst": f"/usr/{relative}",
         "type": "file",
-        "file_info": {"mode": 0o755 if relative.startswith("bin/") else 0o644, "mtime": mtime},
+        "file_info": {"mode": 0o755 if relative.startswith("bin/") else 0o644,
+                      "mtime": mtime, "owner": "root", "group": "root"},
     } for relative in sorted(TREE)]
     return {
+        # Deployed package ownership and the privileged updater pin this name.
         "name": "herdr-gpui",
         "arch": ARCHES[target],
         "platform": "linux",
@@ -96,8 +115,8 @@ def config(version, target, root, mtime):
         "section": "devel",
         "priority": "optional",
         "maintainer": MAINTAINER,
-        "vendor": "Herdr UI",
-        "homepage": "https://herdrui.dev",
+        "vendor": "Sheprd",
+        "homepage": "https://sheprd.org",
         "license": "Apache-2.0",
         "description": "Native GPUI client for an existing local Herdr daemon.\n"
                        "Herdr itself is not included and must be installed separately.",
@@ -114,13 +133,19 @@ def package(version, target, archive, output_dir, nfpm):
     mtime = check_version(version).isoformat().replace("+00:00", "Z")
     if target not in ARCHES:
         raise ValueError("Unsupported Linux target")
-    name = f"Herdr-{version}-{target}"
+    name = f"Herding-{version}-{target}"
     if archive.name != f"{name}.tar.gz" or not archive.is_file():
         raise ValueError(f"Expected the manual archive {name}.tar.gz")
     if not output_dir.is_dir():
         raise ValueError("Existing output directory required")
-    outputs = [output_dir.resolve() / f"{name}.{extension}" for _, extension in FORMATS]
-    for output in outputs:
+    # The deployed bridge selects these exact filenames before downloading, so
+    # the packages keep their published Sheprd-/Herdr- names under the
+    # Herding- archive name.
+    outputs = [output_dir.resolve() / f"Sheprd-{version}-{target}.{extension}"
+               for _, extension in FORMATS]
+    # The deployed bridge selects these exact filenames before downloading.
+    aliases = [output.with_name(output.name.replace("Sheprd-", "Herdr-", 1)) for output in outputs]
+    for output in outputs + aliases:
         if output.exists() or output.is_symlink():
             raise ValueError(f"Output already exists: {output}")
     with tempfile.TemporaryDirectory(dir=output_dir, prefix=".herdr-distro.") as temp:
@@ -135,11 +160,16 @@ def package(version, target, archive, output_dir, nfpm):
                             "--packager", packager, "--target", str(partial)],
                            check=True, stdout=subprocess.DEVNULL)
             built.append((partial, output))
+        # Copy the completed packages, never rebuild them under the legacy name.
+        for (partial, _), alias in zip(built.copy(), aliases):
+            copy = temp / alias.name
+            shutil.copyfile(partial, copy)
+            built.append((copy, alias))
         for partial, output in built:
             if output.exists() or output.is_symlink():
                 raise ValueError(f"Output already exists: {output}")
             partial.replace(output)
-    return outputs
+    return outputs + aliases
 
 
 def main():

@@ -1,0 +1,596 @@
+use super::*;
+
+/// A done task completed by its worker on a team whose supervisor pane is
+/// `p_sup` (not shown by the fixture daemon); hosts match its boot id.
+fn supervisor_wake_team() -> Team {
+    Team {
+        team_id: "t-x".into(),
+        name: "wake-test".into(),
+        supervisor: Member {
+            member_id: "m_sup".into(),
+            display_name: "supervisor".into(),
+            target: SessionTarget {
+                host: "boot-local".into(),
+                session: "default".into(),
+                workspace: Some("w1X".into()),
+                pane: Some("p_sup".into()),
+            },
+        },
+        members: vec![Member {
+            member_id: "m_w1".into(),
+            display_name: "worker1".into(),
+            target: SessionTarget {
+                host: "boot-local".into(),
+                session: "default".into(),
+                workspace: Some("w1X".into()),
+                pane: Some("w1X:p9".into()),
+            },
+        }],
+    }
+}
+
+fn supervisor_wake_reply() -> Reply {
+    Reply::ScopedTask {
+        team: supervisor_wake_team(),
+        task: Task {
+            task_id: "task9".into(),
+            team_id: "t-x".into(),
+            creator: Author::Human {
+                user_id: "human".into(),
+            },
+            title: "Write report".into(),
+            brief: String::new(),
+            assignee: Some("m_w1".into()),
+            status: TaskStatus::Done,
+            blocker_reason: None,
+            result: Some("Report drafted".into()),
+            created_at: at(0),
+            updated_at: at(10),
+        },
+        actor: Author::Member {
+            member_id: "m_w1".into(),
+        },
+    }
+}
+
+#[gpui::test]
+fn supervisor_wake_on_unreachable_pane_stays_pending_and_honest(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
+
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            let activity = view
+                .team_bridge
+                .snapshot(&[])
+                .last_activity
+                .expect("the wake attempt is recorded");
+            assert!(
+                activity.contains("Held") && activity.contains("queued"),
+                "an unreachable pane keeps the wake queued: {activity}"
+            );
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits for a reachable pane"
+            );
+            // Fail closed: nothing was marked woken, so the fallback or a
+            // later event can still deliver the result.
+            assert!(!view.team_bridge.wake_seen("t-x", signal));
+
+            // The event is not repeated once a wake is known to have landed.
+            view.team_bridge.mark_supervisor_woken("t-x", [signal]);
+        })
+        .expect("window open");
+
+    let before = window
+        .update(cx, |view, _, _| {
+            view.team_bridge.snapshot(&[]).last_activity
+        })
+        .expect("window open");
+    cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.snapshot(&[]).last_activity,
+                before,
+                "a seen signal dispatches nothing"
+            );
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_held_wake_is_never_recorded_as_delivered_before_it_lands(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    let reply = supervisor_wake_reply();
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot_with_status(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+                "idle",
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+            view.team_bridge.pause_member_for_test("m_sup");
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the paused supervisor's wake is held"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "a held wake is not recorded as delivered"
+            );
+        })
+        .expect("window open");
+
+    // The pause clears; once the wake's retry waits out, the drain re-offers
+    // it to the reachable supervisor pane. The fixture's daemon input is not
+    // connected, so the idle pane cannot take the typed batch yet: the wake
+    // stays queued for a retry, and only a real delivery records the signal.
+    window
+        .update(cx, |view, _, _| {
+            view.team_bridge.unpause_all_for_test();
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts();
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a wake the daemon could not take waits for a retry"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "only a delivered wake is recorded"
+            );
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_wake_waits_for_a_busy_agent_to_finish_its_turn(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    let reply = supervisor_wake_reply();
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+            view.team_bridge.pause_member_for_test("m_sup");
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, _| {
+            view.team_bridge.unpause_all_for_test();
+            // The agent is mid-turn: the wake must wait, not paste into an
+            // input the turn will clear.
+            view.dispatch_drained_team_prompts();
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a busy agent keeps the wake queued"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "a wake that has not landed is not recorded"
+            );
+        })
+        .expect("window open");
+
+    window
+        .update(cx, |view, _, _| {
+            view.live.snapshot = Some(Arc::new(snapshot_with_status(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+                "idle",
+            )));
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            // The retry is due and the agent's turn is over: the drain
+            // re-offers the wake through the daemon's typed pane input. The
+            // fixture's daemon input is not connected, so the wake stays
+            // queued for a retry and is not recorded as delivered.
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts();
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a wake the daemon could not take waits for a retry"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "only a delivered wake is recorded"
+            );
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_wake_to_a_busy_pane_is_held_until_it_is_idle(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    let reply = supervisor_wake_reply();
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+        })
+        .expect("window open");
+
+    // The event path must hold for a busy pane too, not only the drain.
+    cx.update(|app| notify_team_mutation(&reply, app));
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a busy pane holds the event wake"
+            );
+            assert!(!view.team_bridge.wake_seen("t-x", signal));
+        })
+        .expect("window open");
+
+    window
+        .update(cx, |view, _, _| {
+            view.live.snapshot = Some(Arc::new(snapshot_with_status(
+                "boot-local",
+                "w1X",
+                "p_sup",
+                Some("opencode"),
+                "idle",
+            )));
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            // The fixture's daemon input is not connected, so the idle pane's
+            // wake stays queued for a retry instead of being recorded as
+            // delivered.
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts();
+            assert_eq!(view.team_bridge.queued_count_for_test(), 1);
+            assert!(!view.team_bridge.wake_seen("t-x", signal));
+        })
+        .expect("window open");
+}
+
+#[gpui::test]
+fn a_wake_to_a_gone_pane_waits_out_its_retry_then_is_marked_undeliverable(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.add_window(fixture_window);
+    let signal = "task9|done|10000";
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            // The snapshot shows only the worker pane; the supervisor pane
+            // the wake targets is gone - the stale-queue shape that once
+            // hot-looped the drain.
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            view.team_bridge.set_team_for_test(supervisor_wake_team());
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
+    window
+        .update(cx, |view, _, _| {
+            view.dispatch_drained_team_prompts();
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "a missing pane does not re-dispatch the wake on the next tick"
+            );
+            assert_eq!(
+                view.team_bridge.snapshot(&[]).undeliverable_count,
+                0,
+                "the wake has not waited out its retry yet"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "a wake that has not landed is not recorded"
+            );
+        })
+        .expect("window open");
+
+    // The roster re-binds elsewhere - the members re-registered, the way the
+    // stale wA queue entries lost their panes - so when the retry comes due
+    // the pane is in neither the roster nor any snapshot.
+    window
+        .update(cx, |view, _, _| {
+            let mut rebound = supervisor_wake_team();
+            rebound.supervisor.target.pane = Some("w1X:p9".into());
+            view.team_bridge.set_team_for_test(rebound);
+        })
+        .expect("window open");
+    window
+        .update(cx, |view, _, _| {
+            view.team_bridge.force_retry_due_for_test();
+            view.dispatch_drained_team_prompts();
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                0,
+                "a wake whose pane is gone is not retried forever"
+            );
+            assert_eq!(
+                view.team_bridge.snapshot(&[]).undeliverable_count,
+                1,
+                "the drain marks the stranded wake undeliverable"
+            );
+            let activity = view
+                .team_bridge
+                .snapshot(&[])
+                .last_activity
+                .expect("the expiry is recorded");
+            assert!(
+                activity.contains("undeliverable") && activity.contains("p_sup"),
+                "the status names the pane it gave up on: {activity}"
+            );
+            assert!(
+                !view.team_bridge.wake_seen("t-x", signal),
+                "an undeliverable wake is never recorded as delivered"
+            );
+        })
+        .expect("window open");
+}
+
+/// A bulletin post mentioning a member whose pane lives on a connected
+/// endpoint that is NOT the window's selected one. The pre-fix gate dropped
+/// every such wake silently whenever the selected endpoint was down (#35):
+/// no log, no hold, no retry.
+#[gpui::test]
+fn a_wake_reaches_a_connected_host_while_the_selected_endpoint_is_down(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            // The selected endpoint is down.
+            view.live.status = ConnectionStatus::Disconnected;
+            view.live.snapshot = None;
+            // The member's own host is a different, connected endpoint whose
+            // snapshot shows their pane.
+            let mut remote = Endpoint::new(
+                "boot-remote".into(),
+                "Remote".into(),
+                ConnectTarget::Socket("/unused-wake-test.sock".into()),
+                true,
+            );
+            remote.live.status = ConnectionStatus::Connected;
+            remote.live.snapshot = Some(Arc::new(snapshot(
+                "boot-remote",
+                "w9",
+                "w9:p1",
+                Some("zcode"),
+            )));
+            view.endpoints.push(remote);
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&mention_wake_on_host("boot-remote", "w9:p1"), app));
+
+    window
+        .update(cx, |view, _, _| {
+            // The pane's agent is mid-turn, so the wake is held for the
+            // drain - but held, with the outcome on the status line, never
+            // silently dropped.
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits in the team queue instead of being dropped"
+            );
+            let activity = view
+                .team_bridge
+                .snapshot(&[])
+                .last_activity
+                .expect("the wake attempt is recorded");
+            assert!(
+                activity.contains("Held"),
+                "the outcome is shown: {activity}"
+            );
+        })
+        .expect("window open");
+}
+
+/// A wake held because its pane's agent is mid-turn owes no Enter: the
+/// text never reached the pane, so there is nothing in the input to
+/// submit. The Enter is owed only after a successful text batch.
+#[gpui::test]
+fn a_held_wake_owes_no_enter(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&supervisor_wake_reply(), app));
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "the wake waits for the pane to go idle"
+            );
+            assert_eq!(
+                view.team_bridge.pending_enter_count_for_test(),
+                0,
+                "a held wake schedules no Enter: no text was typed"
+            );
+        })
+        .expect("window open");
+}
+
+/// With nothing connected at all, the wake is still queued for the drain to
+/// retry once an endpoint can prove a pane, rather than vanishing.
+#[gpui::test]
+fn a_wake_with_no_connected_endpoint_is_held_not_dropped(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Disconnected;
+            view.live.snapshot = None;
+            view.endpoints[0].live.status = ConnectionStatus::Disconnected;
+        })
+        .expect("window open");
+
+    cx.update(|app| notify_team_mutation(&mention_wake_on_host("boot-local", "w1X:p9"), app));
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.queued_count_for_test(),
+                1,
+                "an unreachable wake is held for the drain, not dropped"
+            );
+        })
+        .expect("window open");
+}
+
+/// A wake to a member whose pane is backed by an ACP chat is Sent through
+/// the chat's own connection - no text is typed into a terminal - so no
+/// Enter is owed. Before the fix, scheduling on the Sent outcome fired a
+/// stray Enter into the chat pane's terminal on every such wake.
+#[gpui::test]
+fn a_wake_to_a_chat_backed_member_owes_no_enter(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(fixture_window);
+    window
+        .update(cx, |view, _, _| {
+            view.live.status = ConnectionStatus::Connected;
+            view.live.snapshot = Some(Arc::new(snapshot(
+                "boot-local",
+                "w1X",
+                "w1X:p9",
+                Some("opencode"),
+            )));
+            view.endpoints[0].live.status = ConnectionStatus::Connected;
+            view.endpoints[0].live.snapshot = view.live.snapshot.clone();
+            // The dispatched member's pane is a chat on this window's own
+            // daemon: the member's recorded host is the endpoint id "local".
+            view.chats.track_pane_for_test("p_sup");
+        })
+        .expect("window open");
+
+    let mut reply = supervisor_wake_reply();
+    if let Reply::ScopedTask { team, .. } = &mut reply {
+        team.supervisor.target.host = "local".into();
+    }
+    cx.update(|app| notify_team_mutation(&reply, app));
+
+    window
+        .update(cx, |view, _, _| {
+            assert_eq!(
+                view.team_bridge.pending_enter_count_for_test(),
+                0,
+                "a chat wake owes no Enter: its prompt is submitted by the chat itself"
+            );
+            assert!(
+                !view
+                    .team_bridge
+                    .snapshot(&[])
+                    .last_activity
+                    .is_some_and(|activity| activity.contains("Held")),
+                "the chat took the prompt; nothing was held"
+            );
+        })
+        .expect("window open");
+}
+
+/// A bulletin post whose mention recipient sits on `host` at `pane`.
+fn mention_wake_on_host(host: &str, pane: &str) -> Reply {
+    Reply::ScopedPosted {
+        team: Team {
+            team_id: "t-x".into(),
+            name: "wake-test".into(),
+            supervisor: Member {
+                member_id: "m_sup".into(),
+                display_name: "supervisor".into(),
+                target: SessionTarget {
+                    host: "boot-local".into(),
+                    session: "default".into(),
+                    workspace: Some("w1X".into()),
+                    pane: Some("p_sup".into()),
+                },
+            },
+            members: vec![Member {
+                member_id: "m_w1".into(),
+                display_name: "worker1".into(),
+                target: SessionTarget {
+                    host: host.into(),
+                    session: "default".into(),
+                    workspace: Some("w9".into()),
+                    pane: Some(pane.into()),
+                },
+            }],
+        },
+        post: sheprd_orchestrator::team_store::Post {
+            post_id: "post-1".into(),
+            team_id: "t-x".into(),
+            author: Author::Member {
+                member_id: "m_sup".into(),
+            },
+            reply_to: None,
+            body: "wake up".into(),
+            mentions: vec!["m_w1".into()],
+            created_at: at(1),
+        },
+    }
+}

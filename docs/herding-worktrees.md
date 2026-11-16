@@ -36,13 +36,13 @@ flowchart TD
 ```
 
 ### 1. File Intersection (Overlap Check)
-- **Disjoint files or crates:** (e.g. Worker A in `crates/herdr-orchestrator`, Worker B in `crates/herdr-gpui/src/team/view/bulletin.rs`, Worker C in `docs/`):
+- **Disjoint files or crates:** (e.g. Worker A in `crates/sheprd-orchestrator`, Worker B in `crates/sheprd-gpui/src/team/view/bulletin.rs`, Worker C in `docs/`):
   -> **Shared Working Tree**.
 - **Overlapping files:** (e.g. two workers simultaneously modifying `bridge.rs`):
   -> **Git Worktree**, or the supervisor sequences the tasks serially.
 
 ### 2. Build & Test Lock Contention
-- Heavy iterative testing on the same crate (`cargo test -p herdr-gpui`) triggers `Blocking waiting for file lock on build directory` if multiple agents run checks concurrently.
+- Heavy iterative testing on the same crate (`cargo test -p sheprd-gpui`) triggers `Blocking waiting for file lock on build directory` if multiple agents run checks concurrently.
 - Agents tasked with heavy continuous compilation or benchmark runs should be given an isolated worktree.
 
 ### 3. Granularity & Risk

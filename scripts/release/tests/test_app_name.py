@@ -1,5 +1,4 @@
-"""macOS shows an unbundled process under its executable name, so every
-macOS launch path must present the bundle named Herdr, not herdr-gpui."""
+"""macOS launch paths use Herding's bundle and bridge-compatible executable."""
 import json
 from pathlib import Path
 import plistlib
@@ -13,17 +12,21 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class AppNameTests(unittest.TestCase):
-    def test_bundle_plist_names_the_app_herdr(self):
+    def test_bundle_plist_names_the_app_herding(self):
         info = plistlib.loads((ROOT / "assets/macos/Info.plist").read_bytes())
         for key in ("CFBundleName", "CFBundleDisplayName", "CFBundleExecutable"):
-            self.assertEqual(info[key], "Herdr", key)
+            self.assertEqual(info[key], "herding" if key == "CFBundleExecutable" else "Herding", key)
+        # The bundle's icon files keep their published names, which the plist
+        # and the packaging both address.
+        self.assertEqual(info["CFBundleIconFile"], "Sheprd.icns")
+        self.assertEqual(info["CFBundleIconName"], "Sheprd")
 
     @unittest.skipUnless(sys.platform == "darwin", "assetutil requires macOS")
     def test_asset_catalogs_contain_the_plist_icon_name(self):
         # A catalog compiled under another name silently falls back to the
         # flattened .icns, which macOS 26 and later render soft in the Dock.
         name = plistlib.loads((ROOT / "assets/macos/Info.plist").read_bytes())["CFBundleIconName"]
-        for catalog in ("Herdr.car", "Herdr-worktree.car"):
+        for catalog in ("Sheprd.car", "Sheprd-worktree.car"):
             info = subprocess.run(
                 ["xcrun", "assetutil", "--info", ROOT / "assets/icons" / catalog],
                 check=True, capture_output=True,
@@ -45,24 +48,26 @@ class AppNameTests(unittest.TestCase):
             if recipe == "run":
                 # Opened through LaunchServices, so macOS asks for Local
                 # Network access instead of denying it to a shell's child.
-                self.assertIn('app="$PWD/target/release/Herdr.app"', body.group(1))
+                self.assertIn('app="$PWD/target/release/Herding.app"', body.group(1))
                 self.assertIn('"$app" --args {{args}}', body.group(1))
                 self.assertRegex(body.group(1), r"\n\s*open -n -W ")
                 self.assertIn("{{just_executable()}} bundle release\n", body.group(1))
-                self.assertIn("--release -p herdr-gpui -- {{args}}", body.group(1))
+                self.assertIn("--release -p sheprd-gpui -- {{args}}", body.group(1))
+                # Quitting the recipe kills the bundle's own executable.
+                self.assertIn('pkill -f "^$app/Contents/MacOS/herding"', body.group(1))
             else:
-                launch = f"exec target/{profile}/Herdr.app/Contents/MacOS/Herdr {{{{args}}}}"
+                launch = f"exec target/{profile}/Herding.app/Contents/MacOS/herding {{{{args}}}}"
                 self.assertIn(launch, body.group(1))
 
-    def test_bundle_recipe_installs_the_executable_and_icon_as_herdr(self):
+    def test_bundle_recipe_installs_the_herding_executable_and_icon(self):
         justfile = (ROOT / "justfile").read_text()
         body = re.search(r'(?m)^bundle profile="release" features="":\n((?:[ \t]+.*\n|\n)+)', justfile)
         self.assertIsNotNone(body)
         for expected in (
-            'cargo build --locked $flags --target-dir target -p herdr-gpui --features "{{features}}"',
-            'cp target/{{profile}}/herdr-gpui "$app/Contents/MacOS/Herdr"',
+            'cargo build --locked $flags --target-dir target -p sheprd-gpui --features "{{features}}"',
+            'cp target/{{profile}}/herding "$app/Contents/MacOS/herding"',
             'cp assets/macos/Info.plist "$app/Contents/Info.plist"',
-            '"$app/Contents/Resources/Herdr.icns"',
+            '"$app/Contents/Resources/Sheprd.icns"',
             '"$app/Contents/Resources/Assets.car"',
         ):
             self.assertIn(expected, body.group(1))

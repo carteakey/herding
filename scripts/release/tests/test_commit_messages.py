@@ -43,6 +43,12 @@ class RuleTests(unittest.TestCase):
         self.assertRejected("feat: " + "a" * CHECK.MAX_SUBJECT, "keep it within")
         self.assertAccepted("feat: " + "a" * (CHECK.MAX_SUBJECT - len("feat: ")))
 
+    def test_the_squash_merge_pull_request_number_is_not_counted(self):
+        subject = "feat: " + "a" * (CHECK.MAX_SUBJECT - len("feat: "))
+        self.assertAccepted(subject + " (#1013)")
+        self.assertRejected(subject + "a (#1013)", "is 81 characters")
+        self.assertRejected(subject + " (#1013) more", "keep it within")
+
     def test_the_body_must_stay_below_a_blank_line(self):
         self.assertRejected("feat: add a pinned sidebar section\nRationale follows", "line 2 blank")
         self.assertAccepted("feat: add a pinned sidebar section\n\nRationale follows.")
@@ -79,6 +85,20 @@ class RuleTests(unittest.TestCase):
     KNOWN_VIOLATIONS = {
         # A 94-character subject, merged after the rule and shipped in v20261005.1.
         "2f0347d1b3f078d3e190f4f124ef0c530713753c",
+        # Merged in October 2026 while push CI runs were cancelled as superseded.
+        "0476469fd1e0d622fb02798f614b22bb30d8ff80",
+        "22111c5fbeceb3ec00443f46c9255fac86057279",
+        "484315182790701ccb688f380670e3bac0c1feae",
+        "864800f5f7eb45a627c34b6399303e43cdc53e61",
+        # Landed team and upstream-merge history from before the fork ran the
+        # commit-message check on every push.
+        "69bd3646f5f8ea00b6541dd79cf92283c7f2ba5f",
+        "8078b559c6745e8b568321013c04f519132129d9",
+        "9ba07207b170d01d4c23b19011eb922bc6a65928",
+        "e5e4d631b64793b72607f2fbe360ee4a817d3b08",
+        "e64d52fa30fdbe4c608b60592ac55951ff3db244",
+        "f5196915a96d46c783563b46d8ddfdc7b41232ce",
+        "f81fa1e37becb23cb621d4f5399478148fb353a3",
     }
 
     def test_this_repository_already_obeys_every_rule(self):

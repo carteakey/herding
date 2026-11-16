@@ -1,16 +1,24 @@
 ---
 name: herdr-automations
-description: "Write Herdr automations: small Luau scripts that run on a schedule or by hand to pull a branch, run validation or commands, start agents in new worktrees with a prompt, and notify. Use it inside Herdr (HERDR_ENV=1) when the user asks for something to happen every day, every few hours, at a time, on a cron schedule, or on demand with one command: a nightly or recurring job, a scheduled agent, an automation, a routine, or 'every morning do X'. It covers writing the script, checking its plan with herdr-automate check, and asking the user to approve it; never approve it yourself."
+description: "Write Herding automations: small Luau scripts that run on a schedule or by hand to pull a branch, run validation or commands, start agents in new worktrees with a prompt, and notify. Use it inside Herdr (HERDR_ENV=1 or HC_TERMINAL_ID set) when the user asks for something to happen every day, every few hours, at a time, on a cron schedule, or on demand with one command: a nightly or recurring job, a scheduled agent, an automation, a routine, or 'every morning do X'. It covers writing the script, checking its plan with sheprd-automate check, and asking the user to approve it; never approve it yourself."
 ---
-<!-- herdr-gpui-managed-skill v1: Herdr UI keeps this file up to date. Edit a copy under another name to keep your changes. -->
+<!-- herdr-gpui-managed-skill v1: Herding keeps this file up to date. Edit a copy under another name to keep your changes. -->
 
-# Herdr automations
+# Herding automations
 
 An automation is a Luau file that declares when it runs and calls steps from
-a fixed list. `herdr-automate`, a daemon on each host, runs it once the user
-approves it, and Herdr UI shows its runs in the Automations section. Scripts
+a fixed list. `sheprd-automate`, a daemon on each host, runs it once the user
+approves it, and Herding shows its runs in the Automations section. Scripts
 are deterministic: steps are their only effects, and the plan
-`herdr-automate check` prints is everything the script can do.
+`sheprd-automate check` prints is everything the script can do.
+
+The skill identifier, `.herdr` paths, and `herdr.*` Luau API remain stable so
+existing scripts and installed skills continue to work after the rename.
+
+Everything here works the same from a Herdr pane (`HERDR_ENV=1`) or a
+Herdr 2 terminal (`HC_TERMINAL_ID` is set). The daemon drives whichever
+Herdr the host runs, and on Herdr 2 an `agent` step starts its agent in a
+herdr-core terminal of its new worktree.
 
 ## How to make one
 
@@ -21,17 +29,18 @@ are deterministic: steps are their only effects, and the plan
 2. Write `.herdr/automations/NAME.luau` in the repository it works on (or
    `~/.config/herdr-automate/automations/NAME.luau` for a personal script,
    which can only use `sh` and `notify`).
-3. Run `herdr-automate check FILE` and fix every error it names; read the
+3. Run `sheprd-automate check FILE` and fix every error it names; read the
    plan it prints and check every branch says what the user asked.
 4. Show the user the plan, then make sure the repository is registered:
-   `herdr-automate repo add PATH` (once per repository and host).
-5. Ask the user to approve it. Run `herdr-gpui automation approve FILE` to open
-   Herdr UI's approval dialog, or ask them to run `herdr-automate approve FILE`
+   `sheprd-automate repo add PATH` (once per repository and host).
+5. Ask the user to approve it. Run `herding automation approve FILE` to open
+   Herding's approval dialog, or ask them to run `sheprd-automate approve FILE`
    in their own terminal. Never approve it yourself: approval is the user's
-   review, and `herdr-automate approve` refuses from an agent's pane.
-6. After approval, `herdr-automate run-now FILE` runs it once by hand when the
+   review, and `sheprd-automate approve` refuses from an agent's pane or
+   Herdr 2 terminal.
+6. After approval, `sheprd-automate run-now FILE` runs it once by hand when the
    user wants to try it; it spends tokens if it starts agents, so ask first.
-   `herdr-automate status` and `herdr-automate runs show RUN` show what
+   `sheprd-automate status` and `sheprd-automate runs show RUN` show what
    happened.
 
 Any change to an approved script, or to the `.herdr/worktree.toml` scripts it
@@ -90,6 +99,10 @@ A failing step stops the run. With `{ check = false }` a step returns
 `{ ok, log_tail }` (and `run_id` for `agent`) and the script decides. Steps
 take `{ timeout = "30m" }`.
 
+`agent` types its prompt only once the agent says it is ready. One that does
+not within 90 seconds, such as an agent asking whether to trust its new
+worktree, fails the step with nothing typed; it stays open for the user.
+
 ## What scripts cannot do
 
 - No `os`, `io`, `require`, `print`, `pcall`, `math.random`, clock or files:
@@ -107,4 +120,4 @@ take `{ timeout = "30m" }`.
 - A trigger may have at most 256 paths: call fewer steps with
   `check = false`.
 
-`herdr-automate steps` lists the steps; `herdr-automate --help` has the rest.
+`sheprd-automate steps` lists the steps; `sheprd-automate --help` has the rest.

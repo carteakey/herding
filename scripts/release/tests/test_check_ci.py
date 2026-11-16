@@ -16,7 +16,7 @@ SHA = "a" * 40
 
 def run():
     return dict(id=123, head_sha=SHA, head_branch="main", event="push",
-                actor={"login": "penso"}, triggering_actor={"login": "penso"},
+                actor={"login": "carteakey"}, triggering_actor={"login": "carteakey"},
                 status="completed", conclusion="success")
 
 
@@ -90,8 +90,10 @@ class CheckCi(unittest.TestCase):
                 CI.require_ci(SHA)
 
     def test_successful_jobs_from_different_runs_are_not_combined(self):
+        first, second = sorted(jobs(), key=lambda job: job["name"])
         responses = [{"workflow_runs": [run(), {**run(), "id": 124}]},
-                     [{"jobs": jobs()[:3]}], [{"jobs": jobs()[3:]}]]
+                     [{"jobs": [first]}], [{"jobs": [second]}]]
+        # Each run holds one of the two required jobs; pooled they would pass.
         with mock.patch.object(CI, "api", side_effect=responses), self.assertRaises(CI.CiError):
             CI.require_ci(SHA)
 
@@ -100,13 +102,13 @@ class CheckCi(unittest.TestCase):
                 self.assertRaisesRegex(CI.CiError, "gh workflow run ci.yml"):
             CI.require_ci(SHA, wait=True)
 
-    def test_required_job_names_match_main_ci_matrix(self):
+    def test_required_job_names_match_fork_ci_matrix(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         sections = re.split(r"^  ([a-z-]+):\n", workflow.split("\njobs:\n", 1)[1], flags=re.M)
         definitions = dict(zip(sections[1::2], sections[2::2]))
         expected = set()
-        # build-macos runs on pull requests only, so main's runs never have it.
-        for key in ("zizmor", "commits", "checks-passed", "checks", "windows", "windows-native", "build"):
+        # The fork runs only these two jobs; the rest skip with `if: false`.
+        for key in ("commits", "checks"):
             definition = definitions[key]
             names = [re.search(r"^    name: (.+)$", definition, re.M)[1]]
             for dimension in ("runner", "features"):
@@ -121,6 +123,5 @@ class CheckCi(unittest.TestCase):
         self.assertEqual(CI.REQUIRED_JOBS, expected)
 
     def test_main_runs_no_macos_release_build(self):
-        # The release workflow's macOS builds share the account's macOS
-        # runners; CI on main must not hold them, nor may the gate wait for it.
+        # The macOS builds stay upstream; the fork's gate never waits for one.
         self.assertFalse(any("apple-darwin" in name for name in CI.REQUIRED_JOBS))

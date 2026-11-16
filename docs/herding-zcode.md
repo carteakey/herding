@@ -1,43 +1,67 @@
 # ZCode CLI integration
 
-This repository includes a ZCode plugin that reports an interactive ZCode CLI session to
-the Herdr daemon and teaches the agent how to use the Herdr Team CLI. It uses
-ZCode's public `zcode` resume command and plugin hooks; it does not read the
-terminal display or depend on ZCode's private runtime files.
+ZCode becomes a first-class Herdr agent through two pieces that live in
+different repositories, because they belong to different projects:
 
-## Install the plugin
+| Piece | Where | What it does |
+| --- | --- | --- |
+| `herdr-zcode` plugin | [`carteakey/zcode-cli`](https://github.com/carteakey/zcode-cli), `integrations/herdr` | Reports the pane's agent state to Herdr and the resume command |
+| `herdr-team` skill | this repository, `skills/herdr-team` | Teaches the agent to use the Herding Team CLI |
 
-In ZCode, open **Settings → Plugins → Create → Add marketplace** and select the
-`integrations/zcode` directory from this checkout. Install and enable
-`herdr-zcode`, then start a new ZCode session in a Herdr pane. The plugin only
-reports when `HERDR_ENV=1`, `HERDR_BIN_PATH`, and `HERDR_PANE_ID` are present.
-Outside Herdr, the hook exits without running a command.
+The state plugin is what makes the pane show a ZCode agent at all. The team
+skill is not ZCode-specific: Herding installs it for every agent it knows about
+(Claude Code, Codex, OpenCode, and ZCode), so there is nothing to install by
+hand.
 
-The plugin reports `idle` at session start and stop, `working` when a prompt is
-submitted or a tool finishes, and `blocked` when ZCode requests a permission
-decision. It sends the ZCode session ID and `zcode --resume <session-id>` to
-Herdr so the pane can be restored with that conversation. The Team path proves
-the caller through the active ZCode agent record in the selected daemon
-snapshot, bound to its host, workspace, and pane. Reports run as a background
-child process with no terminal streams; failures are ignored so Herdr cannot
-interrupt ZCode. Prompt and tool contents are not forwarded.
+## State reporting
 
-The plugin includes the `herdr-team` skill. From a Herdr pane, the agent can use
-`herdr-gpui team status`, inspect tasks and bulletin messages, claim and
-complete work, and record findings. The Team CLI currently derives its caller
-from pane environment values and daemon state; those values alone do not
+In ZCode, open **Settings → Plugins → Add marketplace** and select the
+`integrations/herdr` directory from a `zcode-cli` checkout. Install and enable
+`herdr-zcode`, then start a new ZCode session in a Herdr pane.
+
+The launcher reports `unknown` when the TUI starts, because no session exists
+yet and Herdr's `idle` means "ready for input". The plugin then reports `idle`
+at session start and stop, `working` when a prompt is submitted or a tool
+finishes, and `blocked` when ZCode requests a permission decision. It sends the
+ZCode session ID and `zcode --resume <session-id>` to Herdr so the pane can be
+restored with that conversation.
+
+Everything is gated on `HERDR_ENV=1`, `HERDR_BIN_PATH`, and `HERDR_PANE_ID`.
+Outside Herdr the hooks exit without running a command. Reports run as a
+detached child process with no terminal streams; failures are ignored so Herdr
+cannot interrupt ZCode. Prompt and tool contents are not forwarded.
+
+Herdr clears an agent report when the CLI exits and the pane returns to its
+shell.
+
+## The team skill
+
+Herding writes `herdr-team` into the agent directories that exist under the home
+directory — `~/.claude/skills/herdr-team/SKILL.md` and
+`~/.agents/skills/herdr-team/SKILL.md` — the first time it runs, and keeps it
+current on later starts. ZCode reads `~/.agents/skills`, so the skill is
+available to it with no plugin and no marketplace.
+
+From a Herdr pane the agent can then use `herding team status`, inspect tasks and
+bulletin messages, claim and complete work, and record findings. The Team CLI
+proves the caller through the active agent record in the selected daemon
+snapshot, bound to its host, workspace, and pane. Those values alone do not
 authenticate the calling process or prove that a replacement agent is the
 original member. See the [review notes](herding-review-notes.md).
 
-This integration provides daemon agent identity, activity state, resume
-metadata, and Team CLI guidance. It does not attach ZCode's transcript to the native
-Herdr chat view or deliver Team messages by injecting terminal input. Herdr
-clears an agent report when the CLI exits and the pane returns to its shell.
+If the skill is missing, the running app predates it: start the current
+`herding` binary once and accept the skill offer. A file you wrote yourself
+under that name is left alone.
+
+## What this does not do
+
+It does not attach ZCode's transcript to the native Herdr chat view, and it does
+not deliver Team messages by injecting terminal input.
 
 ## Compatibility
 
-The marketplace and plugin use the ZCode `.zcode-plugin/plugin.json` layout
-and standard `hooks/hooks.json` location. The hook invokes
+The plugin uses the ZCode `.zcode-plugin/plugin.json` layout and the standard
+`hooks/hooks.json` location. The hooks invoke
 `$HERDR_BIN_PATH pane report-agent` with a stable source ID, a timestamp-based
 sequence, the session ID, and the public resume command. Herdr added resume
 commands in 0.9.2; older versions can still use state reporting but ignore the

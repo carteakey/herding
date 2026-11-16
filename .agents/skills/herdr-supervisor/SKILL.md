@@ -49,6 +49,15 @@ The short version:
 Do not let a batch leave a large uncommitted tree. A clean tree at every
 checkpoint is the safety valve for a long session.
 
+## Issue tracking: fork only, never upstream
+
+File issues and PRs in `carteakey/herding` (the fork). `penso/herdr-gpui` is
+upstream, owned by an unrelated external team, and is a read-only reference:
+do not open issues, pull requests, or comments there unless the user explicitly
+asks for an upstream report. Team findings, fork bugs, and follow-ups belong on
+the fork's tracker and the team board. If a worker reports an upstream issue,
+re-file it in the fork and cite the upstream commit/issue as evidence only.
+
 ## The supervision loop
 
 1. On a wake: read the bulletin, `team bulletin ack` it.
@@ -60,7 +69,15 @@ checkpoint is the safety valve for a long session.
    "accepted".
 4. Flip the tracker box, post a one-paragraph milestone comment.
 5. Create or unblock the next task (state the gate: "DO NOT START until X").
-6. Go idle. Do not poll; completions wake you.
+6. Before idling, run the **pre-idle gate** (issue #16): every live worker
+   should hold work or there must be no open, unblocked task left. If a
+   live worker is idle next to assignable work, assign or re-trigger the
+   wake NOW - do not assume a completion wake will bring you back, since
+   completion wakes to the supervisor are not guaranteed (#6) and held
+   wakes can be lost (#13). A re-assign of an already-assigned task is a
+   cheap, honest re-trigger of the assignee wake.
+7. Go idle. Do not poll; completions wake you - but only the pre-idle gate
+   makes that assumption safe.
 
 Do not implement worker tasks yourself - strictly supervise. The exception is
 review-and-accept actions: fast-forwarding an already-pushed, diff-reviewed
@@ -78,13 +95,21 @@ registration), use the member ID, and if that fails too the member is not
 targetable - post team-wide instead. `team roster --json` shows only
 targetable members; the plain roster shows history too.
 
-## Push and merge authority
+## Commit and push authority: supervisor vs worker
 
-- Workers push branches on the supervisor's word ("AUTHORIZED: push ...").
-- main lands fast-forward only, no force-push, after diff review.
-- Land a reviewed one-line fix branch immediately when machines are waiting
-  on convergence; log the decision in the reply bulletin.
-- Tag cuts are the human's call, not the supervisor's.
+The repository's "only commit, push, or create/update a PR when requested" rule
+is a **worker guardrail**, not a supervisor prohibition. The distinction:
+
+| Role | Authority |
+| --- | --- |
+| Worker | Branch only. No commit, push, or PR without the supervisor's explicit "AUTHORIZED: push ..." message. Post the branch tip and gate counts; the supervisor lands it. |
+| Supervisor | May commit documentation and fast-forward a reviewed, already-pushed fix branch to main as part of supervision. The team's operating model is the standing request. |
+| Human | Owns tag cuts, release/deploy, and any upstream report. The supervisor asks before those. |
+
+Hard limits for the supervisor: never force-push `main`, never commit
+unreviewed worker code, never tag or deploy a release, and never open issues,
+PRs, or comments upstream (`penso/herdr-gpui`). Land fast-forward only, after
+diff review; log the decision in the reply bulletin.
 
 ## Verification discipline
 
@@ -125,3 +150,50 @@ switch or session end:
 - A lost supervisor (quota, crash) is replaced by a new session: run
   `team status` first, verify board state against git, then post a handover
   bulletin before assigning anything.
+- Bulletin text must not contain a literal `@word` unless it names a member:
+  the post is refused ("does not match any member"). Write "names no one",
+  not the @-prefixed shorthand.
+- Team ops are served by the **UI app** process (the owner of
+  `~/.local/state/herdr/gpui/control.sock`), not the `herdr server` daemon. A
+  rebuilt binary changes nothing until the UI quits and relaunches; peer
+  bindings are in-memory in that process, so the restart also clears them.
+- `cargo` is not on PATH in agent tool shells; `source ~/.cargo/env` first.
+- A bare `#[test]` in a file whose `use` globs pull in `gpui` resolves to
+  gpui's test macro and can segfault rustc; spell it
+  `#[core::prelude::v1::test]` (finding 26b98a05).
+
+## Convergence: rebuild -> UI restart -> re-register
+
+The auth chain behind every team call (issue #3, fixed 2026-11-04):
+SO_PEERCRED hardening (`de071476`) bound calls to the registering process's
+exact pid, which locked out every CLI agent - each invocation is a fresh
+process. `59b75ae8` + `213da526` fixed the semantics (record the pane's
+agent process, accept it or any descendant, `started_ticks` defeats pid
+reuse), and `e9dc1ea9` fixed the anchor (`agent_lineage` walked for the
+FIRST ancestor whose cmdline carries the agent kind; a ZCode tool shell runs
+`zsh -c . '~/.zcode/cli/...'`, carries the agent kind itself, dies after one
+command - the walk now continues through consecutive matches and anchors the
+topmost before the ancestry leaves the agent's process family). Regression
+arms for all three live in `crates/sheprd-gpui/src/control/server/team/tests.rs`.
+
+When a rebuilt binary must take effect:
+
+1. `herding app quit` - safe: panes descend from the `herdr server`
+   daemon (checked via `/proc` ppid walk), not the UI; agent sessions
+   survive.
+2. Relaunch detached with the old UI's display env, captured first from
+   `/proc/<old-pid>/environ` (DISPLAY, WAYLAND_DISPLAY, XAUTHORITY,
+   XDG_RUNTIME_DIR): `setsid env ... nohup <binary> >>log 2>&1 < /dev/null &`.
+3. Every member runs `team register <TEAM_ID> --name <name>` from their own
+   pane - the new lineage walk then pins their agent process, and all later
+   fresh invocations descend from it.
+4. Verify with one team call from a fresh process before posting anything.
+
+## Wake verification
+
+Dispatch-on-assign (`8b0e9a54`) is verified live (2026-11-04, team herding):
+both workers claimed assigned tasks within minutes, no manual nudge. To
+re-verify after dispatch-path changes, assign a real task and post the
+kickoff bulletin deliberately without member names - if the assignment wake
+works, nobody needs a nudge; if it does not, the nudge is also evidence.
+Record wake latency and mechanism in the worker's task result, not in chat.

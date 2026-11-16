@@ -2,7 +2,7 @@
 
 Collected 2026-11-03 from the projects' public documentation. These are
 references for research, not dependencies or claims that the projects have
-been installed, tested, or verified against this Herdr UI branch. Recheck
+been installed, tested, or verified against this Herding branch. Recheck
 versions, behavior, licenses, and attribution before reusing any code.
 
 ## Herdr-Synapse

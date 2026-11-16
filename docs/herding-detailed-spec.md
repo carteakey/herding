@@ -13,7 +13,7 @@ The user has a collection of useful but independent agents: multiple ZCode
 accounts, a ChatGPT/Codex account, OpenCode, Antigravity, NVIDIA NIM access,
 and a local llama.cpp inference endpoint. They currently open different agents
 for different jobs and manually copy questions, findings, and context between
-sessions. Herdr and Herdr UI already make several real agent terminals visible
+sessions. Herdr and Herding already make several real agent terminals visible
 and provide local and remote-machine facilities, but a row of independent
 panes does not by itself create a cooperating team.
 
@@ -37,7 +37,7 @@ engineering, research, review, and homelab work are important examples.
    accounts, and sessions rather than silently substituting a different model
    or requiring a new subscription. Ten available agents do not imply ten
    simultaneous sessions or that ten should be used for every task.
-3. **One place to understand the work.** The native Herdr UI window shows the
+3. **One place to understand the work.** The native Herding window shows the
    supervisor, worker sessions, team state, messages, and findings together.
 4. **Evidence over claims.** Completion and confidence are reported honestly;
    the user can inspect findings, sources, diffs, tests, and unresolved issues.
@@ -47,7 +47,7 @@ engineering, research, review, and homelab work are important examples.
 6. **Start local, leave room for remote.** Make one host dependable first;
    design identities and storage so adding different SSH hosts does not require
    pretending that a remote pane shares local files or state.
-7. **Minimal and composable.** Reuse established Herdr and Herdr UI boundaries;
+7. **Minimal and composable.** Reuse established Herdr and Herding boundaries;
    adopt or adapt an existing component only when its capability, integration,
    maintenance burden, and license are understood. Avoid speculative frameworks.
 
@@ -160,7 +160,7 @@ assumed to be a complete structured artifact without a reliable contract.
 
 ### 6.1 Entry and team setup
 
-The user opens a clearly recognizable Team entry or tab within Herdr UI; a
+The user opens a clearly recognizable Team entry or tab within Herding; a
 repository-oriented Orchestrator view may coexist but cannot make Git mandatory.
 Show a concise explanation on the empty state. Create a team with a name, goal,
 workspace or working directory, and one supervisor session. Add existing
@@ -313,7 +313,7 @@ workers use other models; role selection stays configurable and testable.
 
 ## 9. Architecture and standards
 
-Herdr owns its terminal processes, daemon sessions, and state. Herdr UI is the
+Herdr owns its terminal processes, daemon sessions, and state. Herding is the
 native client; Herding adds coordination as a focused feature within that
 architecture. Reuse existing session/back-end abstractions, control protocol,
 background-worker patterns, and UI primitives. Do not patch Herdr itself as an

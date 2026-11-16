@@ -3,7 +3,7 @@
 //! prompt dispatches in the tick its action was queued, so an agent woken with
 //! "claim this task" or "ack this post" finds the row when it runs the command
 //! it was told to run.
-use super::{Bridge, WAKE_RETRY, roster};
+use super::{Bridge, WAKE_ENTER_STALE_AFTER, WAKE_RETRY, roster};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -34,7 +34,22 @@ pub(super) struct DrainedPrompt {
 /// them, oldest first so a worker that never answers drops them.
 pub(super) type HeldPrompts = std::collections::VecDeque<(u64, Vec<PromptDispatch>)>;
 
+/// An Enter still owed for a wake text already typed into a pane, due after
+/// [`super::WAKE_ENTER_DELAY`]. Host and pane route it back to the same
+/// endpoint the text went to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WakeEnter {
+    pub(crate) host: String,
+    pub(crate) pane_id: String,
+    due: Instant,
+}
+
 pub(crate) const PAUSE_QUEUE_CAPACITY: usize = 64;
+
+/// How many owed Enters may wait at once. One row per delivered wake text,
+/// and the drain pops them every tick, so the steady state is empty; the
+/// cap keeps a pathological run from growing the queue without bound.
+pub(super) const WAKE_ENTER_QUEUE_CAP: usize = 64;
 
 /// How many prompts may wait for their action's write to be confirmed.
 /// Oldest-first eviction keeps a worker that never answers from turning the
@@ -138,6 +153,52 @@ impl Bridge {
             prompt.signals,
             retry_at,
         );
+    }
+
+    /// Owes an Enter for a wake text just typed into `pane_id`. Scheduled
+    /// only after the text batch succeeded: a failed text has nothing to
+    /// submit. At the capacity cap the oldest entry is dropped with a log -
+    /// it is the one most likely stale, and a pathological run of sent
+    /// texts must not grow the queue without bound.
+    pub(super) fn schedule_wake_enter(&mut self, host: &str, pane_id: &str, due: Instant) {
+        while self.wake_enters.len() >= WAKE_ENTER_QUEUE_CAP {
+            match self.wake_enters.pop_front() {
+                Some(dropped) => tracing::warn!(
+                    host = %dropped.host,
+                    pane = %dropped.pane_id,
+                    "team wake enter dropped: the owed-enter queue is at capacity"
+                ),
+                None => break,
+            }
+        }
+        self.wake_enters.push_back(WakeEnter {
+            host: host.to_owned(),
+            pane_id: pane_id.to_owned(),
+            due,
+        });
+    }
+
+    /// Pops every owed Enter whose delay has run out, oldest first, split
+    /// into sendable ones and stale ones. A stale entry - due longer ago
+    /// than [`super::WAKE_ENTER_STALE_AFTER`] - is returned for the caller
+    /// to drop with a log, never sent: by then the pane's input may hold
+    /// the member's own typing instead of the wake text. The drain runs
+    /// every tick, so in steady state both lists are empty.
+    pub(super) fn drain_due_enters(&mut self, now: Instant) -> (Vec<WakeEnter>, Vec<WakeEnter>) {
+        let mut send = Vec::new();
+        let mut stale = Vec::new();
+        while self
+            .wake_enters
+            .front()
+            .is_some_and(|enter| enter.due <= now)
+        {
+            match self.wake_enters.pop_front() {
+                Some(enter) if now > enter.due + WAKE_ENTER_STALE_AFTER => stale.push(enter),
+                Some(enter) => send.push(enter),
+                None => break,
+            }
+        }
+        (send, stale)
     }
 
     fn push_prompt(

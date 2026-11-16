@@ -760,6 +760,19 @@ impl Chats {
             .find(|pane| pane.target.pane_id == pane_id)
     }
 
+    /// Test-only: tracks a chat over `pane_id` so dispatch tests can
+    /// exercise the chat path without a running program.
+    #[cfg(test)]
+    pub(crate) fn track_pane_for_test(&mut self, pane_id: &str) {
+        self.panes.push(ChatPane::new(Target {
+            endpoint: sheprd_chat_protocol::EndpointId::random(),
+            existing: None,
+            pane_id: pane_id.to_owned(),
+            route: super::Route::Local,
+            surface: Default::default(),
+        }));
+    }
+
     /// Whether `pane_id` shows the chat view rather than its terminal.
     pub(crate) fn shown(&self, pane_id: &str) -> bool {
         self.pane(pane_id)

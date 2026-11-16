@@ -650,10 +650,13 @@ impl SheprdWindow {
             return Delivered::Kept;
         }
         // Deliver the way `herdr pane run` does (#62): the wake text committed
-        // as if typed, then Enter, as one ordered batch through the daemon's
-        // pane input. A bracketed Paste is truncated to fragments by some
-        // TUIs - the rest dropped, or worse the fragment submitted alone - so
-        // wakes never relied on it here; agent notes keep their paste path.
+        // as if typed, through the daemon's pane input. The Enter follows as
+        // a second ordered batch after a delay (deliver_team_enter): text
+        // and a trailing CR in one write read as editor content in Claude
+        // Code, not a submit (#35). A bracketed Paste is truncated to
+        // fragments by some TUIs - the rest dropped, or worse the fragment
+        // submitted alone - so wakes never relied on it here; agent notes
+        // keep their paste path.
         let origin = Origin {
             endpoint: endpoint_id,
             boot_id: snapshot.boot_id.clone(),
@@ -668,7 +671,7 @@ impl SheprdWindow {
                     handle,
                     &origin.boot_id,
                     &InputTarget::Pane(pane_id.to_owned()),
-                    [ClientPaneInputEvent::TextCommit(text), enter()],
+                    [ClientPaneInputEvent::TextCommit(text)],
                 )
                 .map_err(crate::Error::from)
             });
@@ -678,7 +681,7 @@ impl SheprdWindow {
                     pane = %pane_id,
                     endpoint = %origin.endpoint,
                     outcome = "sent",
-                    "team wake delivered as typed text plus Enter"
+                    "team wake delivered as typed text; the Enter follows as its own batch"
                 );
                 self.request_reveal(origin, pane_id);
                 Delivered::Agent
@@ -690,6 +693,79 @@ impl SheprdWindow {
                     endpoint = %origin.endpoint,
                     outcome = "kept",
                     "team wake could not be typed into the pane; the team layer retries"
+                );
+                Delivered::Kept
+            }
+        }
+    }
+
+    /// Sends the Enter that submits a wake text already typed into a pane,
+    /// as its own ordered batch: text and a trailing CR in one write read as
+    /// editor content in Claude Code, not a submit (#35). Every exit logs,
+    /// and the caller drops the owed Enter either way - the text is already
+    /// in the pane's input, so a stranded one is the user's to submit.
+    pub(crate) fn deliver_team_enter(&mut self, host: &str, pane_id: &str) -> Delivered {
+        let Some(index) = self.target_endpoint_for_member(host, pane_id) else {
+            tracing::info!(
+                host = %host,
+                pane = %pane_id,
+                outcome = "unreachable",
+                "team wake enter not sent: no connected endpoint runs the member's host with the pane in its snapshot"
+            );
+            return Delivered::Unreachable;
+        };
+        let endpoint_id = self.endpoints[index].id.clone();
+        let live = if index == self.selected_endpoint {
+            &self.live
+        } else {
+            &self.endpoints[index].live
+        };
+        let Some(snapshot) = live.snapshot.clone() else {
+            tracing::info!(
+                pane = %pane_id,
+                endpoint = %endpoint_id,
+                outcome = "unreachable",
+                "team wake enter not sent: the endpoint has no snapshot"
+            );
+            return Delivered::Unreachable;
+        };
+        let origin = Origin {
+            endpoint: endpoint_id,
+            boot_id: snapshot.boot_id.clone(),
+        };
+        let typed = self.endpoints[index]
+            .connection
+            .handle
+            .as_ref()
+            .ok_or(crate::Error::NotConnected)
+            .and_then(|handle| {
+                ConnectionBridge::send_inputs(
+                    handle,
+                    &origin.boot_id,
+                    &InputTarget::Pane(pane_id.to_owned()),
+                    [enter()],
+                )
+                .map_err(crate::Error::from)
+            });
+        match typed {
+            Ok(()) => {
+                tracing::info!(
+                    pane = %pane_id,
+                    endpoint = %origin.endpoint,
+                    outcome = "sent",
+                    "team wake enter delivered as its own ordered batch"
+                );
+                // No reveal here: the text batch already brought the pane
+                // forward, and a second one would only move focus again.
+                Delivered::Agent
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    pane = %pane_id,
+                    endpoint = %origin.endpoint,
+                    outcome = "dropped",
+                    "team wake enter could not be sent; the typed text stays in the pane's input"
                 );
                 Delivered::Kept
             }

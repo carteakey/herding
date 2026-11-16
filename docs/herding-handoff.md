@@ -58,6 +58,8 @@ execute tests or prove the exact final branch state.
    exchange evidence, and synthesize a result. A selected supervisor is not
    automatically an orchestrator. Tasks and findings still need a native
    agent-facing workflow or an intentional integration with an existing one.
+   The validated operating model, brief template, and review loop are in
+   [herding-playbook.md](herding-playbook.md).
 4. **Complete message delivery.** A persisted post is not a delivered prompt.
    Specify how workers discover pending messages, acknowledge them, and receive
    safe notifications. Do not type into a busy/blocked terminal based on a

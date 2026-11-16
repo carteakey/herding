@@ -14,6 +14,7 @@
 
 <p align="center">
   <a href="docs/herding-spec.md"><b>Architecture Spec</b></a> ·
+  <a href="docs/herding-playbook.md">Backlog Playbook</a> ·
   <a href="docs/herding-roadmap.md">Roadmap</a> ·
   <a href="docs/cli.md#team-coordination">Team CLI</a> ·
   <a href="docs/herding-handoff.md">Implementation Handoff</a> ·
